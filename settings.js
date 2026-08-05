@@ -37,6 +37,7 @@ import {
 } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/popup.js';
 import { getContext, extension_settings } from '../../../extensions.js';
+import { seedCurrentChatFromCharacter, seedCurrentChatGroupFromGroup } from './scope.js';
 import {
   estimateTokens,
   MODULE_NAME,
@@ -145,6 +146,9 @@ import {
 export const defaultSettings = {
   enabled: true,
   settings_mode: 'simple',
+  // Memory scope: 'character' (shared across chats, upstream behaviour) or
+  // 'chat' (long-term tiers isolated per chat - fork feature).
+  memory_scope: 'character',
   extraction_frequency: 'medium',
 
   // LLM source for all memory operations (extraction, summarization, recap)
@@ -802,6 +806,41 @@ export function bindSettingsUI(ctrl) {
         // Restore injections from stored data so the user picks up where they left off.
         ctrl.onChatChanged();
       }
+    });
+
+  // ---- Memory scope (fork: per-chat isolation) ---------------------------
+  $('#sm_memory_scope')
+    .val(s.memory_scope ?? 'character')
+    .on('change', function () {
+      const next = $(this).val();
+      const prev = extension_settings[MODULE_NAME].memory_scope ?? 'character';
+      if (next === prev) return;
+      extension_settings[MODULE_NAME].memory_scope = next;
+      if (next === 'chat') {
+        // Keep the ongoing chat's accumulated memory; new chats start clean.
+        const characterName = ctrl.getSelectedCharacterName();
+        if (characterName) {
+          seedCurrentChatFromCharacter(characterName);
+        }
+        const context = getContext();
+        if (context?.groupId) {
+          seedCurrentChatGroupFromGroup(context.groupId);
+        }
+        toastr.info(
+          'Per-chat memory enabled. The current chat was seeded from the character store; new chats start clean.',
+          'Smart Memory',
+          { timeOut: 5000, positionClass: 'toast-bottom-right' },
+        );
+      } else {
+        toastr.info(
+          'Memory is shared per character again. Per-chat data is kept but no longer used.',
+          'Smart Memory',
+          { timeOut: 5000, positionClass: 'toast-bottom-right' },
+        );
+      }
+      saveSettingsDebounced();
+      // Reload injections and tier lists so they reflect the new scope.
+      ctrl.onChatChanged();
     });
 
   // ---- Settings mode toggle -------------------------------------------
