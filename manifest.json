@@ -5,7 +5,7 @@
   "optional": [],
   "js": "index.js",
   "css": "style.css",
-  "author": "Senjin the Dragon <senjin@hatchling.org>",
-  "version": "1.8.1",
-  "homePage": "https://github.com/senjinthedragon/Smart-Memory"
+  "author": "badiyee85 <badiyee85@users.noreply.github.com> (fork of Senjin the Dragon)",
+  "version": "1.9.0",
+  "homePage": "https://github.com/badiyee85/Smart-Memory"
 }
