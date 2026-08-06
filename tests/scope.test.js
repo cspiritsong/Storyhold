@@ -8,6 +8,9 @@ import {
   getScopedContainer,
   deleteScopedContainer,
   seedScopedContainer,
+  pinChatScope,
+  unpinChatScope,
+  resolveChatScopeId,
 } from '../scope-core.js';
 
 const SCHEMA = 42;
@@ -131,4 +134,51 @@ test('seed copies only the requested keys', () => {
   seedScopedContainer(store, 'Yuki', '7', SCHEMA, ['memories']);
   assert.equal(store.Yuki.chats['7'].memories.length, 1);
   assert.equal(store.Yuki.chats['7'].canon, undefined);
+});
+
+test('resolveChatScopeId returns the live chat id when nothing is pinned', () => {
+  assert.equal(resolveChatScopeId('7'), '7');
+  assert.equal(resolveChatScopeId(7), '7');
+  assert.equal(resolveChatScopeId(null), null);
+  assert.equal(resolveChatScopeId(undefined), null);
+});
+
+test('pin overrides the live chat id for the job duration', () => {
+  pinChatScope('job-chat');
+  try {
+    assert.equal(resolveChatScopeId('other-chat'), 'job-chat');
+  } finally {
+    unpinChatScope();
+  }
+  assert.equal(resolveChatScopeId('other-chat'), 'other-chat', 'pin released after unpin');
+});
+
+test('nested pins keep the outer job-origin chat id', () => {
+  pinChatScope('outer-chat');
+  pinChatScope('inner-chat');
+  try {
+    assert.equal(resolveChatScopeId('live'), 'outer-chat');
+  } finally {
+    unpinChatScope();
+    assert.equal(resolveChatScopeId('live'), 'outer-chat', 'inner unpin does not release outer');
+    unpinChatScope();
+  }
+  assert.equal(resolveChatScopeId('live'), 'live');
+});
+
+test('unpin beyond depth is safe and stays unpinned', () => {
+  pinChatScope('a');
+  unpinChatScope();
+  unpinChatScope();
+  unpinChatScope();
+  assert.equal(resolveChatScopeId('b'), 'b');
+});
+
+test('a null pin falls back to the live chat id', () => {
+  pinChatScope(null);
+  try {
+    assert.equal(resolveChatScopeId('live'), 'live');
+  } finally {
+    unpinChatScope();
+  }
 });

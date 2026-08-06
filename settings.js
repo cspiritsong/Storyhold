@@ -34,10 +34,16 @@ import {
   saveSettingsDebounced,
   getMaxContextSize,
   stopGeneration,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/popup.js';
 import { getContext, extension_settings } from '../../../extensions.js';
-import { seedCurrentChatFromCharacter, seedCurrentChatGroupFromGroup } from './scope.js';
+import {
+  seedCurrentChatFromCharacter,
+  seedCurrentChatGroupFromGroup,
+  pinChatScope,
+  unpinChatScope,
+} from './scope.js';
 import {
   estimateTokens,
   MODULE_NAME,
@@ -748,7 +754,9 @@ export function bindSettingsUI(ctrl) {
         .filter(Boolean);
     })();
 
+    pinChatScope(getCurrentChatId());
     setStatusMessage('Committing read-only session...');
+    try {
 
     for (const name of characterNames) {
       if (settings.longterm_enabled) {
@@ -785,7 +793,10 @@ export function bindSettingsUI(ctrl) {
     }
 
     saveSettingsDebounced();
-    setStatusMessage('Session committed.');
+      setStatusMessage('Session committed.');
+    } finally {
+      unpinChatScope();
+    }
   }
 
   // Prevent section-header enable checkboxes from toggling the <details> open/closed
@@ -2438,6 +2449,10 @@ export function bindSettingsUI(ctrl) {
     // extraction runs for every character, not just the one in the selector.
     // Solo chats collapse to a single-element array using the active character.
     const catchUpContext = getContext();
+    // Pin the per-chat scope to the chat this job started on. Catch-up can run
+    // for minutes; if the user switches chats mid-run, writes must still land
+    // in the chat being processed, not whatever chat is active at write time.
+    const catchUpChatId = getCurrentChatId() ?? null;
     const catchUpCharacterNames = (() => {
       if (!catchUpContext.groupId) return [characterName];
       const group = catchUpContext.groups?.find((g) => g.id === catchUpContext.groupId);
@@ -2474,6 +2489,7 @@ export function bindSettingsUI(ctrl) {
     $('#sm_cancel_catch_up').show().prop('disabled', false);
 
     try {
+      pinChatScope(catchUpChatId);
       const context = getContext();
       const settings = extension_settings[MODULE_NAME];
 
@@ -2823,6 +2839,7 @@ export function bindSettingsUI(ctrl) {
       showError('Catch-up', err);
       setStatusMessage('Catch-up failed.');
     } finally {
+      unpinChatScope();
       $('#sm_cancel_catch_up').hide();
       $('#sm_catch_up').show();
       ctrl.extractionRunning = false;

@@ -103,6 +103,44 @@ export function deleteScopedContainer(store, name, chatId, scope) {
   }
 }
 
+// ---- Chat-scope pinning (long-running jobs) ---------------------------------
+//
+// Memorize Chat and similar multi-chunk jobs can run for minutes while the
+// user switches to another chat. Without pinning, the per-chat namespace
+// resolves at write time and would silently land in the wrong chat. Jobs pin
+// the chat id they started on for their whole duration.
+let pinnedChatId = null;
+let pinDepth = 0;
+
+/**
+ * Pins the chat scope to a specific chat id for the duration of a job.
+ * Nested pins keep the outer (job-origin) chat id.
+ * @param {string|number|null} chatId
+ */
+export function pinChatScope(chatId) {
+  if (pinDepth === 0) pinnedChatId = chatId == null ? null : String(chatId);
+  pinDepth++;
+}
+
+/**
+ * Releases one pin level. The pin is cleared only when the outermost job ends.
+ */
+export function unpinChatScope() {
+  pinDepth = Math.max(0, pinDepth - 1);
+  if (pinDepth === 0) pinnedChatId = null;
+}
+
+/**
+ * Resolves the effective chat id: the pinned id when a job is running,
+ * otherwise the live chat id.
+ * @param {string|number|null} liveChatId
+ * @returns {string|null}
+ */
+export function resolveChatScopeId(liveChatId) {
+  if (pinnedChatId != null) return pinnedChatId;
+  return liveChatId == null ? null : String(liveChatId);
+}
+
 /**
  * Seeds a chat-scoped container from its top-level container. Used when the
  * user switches memory scope from 'character' to 'chat' so the current chat

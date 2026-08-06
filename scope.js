@@ -23,9 +23,10 @@ import {
   getScopedContainer,
   deleteScopedContainer,
   seedScopedContainer,
+  resolveChatScopeId,
 } from './scope-core.js';
 
-export { MEMORY_SCOPE_CHARACTER, MEMORY_SCOPE_CHAT };
+export { MEMORY_SCOPE_CHARACTER, MEMORY_SCOPE_CHAT, pinChatScope, unpinChatScope } from './scope-core.js';
 
 /**
  * Returns the active memory scope: 'character' (shared across chats) or
@@ -53,8 +54,7 @@ export function isPerChatScope() {
  * @returns {string|null}
  */
 export function getChatScopeId() {
-  const id = getCurrentChatId();
-  return id == null ? null : String(id);
+  return resolveChatScopeId(getCurrentChatId());
 }
 
 /**
