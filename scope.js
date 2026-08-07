@@ -103,7 +103,7 @@ export function deleteCharacterContainer(characterName) {
  * @returns {Object|null}
  */
 export function getGroupContainer(groupId) {
-  const s = ensureStore();
+  ensureStore();
   if (!extension_settings[MODULE_NAME].group_arcs) {
     extension_settings[MODULE_NAME].group_arcs = {};
   }
@@ -121,7 +121,7 @@ export function getGroupContainer(groupId) {
  * @param {string} groupId
  */
 export function deleteGroupContainer(groupId) {
-  const s = ensureStore();
+  ensureStore();
   if (!extension_settings[MODULE_NAME].group_arcs) return;
   deleteScopedContainer(
     extension_settings[MODULE_NAME].group_arcs,
