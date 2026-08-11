@@ -43,6 +43,7 @@ import {
   seedCurrentChatGroupFromGroup,
   pinChatScope,
   unpinChatScope,
+  isPerChatScope,
 } from './scope.js';
 import {
   estimateTokens,
@@ -2924,9 +2925,20 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const characterName = ctrl.getSelectedCharacterName();
     const nameLabel = characterName ? `"${characterName}"` : 'this character';
+    // Scope-aware, staged confirmation: name the blast radius up front, then
+    // spell out what is deleted and what survives.
+    const perChat = isPerChatScope();
+    const scopeLine = perChat
+      ? `This will wipe ONLY THIS CHAT with ${nameLabel}.\nAll other chats with this character - and the character-level store - are untouched.`
+      : `This will wipe ALL Smart Memory data for ${nameLabel} across EVERY chat - the full character-level store.`;
+    const deletedLine =
+      'WILL BE DELETED: long-term memories, relationship history, canon, epistemic knowledge, entity registry, rolling summary, session memories, scene history, story arcs, and profiles.';
+    const keptLine = perChat
+      ? 'WILL SURVIVE: the chat transcript, the character card, all other chats with this character, and the character-level store.'
+      : 'WILL SURVIVE: only the chat transcript and the character card.';
     if (
       !(await callGenericPopup(
-        `Fresh Start for ${nameLabel} - this will permanently delete all Smart Memory data for this character and chat.\n\nThis cannot be undone. Continue?`,
+        `FRESH START - NUCLEAR OPTION\n\n${scopeLine}\n\n${deletedLine}\n\n${keptLine}\n\nThis cannot be undone. Continue?`,
         POPUP_TYPE.CONFIRM,
       ))
     )
@@ -2984,11 +2996,18 @@ export function bindSettingsUI(ctrl) {
     updateTokenDisplay();
     ctrl.sceneMessageBuffer = [];
     ctrl.sceneBufferLastIndex = -1;
-    setStatusMessage('Fresh start complete.');
-    toastr.success(`All memories cleared for ${nameLabel}.`, 'Smart Memory', {
-      timeOut: 4000,
-      positionClass: 'toast-bottom-right',
-    });
+    setStatusMessage(perChat ? 'Fresh start complete (this chat).' : 'Fresh start complete.');
+    if (perChat) {
+      toastr.success(`This chat's memories cleared for ${nameLabel}.`, 'Smart Memory', {
+        timeOut: 4000,
+        positionClass: 'toast-bottom-right',
+      });
+    } else {
+      toastr.success(`All memories cleared for ${nameLabel}.`, 'Smart Memory', {
+        timeOut: 4000,
+        positionClass: 'toast-bottom-right',
+      });
+    }
   });
 
   // ---- Embedding deduplication ----------------------------------------
