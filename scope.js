@@ -26,7 +26,12 @@ import {
   resolveChatScopeId,
 } from './scope-core.js';
 
-export { MEMORY_SCOPE_CHARACTER, MEMORY_SCOPE_CHAT, pinChatScope, unpinChatScope } from './scope-core.js';
+export {
+  MEMORY_SCOPE_CHARACTER,
+  MEMORY_SCOPE_CHAT,
+  pinChatScope,
+  unpinChatScope,
+} from './scope-core.js';
 
 /**
  * Returns the active memory scope: 'character' (shared across chats) or
@@ -173,9 +178,7 @@ export function seedCurrentChatGroupFromGroup(groupId) {
     GROUP_TIER_KEYS,
   );
   if (copied) {
-    smLog(
-      `[SmartMemory] Per-chat scope: seeded current chat from group store for "${groupId}".`,
-    );
+    smLog(`[SmartMemory] Per-chat scope: seeded current chat from group store for "${groupId}".`);
   }
   return copied;
 }

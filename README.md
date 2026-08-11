@@ -351,7 +351,7 @@ This fork adds a **Memory scope** selector at the top of the extension settings:
 
 Details:
 
-- Switching to **Per chat** seeds the *current* chat from the character store, so an ongoing story keeps its accumulated memory. New chats still start clean.
+- Switching to **Per chat** seeds the _current_ chat from the character store, so an ongoing story keeps its accumulated memory. New chats still start clean.
 - Switching back to **Per character** is non-destructive: character-level data was never touched, and each chat's isolated store is kept (dormant) in case you switch again.
 - **Forget This Chat** in per-chat mode clears only the current chat's isolated store - other chats and the character-level store are untouched.
 - Long-term data lives under `characters[characterName].chats[chatId]` in extension settings; each chat container is schema-versioned like every other container.

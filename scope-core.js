@@ -156,7 +156,13 @@ export function resolveChatScopeId(liveChatId) {
  * @param {string[]} [keys] - Tier keys to copy.
  * @returns {boolean} True when at least one tier was copied.
  */
-export function seedScopedContainer(store, name, chatId, schemaVersion, keys = CHARACTER_TIER_KEYS) {
+export function seedScopedContainer(
+  store,
+  name,
+  chatId,
+  schemaVersion,
+  keys = CHARACTER_TIER_KEYS,
+) {
   if (!name || chatId == null || !store[name]) return false;
   const base = store[name];
   const scoped = getScopedContainer(store, name, chatId, MEMORY_SCOPE_CHAT, schemaVersion);

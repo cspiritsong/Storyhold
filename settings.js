@@ -757,42 +757,41 @@ export function bindSettingsUI(ctrl) {
     pinChatScope(getCurrentChatId());
     setStatusMessage('Committing read-only session...');
     try {
-
-    for (const name of characterNames) {
-      if (settings.longterm_enabled) {
-        const nameWindow = context.groupId
-          ? windowMessages.filter((m) => m.is_user || m.name === name)
-          : windowMessages;
-        if (nameWindow.length > 0) {
-          await extractAndStoreMemories(name, nameWindow).catch((err) =>
-            console.error('[SmartMemory] Commit long-term extraction error:', err),
-          );
-          if (settings.consolidation_enabled) {
-            await consolidateMemories(name).catch((err) =>
-              console.error('[SmartMemory] Commit consolidation error:', err),
+      for (const name of characterNames) {
+        if (settings.longterm_enabled) {
+          const nameWindow = context.groupId
+            ? windowMessages.filter((m) => m.is_user || m.name === name)
+            : windowMessages;
+          if (nameWindow.length > 0) {
+            await extractAndStoreMemories(name, nameWindow).catch((err) =>
+              console.error('[SmartMemory] Commit long-term extraction error:', err),
             );
+            if (settings.consolidation_enabled) {
+              await consolidateMemories(name).catch((err) =>
+                console.error('[SmartMemory] Commit consolidation error:', err),
+              );
+            }
           }
         }
+        if (settings.profiles_enabled && name) {
+          await generateProfiles(name)
+            .then((profiles) => {
+              if (profiles) {
+                injectProfiles(name);
+                updateProfilesUI(profiles);
+              }
+            })
+            .catch((err) => console.error('[SmartMemory] Commit profile generation error:', err));
+        }
       }
-      if (settings.profiles_enabled && name) {
-        await generateProfiles(name)
-          .then((profiles) => {
-            if (profiles) {
-              injectProfiles(name);
-              updateProfilesUI(profiles);
-            }
-          })
-          .catch((err) => console.error('[SmartMemory] Commit profile generation error:', err));
+
+      if (settings.arcs_enabled) {
+        await extractArcs(windowMessages).catch((err) =>
+          console.error('[SmartMemory] Commit arc extraction error:', err),
+        );
       }
-    }
 
-    if (settings.arcs_enabled) {
-      await extractArcs(windowMessages).catch((err) =>
-        console.error('[SmartMemory] Commit arc extraction error:', err),
-      );
-    }
-
-    saveSettingsDebounced();
+      saveSettingsDebounced();
       setStatusMessage('Session committed.');
     } finally {
       unpinChatScope();

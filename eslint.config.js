@@ -5,6 +5,18 @@ export default [
   js.configs.recommended,
   prettier,
   {
+    // Node.js test harness - runs outside the SillyTavern browser context
+    files: ['test-harness.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
+  {
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
