@@ -358,6 +358,8 @@ Details:
 
 This solves the shared-memory limitation described above: with per-chat isolation, checkpoints and branches that create new chat files get their own memory space, so a rolled-back timeline cannot leak knowledge from a future one.
 
+**In-file branches (regenerates/swipes) are detected and pruned automatically.** Every message carries SillyTavern's stable `mesId` serial number; Smart Memory tracks how far it has processed with a `lastExtractMesId` watermark. When a regenerate or edit truncates the chat and replaces the tail with new messages (which receive *new* mesIds), the old watermark disappears from the chat — Smart Memory detects this, rolls the watermark back to the branch point, and prunes every long-term memory, session memory, and state-ledger card that was sourced from the discarded timeline. Memories whose replacement was pruned are un-retired automatically. A toast reports what was removed. Chats without mesIds (imported logs) fall back to the legacy index-based behavior unchanged.
+
 ### Per-tier Extract Buttons
 
 Each memory tier has its own **Extract Now** or **Extract** button that processes a recent window of messages - not the full chat. Useful for pulling in the latest exchanges outside the automatic schedule.

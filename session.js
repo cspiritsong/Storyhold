@@ -345,8 +345,17 @@ export async function extractSessionMemories(recentMessages, abortCheck = null) 
     const chatLen = context.chat?.length ?? 1;
     const windowEnd = Math.max(0, chatLen - 2);
     const windowStart = Math.max(0, windowEnd - recentMessages.length + 1);
+    // mesId provenance for branch-aware pruning - see longterm.js for the
+    // rationale (real mesIds only; never pseudo ranges).
+    const hasRealMesIds = recentMessages.some((m) => typeof m.mesId === 'number');
+    const windowMesIds = hasRealMesIds
+      ? recentMessages.map((m, i) => (typeof m.mesId === 'number' ? m.mesId : windowStart + i))
+      : null;
     for (const mem of incoming) {
       mem.source_messages = [[windowStart, windowEnd]];
+      if (windowMesIds) {
+        mem.source_mes_range = [Math.min(...windowMesIds), Math.max(...windowMesIds)];
+      }
     }
 
     const max = settings.session_max_memories ?? 30;

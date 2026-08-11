@@ -256,8 +256,18 @@ export async function runStateCardExtraction(characterName, messages, abortCheck
     if (abortCheck?.()) return 0;
     const ledger = loadStateLedger();
     let count = 0;
+    // Stamp cards with the highest real mesId seen in the extraction window so
+    // branch-aware pruning can drop cards that reflect the discarded timeline.
+    // Only real mesIds qualify; mesId-less chats leave existing stamps intact.
+    let maxWindowMesId = null;
+    for (const m of messages) {
+      if (typeof m?.mesId === 'number' && (maxWindowMesId === null || m.mesId > maxWindowMesId)) {
+        maxWindowMesId = m.mesId;
+      }
+    }
     for (const [key, fields] of updates) {
       ledger[key] = { ...(ledger[key] ?? {}), ...fields };
+      if (maxWindowMesId !== null) ledger[key]._updated_mes_id = maxWindowMesId;
       count++;
     }
     await saveStateLedger(ledger);

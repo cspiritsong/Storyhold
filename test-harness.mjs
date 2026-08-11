@@ -73,6 +73,17 @@ const { parseExtractionOutput, parseSessionOutput, parseArcOutput } = await impo
 );
 const { buildExtractionPrompt, buildSessionExtractionPrompt, buildArcExtractionPrompt } =
   await import('./prompts.js');
+const {
+  getMessageMesId,
+  chatHasRealMesIds,
+  chatMaxMesId,
+  detectTruncation,
+  firstIndexAfterMesId,
+  getMesIdWindow,
+  watermarkFromChat,
+  pruneMemoriesByBranchPoint,
+  pruneStateLedgerByBranchPoint,
+} = await import('./branch-aware.js');
 
 // ---- Test runner state ---------------------------------------------------
 
@@ -420,6 +431,112 @@ function runParserTests() {
   assert(arcNone.add.length === 0, 'NONE produces no arcs');
 }
 
+// ---- Branch-aware unit tests ---------------------------------------------
+
+function runBranchAwareTests() {
+  console.log(c.bold('\nBranch-aware unit tests'));
+  console.log(c.dim('─'.repeat(60)));
+
+  const mkMsg = (mesId, extra = {}) => ({ mesId, is_user: false, is_system: false, mes: 'x', ...extra });
+  const mkChat = (ids) => ids.map((id) => mkMsg(id));
+
+  // ---- getMessageMesId
+
+  assert(getMessageMesId(mkMsg(42)) === 42, 'numeric mesId returned');
+  assert(getMessageMesId({ mesId: '7' }) === 7, 'string mesId parsed');
+  assert(getMessageMesId({ mes: 'x' }, 9) === 9, 'missing mesId uses fallback');
+
+  // ---- chatHasRealMesIds / chatMaxMesId
+
+  assert(chatHasRealMesIds(mkChat([1, 2, 3])) === true, 'real mesIds detected');
+  assert(chatHasRealMesIds([{ mes: 'x' }, { mes: 'y' }]) === false, 'no mesIds detected');
+  assert(chatMaxMesId(mkChat([1, 5, 3])) === 5, 'max mesId computed');
+
+  // ---- detectTruncation
+
+  assert(detectTruncation(mkChat([1, 2, 3]), null).truncated === false, 'no watermark -> no truncation');
+  const intact = detectTruncation(mkChat([1, 2, 3, 4, 5]), 5);
+  assert(intact.truncated === false, 'watermark present -> no truncation');
+  const regen = detectTruncation(mkChat([1, 2, 3, 4, 5, 60, 61, 99, 100, 159, 160]), 158);
+  assert(regen.truncated === true, 'regenerate removes watermark');
+  assert(regen.branchPointMesId === 100, 'branch point is highest surviving below watermark');
+  const fullReplace = detectTruncation(mkChat([200, 201]), 100);
+  assert(
+    fullReplace.truncated === true && fullReplace.branchPointMesId === 0,
+    'whole prefix replaced -> branch point 0',
+  );
+  assert(detectTruncation([], 5).truncated === false, 'empty chat -> no truncation');
+  assert(detectTruncation([{ mes: 'x' }], 5).truncated === false, 'mesId-less chat -> no truncation');
+
+  // ---- firstIndexAfterMesId
+
+  assert(firstIndexAfterMesId(mkChat([1, 2, 100, 101]), 2) === 2, 'first index after mesId found');
+  assert(firstIndexAfterMesId(mkChat([1, 2]), 2) === -1, 'no message after mesId');
+
+  // ---- getMesIdWindow
+
+  const chat10 = mkChat([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  chat10[9].is_user = true; // user turn is included in the cutoff
+  assert(getMesIdWindow(chat10, null, 3, 20).length === 10, 'null watermark -> whole chat within cap');
+  const tail = mkChat([...Array.from({ length: 60 }, (_, i) => i + 1), 161, 162, 163]);
+  tail[62].is_user = true; // last message user turn so cutoff includes it
+  const w = getMesIdWindow(tail, 160, 3, 20);
+  assert(w.length >= 3 && w[w.length - 1].mesId === 163, 'window includes new tail with min context');
+  assert(w[0].mesId <= 60, 'window start carries pre-branch context');
+  assert(getMesIdWindow(tail, 170, 3, 20).length === 0, 'nothing after watermark -> empty window');
+
+  // ---- pruneMemoriesByBranchPoint
+
+  const mems = [
+    { id: 'a', content: 'before branch', source_mes_range: [10, 50] },
+    { id: 'b', content: 'after branch', source_mes_range: [51, 158] },
+    { id: 'c', content: 'no range' },
+  ];
+  const pruned = pruneMemoriesByBranchPoint(mems, 100);
+  assert(pruned.removed.length === 1 && pruned.removed[0].id === 'b', 'prunes memory sourced beyond branch point');
+  assert(
+    pruned.kept.some((m) => m.id === 'a') && pruned.kept.some((m) => m.id === 'c'),
+    'keeps pre-branch and provenance-less memories',
+  );
+
+  const chain = [
+    { id: 'old', content: 'old', superseded_by: 'new', valid_to: 158 },
+    { id: 'new', content: 'new', source_mes_range: [100, 158] },
+  ];
+  const chainPruned = pruneMemoriesByBranchPoint(chain, 50);
+  const oldMem = chainPruned.kept.find((m) => m.id === 'old');
+  assert(chainPruned.removed.some((m) => m.id === 'new'), 'removes superseding memory from dead tail');
+  assert(
+    oldMem.superseded_by === undefined && oldMem.valid_to === undefined,
+    'un-retires memory whose replacement was pruned',
+  );
+
+  // ---- pruneStateLedgerByBranchPoint
+
+  const ledger = {
+    'farid|character': { location: 'palace', _updated_mes_id: 30 },
+    'sword|object': { owner: 'farid', _updated_mes_id: 158 },
+    'city|place': { occupants: 'farid' },
+  };
+  const ledgerPruned = pruneStateLedgerByBranchPoint(ledger, 100);
+  assert(
+    Object.keys(ledgerPruned.kept).length === 2 && !('sword|object' in ledgerPruned.kept),
+    'drops cards stamped beyond branch point',
+  );
+  assert('city|place' in ledgerPruned.kept, 'keeps unstamped cards');
+
+  // ---- watermarkFromChat
+
+  const sysTail = [mkMsg(1), mkMsg(2), mkMsg(3, { is_system: true }), mkMsg(4)];
+  assert(watermarkFromChat(sysTail, 4) === 4, 'watermark from last real message');
+  assert(watermarkFromChat(sysTail, 1) === 1, 'watermark walks back before cutoff');
+  assert(
+    watermarkFromChat([mkMsg(1), mkMsg(2, { is_system: true })], 2) === 1,
+    'watermark skips system messages',
+  );
+  assert(watermarkFromChat([{ mes: 'x' }], 1) === null, 'no real mesIds -> null watermark');
+}
+
 // ---- Main ----------------------------------------------------------------
 
 console.log(c.bold('\nSmart Memory Regression Harness'));
@@ -430,6 +547,7 @@ console.log(c.dim(`Response length: ${RESPONSE_LEN} tokens`));
 console.log(c.dim('─'.repeat(60)));
 
 runParserTests();
+runBranchAwareTests();
 
 if (!PARSERS_ONLY) {
   const fixtures = ['elara-intro', 'elara-supersession', 'whisperwood-long'];

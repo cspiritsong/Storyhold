@@ -872,6 +872,19 @@ function migrateChat_v9(chatMeta) {
   return { ...chatMeta, state_ledger: {} };
 }
 
+/**
+ * CHAT migration: version 9 -> 10
+ *
+ * Adds the lastExtractMesId watermark for branch-aware extraction. The legacy
+ * lastExtractCutoff (array index) stays for backward compatibility; new
+ * extraction passes record both. Null means "no mesId watermark yet" - the
+ * first pass after this migration seeds it from the current chat.
+ */
+function migrateChat_v10(chatMeta) {
+  if (Object.prototype.hasOwnProperty.call(chatMeta, 'lastExtractMesId')) return chatMeta;
+  return { ...chatMeta, lastExtractMesId: null };
+}
+
 // ---- Step registries --------------------------------------------------------
 // Map<version, stepFn | { fn, deletePaths }> - add new entries here when
 // SCHEMA_VERSION is bumped. Use { fn, deletePaths } only when a step
@@ -894,6 +907,7 @@ const CHAT_MIGRATIONS = new Map([
   // v5 renames entities -> sessionEntities.
   [5, { fn: migrateChat_v5, deletePaths: ['entities'] }],
   [9, migrateChat_v9],
+  [10, migrateChat_v10],
 ]);
 
 // ---- Migration runner -------------------------------------------------------

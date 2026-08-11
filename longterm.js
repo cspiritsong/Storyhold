@@ -487,10 +487,20 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
     // Derive the characters present in this extraction window so the injection
     // path can downgrade memories the responding character did not witness.
     const witnessedBy = getSceneParticipants(recentMessages);
+    // mesId provenance for branch-aware pruning. Only recorded when the window
+    // contains real mesIds - pseudo ranges from mesId-less chats would prune
+    // unsafely after a truncation.
+    const hasRealMesIds = recentMessages.some((m) => typeof m.mesId === 'number');
+    const windowMesIds = hasRealMesIds
+      ? recentMessages.map((m, i) => (typeof m.mesId === 'number' ? m.mesId : windowStart + i))
+      : null;
     for (const mem of newMemories) {
       mem.source_messages = [[windowStart, windowEnd]];
       mem.source_chat_id = sourceChatId;
       mem.witnessed_by = witnessedBy;
+      if (windowMesIds) {
+        mem.source_mes_range = [Math.min(...windowMesIds), Math.max(...windowMesIds)];
+      }
     }
 
     const maxMemories = settings.longterm_max_memories || 25;

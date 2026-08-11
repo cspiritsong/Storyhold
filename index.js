@@ -138,6 +138,8 @@ import {
   injectStateLedger,
   loadAndInjectStateLedger,
 } from './state-ledger.js';
+import { detectAndPruneInFileBranch } from './branch-ops.js';
+import { chatHasRealMesIds, getMesIdWindow, watermarkFromChat } from './branch-aware.js';
 import {
   setStatusMessage,
   updateShortTermUI,
@@ -636,19 +638,34 @@ async function onCharacterMessageRendered(messageId, type) {
           // messages is always included so the model has enough context to make
           // meaningful distinctions. Arc extraction uses a fixed wide window to
           // catch threads that were introduced earlier in the session.
-          const lastExtractCutoff = context.chatMetadata?.[META_KEY]?.lastExtractCutoff ?? null;
-          const sessionWindow = getSmartExtractionWindow(
-            context.chat,
-            lastExtractCutoff,
-            extractEvery,
-            40,
-          );
-          const longtermWindow = getSmartExtractionWindow(
-            context.chat,
-            lastExtractCutoff,
-            extractEvery,
-            20,
-          );
+          // Detect in-file branch points before choosing extraction windows so
+          // the windows start from the divergent tail, not the dead one.
+          // Chat loads are covered by onChatChangedImpl; this catches mid-session
+          // regenerates without a chat switch.
+          await detectAndPruneInFileBranch(characterName);
+
+          // Prefer mesId-driven windows when the chat carries real mesIds: the
+          // watermark survives truncation while the legacy index cutoff does
+          // not. Chats without mesIds (imported logs) keep the index behavior.
+          const extractMeta = context.chatMetadata?.[META_KEY];
+          const useMesIds = chatHasRealMesIds(context.chat);
+          const lastExtractMesId = useMesIds ? (extractMeta?.lastExtractMesId ?? null) : null;
+          const sessionWindow = useMesIds
+            ? getMesIdWindow(context.chat, lastExtractMesId, extractEvery, 40)
+            : getSmartExtractionWindow(
+                context.chat,
+                extractMeta?.lastExtractCutoff ?? null,
+                extractEvery,
+                40,
+              );
+          const longtermWindow = useMesIds
+            ? getMesIdWindow(context.chat, lastExtractMesId, extractEvery, 20)
+            : getSmartExtractionWindow(
+                context.chat,
+                extractMeta?.lastExtractCutoff ?? null,
+                extractEvery,
+                20,
+              );
 
           // Determine whether to refresh injection slots this pass. When the
           // refresh period is > 1, long-term and session slots stay stable between
@@ -896,6 +913,9 @@ async function onCharacterMessageRendered(messageId, type) {
             const metaAfter = context.chatMetadata?.[META_KEY];
             if (metaAfter) {
               metaAfter.lastExtractCutoff = snapshotCutoff;
+              if (useMesIds) {
+                metaAfter.lastExtractMesId = watermarkFromChat(context.chat, snapshotCutoff);
+              }
               if (shouldRefreshInjections) metaAfter.lastInjectionRefresh = snapshotCutoff;
               context.saveMetadata();
             }
@@ -1097,6 +1117,12 @@ async function onChatChangedImpl() {
 
   const settings = getSettings();
   if (!settings.enabled) return;
+
+  // Detect an in-file branch (regenerate/swipe that truncated the timeline)
+  // and prune memories sourced from the discarded tail before any injections
+  // or extractions run on the new timeline. Fast no-op when no truncation.
+  const branchCharName = getContext().groupId ? selectedGroupCharacter : getCurrentCharacterName();
+  await detectAndPruneInFileBranch(branchCharName);
 
   // Group chats: clear stale slots first (they may hold content from the
   // previous session's last responder), then inject fresh. onGroupMemberDrafted

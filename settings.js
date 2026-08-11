@@ -126,6 +126,8 @@ import {
   isStateLedgerEnabled,
   runStateCardExtraction,
 } from './state-ledger.js';
+import { detectAndPruneInFileBranch } from './branch-ops.js';
+import { watermarkFromChat } from './branch-aware.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
@@ -2492,6 +2494,10 @@ export function bindSettingsUI(ctrl) {
       const context = getContext();
       const settings = extension_settings[MODULE_NAME];
 
+      // Detect an in-file branch before re-digesting the chat so memories from
+      // the discarded timeline do not linger alongside the fresh extraction.
+      await detectAndPruneInFileBranch(characterName);
+
       // Use the stable window first so an in-progress trailing swipe candidate
       // is not ingested during catch-up.
       const stableChat = ctrl.getStableExtractionWindowWithFallback(
@@ -2619,6 +2625,13 @@ export function bindSettingsUI(ctrl) {
               : chatIdx + 1;
           if (cuCutoff > (cuMeta.lastExtractCutoff ?? 0)) {
             cuMeta.lastExtractCutoff = cuCutoff;
+            catchUpContext.saveMetadata().catch(console.error);
+          }
+          // Advance the mesId watermark alongside the index cutoff so
+          // branch-aware windows resume where catch-up left off.
+          const chunkWatermark = watermarkFromChat(catchUpContext.chat, cuCutoff);
+          if (chunkWatermark !== null && (cuMeta.lastExtractMesId ?? -1) < chunkWatermark) {
+            cuMeta.lastExtractMesId = chunkWatermark;
             catchUpContext.saveMetadata().catch(console.error);
           }
         }
