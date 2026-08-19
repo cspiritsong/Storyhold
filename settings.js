@@ -840,7 +840,7 @@ export function bindSettingsUI(ctrl) {
     }
     active.forEach((row, index) => {
       const linked = row.status === 'linked';
-      const target = row.linked_to ? `to: ${row.linked_to}` : 'no linked chat';
+      const target = row.linked_to ? `to: ${row.linked_to}` : `legacy key: ${row.key}`;
       const statusLabel = linked ? 'Linked' : 'Orphaned';
       const $item = $('<label class="sm-chat-memory-row"></label>');
       $item.append(
