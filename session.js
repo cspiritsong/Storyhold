@@ -87,6 +87,7 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
 import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { buildTimelinePromptBlock } from './timeline.js';
 
 /**
  * Filters session memory candidates against existing entries, removing
@@ -673,7 +674,15 @@ export async function injectSessionMemories(updateTelemetry = false) {
   // Trim to token budget using hybrid scoring on real AI turns, plain utility
   // scoring on chat load (no "current turn" to extract entity mentions from).
   const budget = settings.session_inject_budget ?? 400;
-  const fullTokens = estimateTokens(formatSessionMemories(memories));
+  const timeline = getContext().chatMetadata?.[META_KEY]?.timeline;
+  const timelineBlock = timeline ? buildTimelinePromptBlock(timeline) : '';
+  const template = settings.session_template ?? 'Details from this session:\n{{session}}';
+  const buildContent = (items) => {
+    const sessionBlock = template.replace('{{session}}', formatSessionMemories(items));
+    const sceneStateBlock = buildCurrentSceneStateBlock(items);
+    return [timelineBlock, sceneStateBlock, sessionBlock].filter(Boolean).join('\n');
+  };
+  const fullTokens = estimateTokens(buildContent(memories));
   const protectedSet = new Set(selectProtectedMemories(memories, ['development', 'scene']));
 
   let trimmed;
@@ -691,7 +700,7 @@ export async function injectSessionMemories(updateTelemetry = false) {
   } else {
     trimmed = prioritizeMemories(memories);
   }
-  while (trimmed.length > 1 && estimateTokens(formatSessionMemories(trimmed)) > budget) {
+  while (trimmed.length > 1 && estimateTokens(buildContent(trimmed)) > budget) {
     let idx = -1;
     for (let i = trimmed.length - 1; i >= 0; i--) {
       if (!protectedSet.has(trimmed[i])) {
@@ -723,10 +732,7 @@ export async function injectSessionMemories(updateTelemetry = false) {
     await saveSessionMemories(updated);
   }
 
-  const template = settings.session_template ?? 'Details from this session:\n{{session}}';
-  const sessionBlock = template.replace('{{session}}', formatSessionMemories(trimmed));
-  const sceneStateBlock = buildCurrentSceneStateBlock(trimmed);
-  const content = sceneStateBlock ? `${sceneStateBlock}\n${sessionBlock}` : sessionBlock;
+  const content = buildContent(trimmed);
   reportTierTrimStats(PROMPT_KEY_SESSION, estimateTokens(content), fullTokens);
 
   setMacroContent(MACRO_NAMES.session, content);

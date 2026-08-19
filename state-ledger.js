@@ -281,8 +281,11 @@ export async function runStateCardExtraction(characterName, messages, abortCheck
           ];
     for (const [key, fields] of updates) {
       ledger[key] = { ...(ledger[key] ?? {}), ...fields };
+      const timeline = getContext().chatMetadata?.[META_KEY]?.timeline;
       ledger[key]._source_chat_id = sourceChatId;
       ledger[key]._source_message_range = sourceMessageRange;
+      ledger[key]._lineage_epoch = timeline?.story_epoch ?? null;
+      ledger[key]._valid_from = timeline?.current_anchor ?? null;
       if (maxWindowMesId !== null) ledger[key]._updated_mes_id = maxWindowMesId;
       if (sourceMesRange) ledger[key]._source_mes_range = sourceMesRange;
       count++;
@@ -354,7 +357,8 @@ export function injectStateLedger(updateTelemetry = false) {
     return;
   }
 
-  const ledger = filterCurrentStateLedger(loadStateLedger());
+  const timelineEpoch = getContext().chatMetadata?.[META_KEY]?.timeline?.story_epoch ?? null;
+  const ledger = filterCurrentStateLedger(loadStateLedger(), timelineEpoch);
   const block = buildStateLedgerBlock(ledger);
 
   if (!block) {

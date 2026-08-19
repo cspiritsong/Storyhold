@@ -36,14 +36,20 @@ export function filterCurrentChatRecords(records) {
  * Equivalent provenance filtering for the sparse state-ledger map. Metadata
  * keys beginning with `_` are internal and never enter the visible state block.
  */
-export function filterCurrentStateLedger(ledger) {
+export function filterCurrentStateLedger(ledger, epochId = null) {
   if (isCurrentLineageQuarantined() || !ledger || typeof ledger !== 'object') return {};
 
   const records = Object.entries(ledger).filter(([, fields]) => {
     const sourceChatId = fields?._source_chat_id;
-    return sourceChatId === undefined || sourceChatId === null
-      ? currentLineage.chatId !== null
-      : String(sourceChatId) === String(currentLineage.chatId);
+    const sourceMatches =
+      sourceChatId === undefined || sourceChatId === null
+        ? currentLineage.chatId !== null
+        : String(sourceChatId) === String(currentLineage.chatId);
+    const epochMatches =
+      fields?._lineage_epoch == null || epochId == null
+        ? true
+        : String(fields._lineage_epoch) === String(epochId);
+    return sourceMatches && epochMatches;
   });
   return Object.fromEntries(records);
 }

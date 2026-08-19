@@ -58,6 +58,7 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
 import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { isProjectionTemporallyCompatible } from './timeline.js';
 
 // Default staleness threshold: 30 minutes. Profiles generated within this
 // window are considered current and will not be regenerated on chat load.
@@ -231,13 +232,21 @@ export function injectProfiles(characterName) {
     return;
   }
 
-  const profiles = loadProfiles(characterName);
-  if (!profiles || filterCurrentChatRecords([profiles]).length === 0) {
+  const storedProfiles = loadProfiles(characterName);
+  if (!storedProfiles || filterCurrentChatRecords([storedProfiles]).length === 0) {
     setMacroContent(MACRO_NAMES.profiles, '');
     setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_PROFILES);
     return;
   }
+
+  const timeline = getContext().chatMetadata?.[META_KEY]?.timeline;
+  const profiles =
+    timeline &&
+    storedProfiles.world_state &&
+    !isProjectionTemporallyCompatible(storedProfiles.world_state, timeline)
+      ? { ...storedProfiles, world_state: '' }
+      : storedProfiles;
 
   const budget = settings.profiles_inject_budget ?? 200;
   const sections = [

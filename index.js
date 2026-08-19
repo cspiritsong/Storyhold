@@ -148,6 +148,7 @@ import {
   setCurrentLineage,
 } from './lineage-runtime.js';
 import { verifyAndInheritCurrentBranch } from './lineage-ops.js';
+import { rebuildTimeline } from './timeline.js';
 import {
   setStatusMessage,
   updateShortTermUI,
@@ -364,6 +365,27 @@ function getCurrentCharacterName() {
   return context.name2 || context.characterName || null;
 }
 
+/**
+ * Rebuilds the deterministic timeline projection from the current raw chat.
+ * The event ledger is a derived chat field; it never changes transcript data.
+ */
+async function refreshCurrentTimeline(abortCheck = null) {
+  if (isCurrentLineageQuarantined()) return null;
+  const context = getContext();
+  const chatId = getCurrentChatId() ?? null;
+  if (!Array.isArray(context.chat) || !context.chatMetadata) return null;
+
+  const meta = context.chatMetadata[META_KEY] ?? (context.chatMetadata[META_KEY] = {});
+  const epochId = meta.lineage?.epoch_id ?? meta.timeline?.story_epoch ?? chatId ?? null;
+  const timeline = rebuildTimeline(context.chat, { chatId, epochId });
+  if (abortCheck?.()) return null;
+  if (JSON.stringify(meta.timeline) !== JSON.stringify(timeline)) {
+    meta.timeline = timeline;
+    await context.saveMetadata();
+  }
+  return timeline;
+}
+
 // Tracks which group member the settings panel is currently showing.
 // Only meaningful when context.groupId is set. Null means "no selection yet"
 // which falls back to context.name2 in getSelectedCharacterName.
@@ -547,6 +569,8 @@ async function onCharacterMessageRendered(messageId, type) {
       // returning and this timeout firing, bail immediately. Without this check,
       // compaction evaluates the new chat and injectCanon briefly injects the
       // previous character's canon into the wrong chat.
+      if (chatChanged()) return;
+      await refreshCurrentTimeline(chatChanged);
       if (chatChanged()) return;
 
       // Step 1: compaction - awaited before extraction to prevent concurrent use
@@ -1171,6 +1195,7 @@ async function onChatChangedImpl() {
   // or extractions run on the new timeline. Fast no-op when no truncation.
   const branchCharName = getContext().groupId ? selectedGroupCharacter : getCurrentCharacterName();
   await detectAndPruneInFileBranch(branchCharName);
+  await refreshCurrentTimeline();
 
   // Group chats: clear stale slots first (they may hold content from the
   // previous session's last responder), then inject fresh. onGroupMemberDrafted
@@ -1524,6 +1549,8 @@ async function onGroupWrapperFinished({ type } = {}) {
   setTimeout(() => {
     (async () => {
       // Guard: bail if the user switched chats during the deferral window.
+      if (chatChanged()) return;
+      await refreshCurrentTimeline(chatChanged);
       if (chatChanged()) return;
 
       // Step 1: compaction - once per round rather than per character response.
