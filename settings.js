@@ -859,6 +859,13 @@ export function bindSettingsUI(ctrl) {
         $('<span class="sm-chat-memory-count"></span>').text(`· ${row.memory_count} derived record(s)`),
       );
       if (row.current) $item.append($('<span class="sm-muted"></span>').text(' · current'));
+      if (!linked) {
+        $item.append(
+          $('<button class="menu_button menu_button_icon sm_manager_relink" type="button">')
+            .text('Relink here')
+            .data('namespace-key', row.key),
+        );
+      }
       $rows.append($item);
     });
 
@@ -963,6 +970,27 @@ export function bindSettingsUI(ctrl) {
     }
     toastr.success(`Removed ${result.deleted.length} rollback archive(s).`, 'Smart Memory');
     renderCharacterMemoryManager(result.state);
+  });
+
+  $('#sm_character_memory_rows').on('click', '.sm_manager_relink', async function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isCatchUpRunning()) return;
+    const namespaceKey = $(this).data('namespace-key');
+    const confirmed = await callGenericPopup(
+      'RELINK THIS LEGACY MEMORY\n\nYou are confirming that this orphaned namespace belongs to the current chat after a rename. Smart Memory will copy it to the current stable chat identity and keep the old namespace as rollback history. If it belongs to another chat, cancel. Continue?',
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, { manual: true });
+    if (!result?.ok) {
+      toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      return;
+    }
+    toastr.success('Memory relinked to the current chat; old namespace kept for rollback.', 'Smart Memory');
+    renderCharacterMemoryManager(ctrl.listCharacterChatMemory?.());
+    renderRenameAudit(result.audit);
+    ctrl.onChatChanged();
   });
 
   $('#sm_rename_audit_results').on('click', '.sm_rename_relink', async function () {

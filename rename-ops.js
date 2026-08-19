@@ -155,12 +155,22 @@ export function auditCurrentChatNamespaces() {
 export async function relinkCurrentNamespace(namespaceKey, { manual = false } = {}) {
   const context = getContext();
   const audit = auditCurrentChatNamespaces();
-  const candidate = audit.candidates.find((entry) => entry.key === String(namespaceKey));
+  const store = currentNamespaceStore(context);
+  const candidate =
+    audit.candidates.find((entry) => entry.key === String(namespaceKey)) ??
+    (manual &&
+    namespaceKey !== 'archived_chats' &&
+    store?.[namespaceKey]
+      ? {
+          key: String(namespaceKey),
+          confidence: 'legacy',
+          reason: 'manual-selected-orphan-namespace',
+        }
+      : null);
   if (!candidate || !canRelinkCandidate(candidate, { manual })) {
     return { ok: false, reason: 'candidate-not-high-confidence', audit };
   }
   const meta = context.chatMetadata?.[META_KEY];
-  const store = currentNamespaceStore(context);
   if (!meta?.chat_uid || !store) return { ok: false, reason: 'stable-identity-missing', audit };
 
   const result = relinkNamespace(store, candidate.key, meta.chat_uid, {

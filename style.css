@@ -940,6 +940,11 @@
   color: var(--SmartReplyColor, #aaa);
 }
 
+#smart_memory_settings .sm-chat-memory-row .sm_manager_relink {
+  margin-left: auto;
+  font-size: 0.9em;
+}
+
 #smart_memory_settings .sm_profiles_section-label {
   font-weight: 600;
   color: var(--SmartReplyColor, #ddd);
