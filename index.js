@@ -157,6 +157,7 @@ import {
   nukeAllCurrentCharacterChatMemory,
   nukeCurrentCharacterChatMemory,
   relinkCurrentNamespace,
+  unlinkCurrentManualMemory,
 } from './rename-ops.js';
 import { rebuildTimeline } from './timeline.js';
 import {
@@ -2094,6 +2095,7 @@ jQuery(async function () {
     nukeCharacterChatMemory: nukeCurrentCharacterChatMemory,
     nukeAllCharacterChatMemory: nukeAllCurrentCharacterChatMemory,
     emptyCharacterRollbackArchive: emptyCurrentCharacterRollbackArchive,
+    unlinkManualMemory: unlinkCurrentManualMemory,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
   });

@@ -22,6 +22,7 @@ import {
   relinkNamespace,
   retagChatMetadata,
   stableChatIdentity,
+  unlinkNamespace,
 } from './rename-recovery.js';
 
 function currentCharacterName(context) {
@@ -201,6 +202,7 @@ export async function relinkCurrentNamespace(namespaceKey, { manual = false } = 
       manual_source_namespace: String(candidate.key),
       epoch_id: generateMemoryId(),
     };
+    retaggedMeta.manual_previous_lineage = meta.lineage ?? null;
   }
   context.chatMetadata[META_KEY] = retaggedMeta;
   await context.saveMetadata();
@@ -240,6 +242,8 @@ function chatMemoryManagerState() {
   const store = currentNamespaceStore(context) ?? {};
   return {
     status: 'ok',
+    manual_linked: meta.lineage?.status === LINEAGE_STATUS.MANUAL_LINKED,
+    manual_source_namespace: meta.lineage?.manual_source_namespace ?? null,
     active: listChatMemoryNamespaces(store, {
       currentChatUid: meta.chat_uid ?? null,
       currentChatId: getCurrentChatId() ?? null,
@@ -282,6 +286,28 @@ export function emptyCurrentCharacterRollbackArchive() {
   }
   const store = currentNamespaceStore(getContext());
   const result = emptyRollbackArchive(store);
+  saveSettingsDebounced();
+  return { ok: true, ...result, state: chatMemoryManagerState() };
+}
+
+/** Undoes a force link, archives the imported target, and restores prior lineage. */
+export async function unlinkCurrentManualMemory() {
+  const context = getContext();
+  const meta = context?.chatMetadata?.[META_KEY];
+  if (meta?.lineage?.status !== LINEAGE_STATUS.MANUAL_LINKED) {
+    return { ok: false, reason: 'no-manual-link', state: chatMemoryManagerState() };
+  }
+  const store = currentNamespaceStore(context);
+  const result = unlinkNamespace(store, meta.chat_uid, { reason: 'manual-link-undone' });
+  if (!result.ok) return { ...result, state: chatMemoryManagerState() };
+
+  if (meta.manual_previous_lineage) {
+    meta.lineage = meta.manual_previous_lineage;
+  } else {
+    delete meta.lineage;
+  }
+  delete meta.manual_previous_lineage;
+  await context.saveMetadata();
   saveSettingsDebounced();
   return { ok: true, ...result, state: chatMemoryManagerState() };
 }

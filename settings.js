@@ -825,6 +825,7 @@ export function bindSettingsUI(ctrl) {
     if (!state || state.status !== 'ok') {
       $status.text('Character memory manager is available only when Memory scope is Per chat (isolated).');
       $('#sm_nuke_selected_chat_memory, #sm_nuke_all_chat_memory, #sm_empty_rollback_archive').prop('disabled', true);
+      $('#sm_unlink_force_link').hide();
       return;
     }
 
@@ -834,6 +835,7 @@ export function bindSettingsUI(ctrl) {
     $('#sm_nuke_selected_chat_memory').prop('disabled', active.length === 0);
     $('#sm_nuke_all_chat_memory').prop('disabled', active.length === 0);
     $('#sm_empty_rollback_archive').prop('disabled', archives.length === 0);
+    $('#sm_unlink_force_link').toggle(Boolean(state.manual_linked));
 
     if (active.length === 0) {
       $rows.append($('<div class="sm-muted"></div>').text('No active chat memory namespaces.'));
@@ -970,6 +972,23 @@ export function bindSettingsUI(ctrl) {
     }
     toastr.success(`Removed ${result.deleted.length} rollback archive(s).`, 'Smart Memory');
     renderCharacterMemoryManager(result.state);
+  });
+
+  $('#sm_unlink_force_link').on('click', async function () {
+    if (isCatchUpRunning()) return;
+    const confirmed = await callGenericPopup(
+      'UNLINK FORCE-LINKED MEMORY\n\nThis removes the manually imported namespace from active retrieval for this chat, preserves it in the rollback archive, and restores the previous quarantine/lineage state. Raw chat JSONL, parent chats, and native Vector Storage survive. Continue?',
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = await ctrl.unlinkManualMemory?.();
+    if (!result?.ok) {
+      toastr.error(`Unlink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      return;
+    }
+    toastr.success('Force-linked memory unlatched; the imported namespace is in rollback archive.', 'Smart Memory');
+    renderCharacterMemoryManager(result.state);
+    ctrl.onChatChanged();
   });
 
   $('#sm_character_memory_rows').on('click', '.sm_manager_relink', async function (event) {

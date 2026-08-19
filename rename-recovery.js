@@ -331,3 +331,14 @@ export function archiveNamespace(store, namespaceKey, { reason = 'manual-archive
   delete store[namespaceKey];
   return { ok: true, namespace_key: String(namespaceKey), archived_at: archivedAt };
 }
+
+/**
+ * Undoes a manual/force link by moving the current target namespace to the
+ * rollback archive. The original source namespace is not touched.
+ */
+export function unlinkNamespace(store, namespaceKey, options = {}) {
+  return archiveNamespace(store, namespaceKey, {
+    reason: options.reason ?? 'manual-link-undone',
+    archivedAt: options.archivedAt ?? Date.now(),
+  });
+}
