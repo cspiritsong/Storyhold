@@ -12,8 +12,8 @@
  */
 
 import { getCurrentChatId } from '../../../../script.js';
-import { extension_settings } from '../../../extensions.js';
-import { MODULE_NAME, SCHEMA_VERSION } from './constants.js';
+import { getContext, extension_settings } from '../../../extensions.js';
+import { MODULE_NAME, META_KEY, SCHEMA_VERSION } from './constants.js';
 import { smLog } from './logging.js';
 import {
   MEMORY_SCOPE_CHARACTER,
@@ -59,7 +59,8 @@ export function isPerChatScope() {
  * @returns {string|null}
  */
 export function getChatScopeId() {
-  return resolveChatScopeId(getCurrentChatId());
+  const stableChatUid = getContext()?.chatMetadata?.[META_KEY]?.chat_uid ?? null;
+  return resolveChatScopeId(stableChatUid ?? getCurrentChatId());
 }
 
 /**
@@ -76,7 +77,9 @@ function ensureStore() {
 
 /**
  * Returns the storage container for the current scope of a character.
- * In chat scope this is characters[characterName].chats[chatId].
+ * In chat scope this is characters[characterName].chats[stableChatUid].
+ * The stable UID is stored in chat metadata and survives filename changes;
+ * the live filename remains available as provenance/alias data.
  * @param {string} characterName
  * @returns {Object|null}
  */

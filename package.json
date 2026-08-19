@@ -5,7 +5,7 @@
   "description": "Smart Memory - SillyTavern extension",
   "license": "AGPL-3.0-or-later",
   "scripts": {
-    "test": "node test-harness.mjs && node --test tests/lineage.test.js tests/timeline.test.js",
+    "test": "node test-harness.mjs && node --test tests/lineage.test.js tests/timeline.test.js tests/rename-recovery.test.js",
     "test:live": "node test-harness.mjs --live",
     "test:parsers": "node test-harness.mjs --parsers"
   },

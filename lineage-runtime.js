@@ -41,15 +41,22 @@ export function filterCurrentStateLedger(ledger, epochId = null) {
 
   const records = Object.entries(ledger).filter(([, fields]) => {
     const sourceChatId = fields?._source_chat_id;
+    const allowedChatIds = new Set([
+      currentLineage.chatId,
+      ...(currentLineage.legacyChatIds ?? []),
+    ].filter((value) => value !== null && value !== undefined));
     const sourceMatches =
       sourceChatId === undefined || sourceChatId === null
         ? currentLineage.chatId !== null
-        : String(sourceChatId) === String(currentLineage.chatId);
+        : allowedChatIds.has(String(sourceChatId));
+    const uidMatches =
+      fields?._source_chat_uid != null &&
+      String(fields._source_chat_uid) === String(currentLineage.chatUid ?? '');
     const epochMatches =
       fields?._lineage_epoch == null || epochId == null
         ? true
         : String(fields._lineage_epoch) === String(epochId);
-    return sourceMatches && epochMatches;
+    return (sourceMatches || uidMatches) && epochMatches;
   });
   return Object.fromEntries(records);
 }

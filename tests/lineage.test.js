@@ -88,6 +88,24 @@ test('rebuilt branch lineage is trusted without inheriting parent records', () =
   assert.equal(result.quarantined, false);
 });
 
+test('verified branch lineage survives a later chat rename through stable uid', () => {
+  const result = classifyChatLineage({
+    chatId: 'renamed-branch',
+    chatUid: 'uid-branch',
+    parentChatId: 'parent-chat',
+    chat: [message(1)],
+    lineage: {
+      status: LINEAGE_STATUS.REBUILT,
+      chat_id: 'old-branch-name',
+      chat_uid: 'uid-branch',
+      parent_chat_id: 'parent-chat',
+    },
+  });
+
+  assert.equal(result.status, LINEAGE_STATUS.REBUILT);
+  assert.equal(result.quarantined, false);
+});
+
 test('same parent identifier is not treated as a cross-file branch', () => {
   const result = classifyChatLineage({
     chatId: 'chat-30',
@@ -127,6 +145,26 @@ test('trusted chat keeps legacy records but rejects foreign provenance', () => {
   });
 
   assert.deepEqual(result.map((record) => record.id), ['legacy', 'current']);
+});
+
+test('stable chat uid and rename aliases keep same-chat provenance usable after rename', () => {
+  const lineage = classifyChatLineage({
+    chatId: 'renamed-chat',
+    chatUid: 'uid-1',
+    legacyChatIds: ['old-chat'],
+    parentChatId: null,
+    chat: [],
+  });
+  const records = [
+    { id: 'old', source_chat_id: 'old-chat' },
+    { id: 'uid', source_chat_uid: 'uid-1' },
+    { id: 'foreign', source_chat_id: 'other-chat' },
+  ];
+
+  assert.deepEqual(
+    filterDerivedRecordsForChat(records, 'renamed-chat', lineage).map((record) => record.id),
+    ['old', 'uid'],
+  );
 });
 
 test('trusted state ledger keeps legacy/current cards and rejects foreign cards', () => {

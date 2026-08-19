@@ -885,6 +885,22 @@
   font-style: italic;
 }
 
+#smart_memory_settings #sm_rename_audit_status,
+#smart_memory_settings #sm_rename_audit_results {
+  color: var(--SmartReplyColor, #aaa);
+  font-size: 0.85em;
+}
+
+#smart_memory_settings .sm-rename-audit-row {
+  padding: 5px 7px;
+  border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+}
+
+#smart_memory_settings .sm-rename-audit-row button {
+  margin-top: 4px;
+}
+
 #smart_memory_settings .sm_profiles_section-label {
   font-weight: 600;
   color: var(--SmartReplyColor, #ddd);

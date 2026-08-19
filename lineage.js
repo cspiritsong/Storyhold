@@ -77,6 +77,7 @@ export function findCommonChatPrefix(parentChat, branchChat) {
  */
 export function buildVerifiedPrefixLineage({
   chatId,
+  chatUid = null,
   parentChatId,
   parentChat,
   branchChat,
@@ -89,6 +90,7 @@ export function buildVerifiedPrefixLineage({
     return {
       status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
       chat_id: normalizedChatId,
+      ...(chatUid !== null ? { chat_uid: String(chatUid) } : {}),
       parent_chat_id: normalizedParentChatId,
       prefix_end: null,
       prefix_length: match.commonPrefixLength,
@@ -100,6 +102,7 @@ export function buildVerifiedPrefixLineage({
   return {
     status: LINEAGE_STATUS.VERIFIED_PREFIX,
     chat_id: normalizedChatId,
+    ...(chatUid !== null ? { chat_uid: String(chatUid) } : {}),
     parent_chat_id: normalizedParentChatId,
     prefix_end: match.branchPrefixEnd,
     prefix_length: match.commonPrefixLength,
@@ -246,9 +249,18 @@ export function inheritSmartMemoryMetadata(parentSmartMemory = {}, options = {})
  * @returns {{status: string, quarantined: boolean, chatId: string|null,
  *            parentChatId: string|null, hasRealMesIds: boolean}}
  */
-export function classifyChatLineage({ chatId, parentChatId, chat, lineage = null } = {}) {
+export function classifyChatLineage({
+  chatId,
+  chatUid = null,
+  parentChatId,
+  legacyChatIds = [],
+  chat,
+  lineage = null,
+} = {}) {
   const normalizedChatId = normalizeChatId(chatId);
+  const normalizedChatUid = normalizeChatId(chatUid);
   const normalizedParentChatId = normalizeChatId(parentChatId);
+  const normalizedLegacyChatIds = [...new Set(legacyChatIds.map(normalizeChatId).filter(Boolean))];
   const hasRealMesIds = chatHasRealMesIds(chat);
   const isCrossFile =
     normalizedParentChatId !== null && normalizedParentChatId !== normalizedChatId;
@@ -260,18 +272,23 @@ export function classifyChatLineage({ chatId, parentChatId, chat, lineage = null
       chatId: normalizedChatId,
       parentChatId: normalizedParentChatId,
       hasRealMesIds,
+      ...(normalizedChatUid !== null ? { chatUid: normalizedChatUid } : {}),
+      ...(normalizedLegacyChatIds.length > 0 ? { legacyChatIds: normalizedLegacyChatIds } : {}),
     };
   }
 
+  const lineageChatMatches =
+    normalizeChatId(lineage?.chat_id) === normalizedChatId ||
+    (normalizedChatUid !== null && normalizeChatId(lineage?.chat_uid) === normalizedChatUid);
   const verifiedLineage =
     lineage?.status === LINEAGE_STATUS.VERIFIED_PREFIX &&
-    normalizeChatId(lineage.chat_id) === normalizedChatId &&
+    lineageChatMatches &&
     normalizeChatId(lineage.parent_chat_id) === normalizedParentChatId &&
     Number.isInteger(lineage.prefix_end) &&
     lineage.prefix_end >= -1;
   const rebuiltLineage =
     lineage?.status === LINEAGE_STATUS.REBUILT &&
-    normalizeChatId(lineage.chat_id) === normalizedChatId &&
+    lineageChatMatches &&
     normalizeChatId(lineage.parent_chat_id) === normalizedParentChatId;
 
   if (verifiedLineage || rebuiltLineage) {
@@ -281,6 +298,8 @@ export function classifyChatLineage({ chatId, parentChatId, chat, lineage = null
       chatId: normalizedChatId,
       parentChatId: normalizedParentChatId,
       hasRealMesIds,
+      ...(normalizedChatUid !== null ? { chatUid: normalizedChatUid } : {}),
+      ...(normalizedLegacyChatIds.length > 0 ? { legacyChatIds: normalizedLegacyChatIds } : {}),
     };
   }
 
@@ -292,6 +311,8 @@ export function classifyChatLineage({ chatId, parentChatId, chat, lineage = null
     chatId: normalizedChatId,
     parentChatId: normalizedParentChatId,
     hasRealMesIds,
+    ...(normalizedChatUid !== null ? { chatUid: normalizedChatUid } : {}),
+    ...(normalizedLegacyChatIds.length > 0 ? { legacyChatIds: normalizedLegacyChatIds } : {}),
   };
 }
 
@@ -312,9 +333,21 @@ export function filterDerivedRecordsForChat(records, chatId, lineage = {}) {
   if (!Array.isArray(records) || lineage.quarantined) return [];
 
   const normalizedChatId = normalizeChatId(chatId);
+  const allowedChatIds = new Set([
+    normalizedChatId,
+    ...(lineage.legacyChatIds ?? []).map(normalizeChatId),
+  ].filter(Boolean));
   return records.filter((record) => {
     const sourceChatId = normalizeChatId(record?.source_chat_id);
+    if (sourceChatId !== null && allowedChatIds.has(sourceChatId)) return true;
+    if (
+      record?.source_chat_uid != null &&
+      lineage?.chatUid != null &&
+      normalizeChatId(record.source_chat_uid) === normalizeChatId(lineage.chatUid)
+    ) {
+      return true;
+    }
     if (sourceChatId === null) return normalizedChatId !== null;
-    return sourceChatId === normalizedChatId;
+    return false;
   });
 }

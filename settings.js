@@ -131,6 +131,7 @@ import {
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { watermarkFromChat } from './branch-aware.js';
 import { LINEAGE_STATUS } from './lineage.js';
+import { NAMESPACE_STATUS } from './rename-recovery.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
@@ -737,8 +738,108 @@ export function bindSettingsUI(ctrl) {
     $('#sm_rebuild_branch').toggle(show);
   }
 
+  function renameAuditStatusText(audit) {
+    if (!audit) return 'Audit unavailable.';
+    const labels = {
+      [NAMESPACE_STATUS.LINKED]: 'Linked: active memory namespace is attached to this chat.',
+      [NAMESPACE_STATUS.RENAMED_CANDIDATE]: 'Rename candidate found: exact transcript match is available.',
+      [NAMESPACE_STATUS.ORPHANED]: 'Orphan candidate found: relink is not proven; archive or rebuild is safer.',
+      [NAMESPACE_STATUS.AMBIGUOUS]: 'Ambiguous: multiple namespaces match; no automatic action is allowed.',
+      [NAMESPACE_STATUS.UNSAFE]: 'Unsafe: a candidate disagrees with the current transcript.',
+      [NAMESPACE_STATUS.NO_MATCH]: 'No stale namespace candidate found.',
+    };
+    return labels[audit.status] ?? `Audit status: ${audit.status}`;
+  }
+
+  function renderRenameAudit(audit) {
+    const $status = $('#sm_rename_audit_status');
+    const $results = $('#sm_rename_audit_results').empty().show();
+    if (!audit) {
+      $status.text('Audit unavailable.');
+      return;
+    }
+
+    $status.text(renameAuditStatusText(audit));
+    const total = audit.namespaces?.length ?? 0;
+    const candidates = audit.candidates?.length ?? 0;
+    $results.append(
+      $('<div class="sm-muted"></div>').text(
+        `Stable chat identity: ${audit.current_chat_uid ?? 'not assigned'} · namespaces: ${total} · candidates: ${candidates}`,
+      ),
+    );
+
+    for (const candidate of audit.candidates ?? []) {
+      const counts = candidate.counts ?? {};
+      const $row = $('<div class="sm-rename-audit-row" style="margin-top: 6px"></div>');
+      $row.append(
+        $('<div></div>').text(
+          `${candidate.key} · ${candidate.confidence} · ${counts.total ?? 0} derived records · ${candidate.reason}`,
+        ),
+      );
+      if (candidate.confidence === 'high') {
+        $row.append(
+          $('<button class="menu_button menu_button_icon sm_rename_relink" type="button">')
+            .text('Relink exact match')
+            .data('namespace-key', candidate.key),
+        );
+      } else if (
+        audit.status === NAMESPACE_STATUS.ORPHANED ||
+        audit.status === NAMESPACE_STATUS.UNSAFE
+      ) {
+        $row.append(
+          $('<button class="menu_button menu_button_icon sm_rename_archive" type="button">')
+            .text('Archive orphan')
+            .data('namespace-key', candidate.key),
+        );
+      }
+      $results.append($row);
+    }
+  }
+
   $(document).on('smart_memory:lineage_changed', updateBranchRebuildButton);
   updateBranchRebuildButton();
+
+  $('#sm_audit_chat_memory').on('click', function () {
+    renderRenameAudit(ctrl.auditRenameNamespaces?.());
+  });
+
+  $('#sm_rename_audit_results').on('click', '.sm_rename_relink', async function () {
+    if (isCatchUpRunning()) return;
+    const namespaceKey = $(this).data('namespace-key');
+    const confirmed = await callGenericPopup(
+      'RELINK EXACT CHAT MEMORY\n\nThe transcript fingerprint matches this namespace. Smart Memory will copy the derived namespace to the stable chat identity and keep the old namespace as rollback history. Raw chat, parent chat, settings outside Smart Memory, and native vectors are not changed. Continue?',
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = await ctrl.relinkRenameNamespace?.(namespaceKey);
+    if (!result?.ok) {
+      toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
+      return;
+    }
+    toastr.success('Chat memory relinked. The old namespace remains available for rollback.', 'Smart Memory');
+    renderRenameAudit(result.audit);
+    ctrl.onChatChanged();
+  });
+
+  $('#sm_rename_audit_results').on('click', '.sm_rename_archive', async function () {
+    if (isCatchUpRunning()) return;
+    const namespaceKey = $(this).data('namespace-key');
+    const confirmed = await callGenericPopup(
+      'ARCHIVE ORPHANED MEMORY\n\nThis removes the selected derived namespace from active Smart-Memory retrieval and keeps it in a rollback archive. It does not delete the raw chat, parent chat, settings, or native vectors. Continue?',
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = await ctrl.archiveRenameNamespace?.(namespaceKey, 'manual-orphan-archive');
+    if (!result?.ok) {
+      toastr.error(`Archive stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
+      return;
+    }
+    toastr.success('Orphaned derived memory archived; the raw chat was preserved.', 'Smart Memory');
+    renderRenameAudit(result.audit);
+    ctrl.onChatChanged();
+  });
 
   /**
    * Runs extraction on messages generated during the read-only window, then
@@ -2492,6 +2593,7 @@ export function bindSettingsUI(ctrl) {
       lineage: {
         status: LINEAGE_STATUS.REBUILT,
         chat_id: String(chatId),
+        chat_uid: context.chatMetadata[META_KEY]?.chat_uid ?? null,
         parent_chat_id: String(parentChatId),
         prefix_end: null,
         prefix_length: 0,

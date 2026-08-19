@@ -148,6 +148,12 @@ import {
   setCurrentLineage,
 } from './lineage-runtime.js';
 import { verifyAndInheritCurrentBranch } from './lineage-ops.js';
+import { ensureStableChatIdentity } from './rename-ops.js';
+import {
+  archiveCurrentNamespace,
+  auditCurrentChatNamespaces,
+  relinkCurrentNamespace,
+} from './rename-ops.js';
 import { rebuildTimeline } from './timeline.js';
 import {
   setStatusMessage,
@@ -1160,11 +1166,15 @@ async function onChatChangedImpl() {
   const settings = getSettings();
   if (!settings.enabled) return;
 
+  await ensureStableChatIdentity();
+  const activeMeta = getContext().chatMetadata?.[META_KEY] ?? {};
   let lineage = classifyChatLineage({
     chatId: getCurrentChatId(),
+    chatUid: activeMeta.chat_uid ?? null,
+    legacyChatIds: activeMeta.chat_aliases ?? [],
     parentChatId: getContext().chatMetadata?.main_chat,
     chat: getContext().chat,
-    lineage: getContext().chatMetadata?.[META_KEY]?.lineage ?? null,
+    lineage: activeMeta.lineage ?? null,
   });
 
   // Cross-file branches are resolved against the parent raw transcript before
@@ -2073,6 +2083,9 @@ jQuery(async function () {
     },
     clearAllInjections,
     onChatChanged,
+    auditRenameNamespaces: auditCurrentChatNamespaces,
+    relinkRenameNamespace: relinkCurrentNamespace,
+    archiveRenameNamespace: archiveCurrentNamespace,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
   });

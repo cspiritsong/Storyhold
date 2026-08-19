@@ -91,6 +91,7 @@ export async function verifyAndInheritCurrentBranch() {
   const epochId = generateMemoryId();
   const lineage = buildVerifiedPrefixLineage({
     chatId: branchChatId,
+    chatUid: context.chatMetadata?.[META_KEY]?.chat_uid ?? null,
     parentChatId,
     parentChat: parent.chat,
     branchChat: context.chat,
@@ -146,6 +147,8 @@ export async function verifyAndInheritCurrentBranch() {
 
   return classifyChatLineage({
     chatId: branchChatId,
+    chatUid: context.chatMetadata?.[META_KEY]?.chat_uid ?? null,
+    legacyChatIds: context.chatMetadata?.[META_KEY]?.chat_aliases ?? [],
     parentChatId,
     chat: context.chat,
     lineage: inheritedSmartMemory.lineage,
