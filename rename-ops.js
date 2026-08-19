@@ -6,6 +6,13 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, SCHEMA_VERSION, generateMemoryId } from './constants.js';
 import { MEMORY_SCOPE_CHAT } from './scope-core.js';
 import {
+  emptyRollbackArchive,
+  listChatMemoryNamespaces,
+  listRollbackArchives,
+  nukeAllChatNamespaces,
+  nukeChatNamespaces,
+} from './chat-memory-manager.js';
+import {
   auditNamespaces,
   canRelinkCandidate,
   NAMESPACE_STATUS,
@@ -197,4 +204,59 @@ export async function archiveCurrentNamespace(namespaceKey, reason = 'manual-orp
   if (!result.ok) return { ...result, audit };
   saveSettingsDebounced();
   return { ...result, audit: auditCurrentChatNamespaces() };
+}
+
+function chatMemoryManagerState() {
+  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+    return { status: 'not-per-chat-scope', active: [], archives: [] };
+  }
+  const context = getContext();
+  const meta = context?.chatMetadata?.[META_KEY] ?? {};
+  const store = currentNamespaceStore(context) ?? {};
+  return {
+    status: 'ok',
+    active: listChatMemoryNamespaces(store, {
+      currentChatUid: meta.chat_uid ?? null,
+      currentChatId: getCurrentChatId() ?? null,
+    }),
+    archives: listRollbackArchives(store),
+  };
+}
+
+/** Returns metadata-only active namespaces and rollback entries for the character. */
+export function listCurrentCharacterChatMemory() {
+  return chatMemoryManagerState();
+}
+
+/** Permanently nukes selected active derived namespaces; raw chats/vectors are untouched. */
+export function nukeCurrentCharacterChatMemory(keys = []) {
+  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+    return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
+  }
+  const store = currentNamespaceStore(getContext());
+  const result = nukeChatNamespaces(store, keys);
+  saveSettingsDebounced();
+  return { ok: true, ...result, state: chatMemoryManagerState() };
+}
+
+/** Permanently nukes every active chat namespace for the current character. */
+export function nukeAllCurrentCharacterChatMemory() {
+  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+    return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
+  }
+  const store = currentNamespaceStore(getContext());
+  const result = nukeAllChatNamespaces(store);
+  saveSettingsDebounced();
+  return { ok: true, ...result, state: chatMemoryManagerState() };
+}
+
+/** Permanently empties the rollback archive for the current character. */
+export function emptyCurrentCharacterRollbackArchive() {
+  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+    return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
+  }
+  const store = currentNamespaceStore(getContext());
+  const result = emptyRollbackArchive(store);
+  saveSettingsDebounced();
+  return { ok: true, ...result, state: chatMemoryManagerState() };
 }

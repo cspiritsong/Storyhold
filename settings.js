@@ -802,11 +802,141 @@ export function bindSettingsUI(ctrl) {
     }
   }
 
+  function renderCharacterMemoryManager(state) {
+    $('#sm_character_memory_manager').show();
+    const $status = $('#sm_character_memory_status');
+    const $rows = $('#sm_character_memory_rows').empty();
+    const $archives = $('#sm_character_memory_archives').empty();
+    if (!state || state.status !== 'ok') {
+      $status.text('Character memory manager is available only when Memory scope is Per chat (isolated).');
+      $('#sm_nuke_selected_chat_memory, #sm_nuke_all_chat_memory, #sm_empty_rollback_archive').prop('disabled', true);
+      return;
+    }
+
+    const active = state.active ?? [];
+    const archives = state.archives ?? [];
+    $status.text(`${active.length} active chat namespace(s) · ${archives.length} rollback archive(s)`);
+    $('#sm_nuke_selected_chat_memory').prop('disabled', active.length === 0);
+    $('#sm_nuke_all_chat_memory').prop('disabled', active.length === 0);
+    $('#sm_empty_rollback_archive').prop('disabled', archives.length === 0);
+
+    if (active.length === 0) {
+      $rows.append($('<div class="sm-muted"></div>').text('No active chat memory namespaces.'));
+    }
+    active.forEach((row, index) => {
+      const linked = row.status === 'linked';
+      const target = row.linked_to ? `to: ${row.linked_to}` : 'no linked chat';
+      const statusLabel = linked ? 'Linked' : 'Orphaned';
+      const $item = $('<label class="sm-chat-memory-row"></label>');
+      $item.append(
+        $('<input type="checkbox" class="sm_chat_memory_select">')
+          .data('namespace-key', row.key)
+          .prop('checked', false),
+      );
+      $item.append($('<span class="sm-chat-memory-name"></span>').text(`Memory ${index + 1}`));
+      $item.append(
+        $('<span class="sm-chat-memory-status"></span>')
+          .addClass(linked ? 'is-linked' : 'is-orphaned')
+          .text(statusLabel),
+      );
+      $item.append($('<span class="sm-chat-memory-target"></span>').text(`(${target})`));
+      $item.append(
+        $('<span class="sm-chat-memory-count"></span>').text(`· ${row.memory_count} derived record(s)`),
+      );
+      if (row.current) $item.append($('<span class="sm-muted"></span>').text(' · current'));
+      $rows.append($item);
+    });
+
+    if (archives.length > 0) {
+      $archives.append($('<div class="sm-muted"></div>').text('Rollback archive (not active):'));
+      archives.forEach((archive) => {
+        $archives.append(
+          $('<div class="sm-chat-memory-archive-row"></div>').text(
+            `${archive.key} · ${archive.memory_count} derived record(s) · ${archive.reason ?? 'archived'}`,
+          ),
+        );
+      });
+    }
+  }
+
+  function selectedCharacterMemoryKeys() {
+    return $('#sm_character_memory_rows .sm_chat_memory_select:checked')
+      .map(function () {
+        return $(this).data('namespace-key');
+      })
+      .get();
+  }
+
   $(document).on('smart_memory:lineage_changed', updateBranchRebuildButton);
   updateBranchRebuildButton();
 
   $('#sm_audit_chat_memory').on('click', function () {
     renderRenameAudit(ctrl.auditRenameNamespaces?.());
+  });
+
+  $('#sm_manage_character_chat_memory').on('click', function () {
+    renderCharacterMemoryManager(ctrl.listCharacterChatMemory?.());
+  });
+
+  $('#sm_nuke_selected_chat_memory').on('click', async function () {
+    if (isCatchUpRunning()) return;
+    const keys = selectedCharacterMemoryKeys();
+    if (keys.length === 0) {
+      toastr.info('Select one or more chat memory rows first.', 'Smart Memory');
+      return;
+    }
+    const confirmed = await callGenericPopup(
+      `NUKE SELECTED CHAT MEMORY\n\nThis permanently deletes derived Smart-Memory for ${keys.length} selected chat namespace(s). Raw chat JSONL, parent chats, settings outside Smart Memory, and native Vector Storage survive. This does not create trash. Continue?`,
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = ctrl.nukeCharacterChatMemory?.(keys);
+    if (!result?.ok) {
+      toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      return;
+    }
+    toastr.success(`Nuked ${result.deleted.length} chat memory namespace(s).`, 'Smart Memory');
+    renderCharacterMemoryManager(result.state);
+    ctrl.onChatChanged();
+  });
+
+  $('#sm_nuke_all_chat_memory').on('click', async function () {
+    if (isCatchUpRunning()) return;
+    const state = ctrl.listCharacterChatMemory?.();
+    const count = state?.active?.length ?? 0;
+    if (count === 0) return;
+    const confirmed = await callGenericPopup(
+      `NUKE ALL ACTIVE CHAT MEMORY\n\nThis permanently deletes all ${count} active per-chat Smart-Memory namespaces for this character. Raw chat JSONL, parent chats, settings outside Smart Memory, rollback archive, and native Vector Storage survive. Continue?`,
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = ctrl.nukeAllCharacterChatMemory?.();
+    if (!result?.ok) {
+      toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      return;
+    }
+    toastr.success(`Nuked ${result.deleted.length} active chat namespace(s).`, 'Smart Memory');
+    renderCharacterMemoryManager(result.state);
+    ctrl.onChatChanged();
+  });
+
+  $('#sm_empty_rollback_archive').on('click', async function () {
+    if (isCatchUpRunning()) return;
+    const state = ctrl.listCharacterChatMemory?.();
+    const count = state?.archives?.length ?? 0;
+    if (count === 0) return;
+    const confirmed = await callGenericPopup(
+      `EMPTY ROLLBACK ARCHIVE\n\nThis permanently deletes ${count} archived derived Smart-Memory namespace(s). Active chat memory, raw chat JSONL, parent chats, and native Vector Storage survive. This cannot be undone. Continue?`,
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = ctrl.emptyCharacterRollbackArchive?.();
+    if (!result?.ok) {
+      toastr.error(`Archive cleanup stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      return;
+    }
+    toastr.success(`Removed ${result.deleted.length} rollback archive(s).`, 'Smart Memory');
+    renderCharacterMemoryManager(result.state);
   });
 
   $('#sm_rename_audit_results').on('click', '.sm_rename_relink', async function () {

@@ -145,6 +145,7 @@ export function auditNamespaces({
 
   for (const [key, container] of Object.entries(namespaces ?? {})) {
     const keyString = String(key);
+    if (keyString === 'archived_chats') continue;
     const isCurrent = keyString === currentUid || (!currentUid && keyString === currentId);
     const counts = countNamespaceData(container);
     const isArchived = Boolean(container?.archived_alias || container?.archived_at);

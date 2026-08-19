@@ -901,6 +901,41 @@
   margin-top: 4px;
 }
 
+#smart_memory_settings .sm-chat-memory-row,
+#smart_memory_settings .sm-chat-memory-archive-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  margin-top: 4px;
+  border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+#smart_memory_settings .sm-chat-memory-name {
+  min-width: 64px;
+  font-weight: 600;
+}
+
+#smart_memory_settings .sm-chat-memory-status {
+  font-weight: 600;
+}
+
+#smart_memory_settings .sm-chat-memory-status.is-linked {
+  color: #62d58a;
+}
+
+#smart_memory_settings .sm-chat-memory-status.is-orphaned {
+  color: #e7b85c;
+}
+
+#smart_memory_settings .sm-chat-memory-target,
+#smart_memory_settings .sm-chat-memory-count,
+#smart_memory_settings .sm-chat-memory-archive-row {
+  color: var(--SmartReplyColor, #aaa);
+}
+
 #smart_memory_settings .sm_profiles_section-label {
   font-weight: 600;
   color: var(--SmartReplyColor, #ddd);

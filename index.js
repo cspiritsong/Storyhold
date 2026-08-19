@@ -152,6 +152,10 @@ import { ensureStableChatIdentity } from './rename-ops.js';
 import {
   archiveCurrentNamespace,
   auditCurrentChatNamespaces,
+  emptyCurrentCharacterRollbackArchive,
+  listCurrentCharacterChatMemory,
+  nukeAllCurrentCharacterChatMemory,
+  nukeCurrentCharacterChatMemory,
   relinkCurrentNamespace,
 } from './rename-ops.js';
 import { rebuildTimeline } from './timeline.js';
@@ -2086,6 +2090,10 @@ jQuery(async function () {
     auditRenameNamespaces: auditCurrentChatNamespaces,
     relinkRenameNamespace: relinkCurrentNamespace,
     archiveRenameNamespace: archiveCurrentNamespace,
+    listCharacterChatMemory: listCurrentCharacterChatMemory,
+    nukeCharacterChatMemory: nukeCurrentCharacterChatMemory,
+    nukeAllCharacterChatMemory: nukeAllCurrentCharacterChatMemory,
+    emptyCharacterRollbackArchive: emptyCurrentCharacterRollbackArchive,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
   });
