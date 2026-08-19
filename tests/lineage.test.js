@@ -106,6 +106,25 @@ test('verified branch lineage survives a later chat rename through stable uid', 
   assert.equal(result.quarantined, false);
 });
 
+test('explicit manual link trusts the selected full namespace as an override', () => {
+  const result = classifyChatLineage({
+    chatId: 'new-chat',
+    chatUid: 'uid-new-chat',
+    parentChatId: 'glm52-chat',
+    chat: [message(1)],
+    lineage: {
+      status: LINEAGE_STATUS.MANUAL_LINKED,
+      chat_id: 'new-chat',
+      chat_uid: 'uid-new-chat',
+      parent_chat_id: 'glm52-chat',
+      manual_override: true,
+    },
+  });
+
+  assert.equal(result.status, LINEAGE_STATUS.MANUAL_LINKED);
+  assert.equal(result.quarantined, false);
+});
+
 test('same parent identifier is not treated as a cross-file branch', () => {
   const result = classifyChatLineage({
     chatId: 'chat-30',

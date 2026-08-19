@@ -5,6 +5,7 @@ import {
 import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, SCHEMA_VERSION, generateMemoryId } from './constants.js';
 import { MEMORY_SCOPE_CHAT } from './scope-core.js';
+import { LINEAGE_STATUS } from './lineage.js';
 import {
   emptyRollbackArchive,
   listChatMemoryNamespaces,
@@ -187,6 +188,20 @@ export async function relinkCurrentNamespace(namespaceKey, { manual = false } = 
     meta.chat_uid,
   );
   retaggedMeta.chat_aliases = mergeAliases(retaggedMeta, [candidate.key]);
+  if (manual) {
+    retaggedMeta.lineage = {
+      ...(retaggedMeta.lineage ?? {}),
+      status: LINEAGE_STATUS.MANUAL_LINKED,
+      chat_id: getCurrentChatId() ?? null,
+      chat_uid: meta.chat_uid,
+      parent_chat_id: retaggedMeta.lineage?.parent_chat_id ?? context.chatMetadata.main_chat ?? null,
+      prefix_end: null,
+      method: 'manual-full-namespace',
+      manual_override: true,
+      manual_source_namespace: String(candidate.key),
+      epoch_id: generateMemoryId(),
+    };
+  }
   context.chatMetadata[META_KEY] = retaggedMeta;
   await context.saveMetadata();
   saveSettingsDebounced();

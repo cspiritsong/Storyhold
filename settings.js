@@ -862,7 +862,7 @@ export function bindSettingsUI(ctrl) {
       if (!linked) {
         $item.append(
           $('<button class="menu_button menu_button_icon sm_manager_relink" type="button">')
-            .text('Relink here')
+            .text('Force link to this chat')
             .data('namespace-key', row.key),
         );
       }
@@ -978,7 +978,7 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
     const confirmed = await callGenericPopup(
-      'RELINK THIS LEGACY MEMORY\n\nYou are confirming that this orphaned namespace belongs to the current chat after a rename. Smart Memory will copy it to the current stable chat identity and keep the old namespace as rollback history. If it belongs to another chat, cancel. Continue?',
+      'FORCE LINK THIS MEMORY\n\nYou are overriding Smart Memory\'s branch-safety check and attaching this entire orphaned namespace to the current chat. This imports all derived memories from the selected source; it does not prove a shared prefix. The old namespace remains as rollback history. If this is not intentional, cancel. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;

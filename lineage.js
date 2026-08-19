@@ -10,6 +10,7 @@ export const LINEAGE_STATUS = Object.freeze({
   UNVERIFIED_BRANCH: 'unverified-branch',
   VERIFIED_PREFIX: 'verified-prefix',
   REBUILT: 'rebuilt',
+  MANUAL_LINKED: 'manual-linked',
 });
 
 function normalizeChatId(value) {
@@ -290,8 +291,12 @@ export function classifyChatLineage({
     lineage?.status === LINEAGE_STATUS.REBUILT &&
     lineageChatMatches &&
     normalizeChatId(lineage.parent_chat_id) === normalizedParentChatId;
+  const manualLinked =
+    lineage?.status === LINEAGE_STATUS.MANUAL_LINKED &&
+    lineageChatMatches &&
+    lineage.manual_override === true;
 
-  if (verifiedLineage || rebuiltLineage) {
+  if (verifiedLineage || rebuiltLineage || manualLinked) {
     return {
       status: lineage.status,
       quarantined: false,
