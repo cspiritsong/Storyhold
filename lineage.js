@@ -9,11 +9,225 @@ export const LINEAGE_STATUS = Object.freeze({
   MESID_LESS_BRANCH: 'mesid-less-branch',
   UNVERIFIED_BRANCH: 'unverified-branch',
   VERIFIED_PREFIX: 'verified-prefix',
+  REBUILT: 'rebuilt',
 });
 
 function normalizeChatId(value) {
   if (value === null || value === undefined || value === '') return null;
   return String(value);
+}
+
+function canonicalMessage(message) {
+  return JSON.stringify({
+    name: String(message?.name ?? ''),
+    is_user: Boolean(message?.is_user),
+    is_system: Boolean(message?.is_system),
+    mes: String(message?.mes ?? '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  });
+}
+
+function messagesMatch(parentMessage, branchMessage, method) {
+  if (method === 'mesId') {
+    if (
+      typeof parentMessage?.mesId !== 'number' ||
+      typeof branchMessage?.mesId !== 'number' ||
+      parentMessage.mesId !== branchMessage.mesId
+    ) {
+      return false;
+    }
+  }
+  return canonicalMessage(parentMessage) === canonicalMessage(branchMessage);
+}
+
+/**
+ * Finds the verified common prefix of two raw ST chat arrays.
+ *
+ * Numeric mesIds are preferred when both chats have them. MesId-less/imported
+ * chats use a conservative canonical message fingerprint instead. A prefix is
+ * never guessed from array length alone.
+ */
+export function findCommonChatPrefix(parentChat, branchChat) {
+  const parent = Array.isArray(parentChat) ? parentChat : [];
+  const branch = Array.isArray(branchChat) ? branchChat : [];
+  const method = chatHasRealMesIds(parent) && chatHasRealMesIds(branch) ? 'mesId' : 'fingerprint';
+  let commonPrefixLength = 0;
+  const max = Math.min(parent.length, branch.length);
+
+  while (
+    commonPrefixLength < max &&
+    messagesMatch(parent[commonPrefixLength], branch[commonPrefixLength], method)
+  ) {
+    commonPrefixLength++;
+  }
+
+  return {
+    verified: commonPrefixLength > 0,
+    method,
+    commonPrefixLength,
+    parentPrefixEnd: commonPrefixLength - 1,
+    branchPrefixEnd: commonPrefixLength - 1,
+  };
+}
+
+/**
+ * Builds the lineage record written after a shared prefix has been verified.
+ */
+export function buildVerifiedPrefixLineage({
+  chatId,
+  parentChatId,
+  parentChat,
+  branchChat,
+  epochId = null,
+} = {}) {
+  const match = findCommonChatPrefix(parentChat, branchChat);
+  const normalizedChatId = normalizeChatId(chatId);
+  const normalizedParentChatId = normalizeChatId(parentChatId);
+  if (!match.verified || normalizedChatId === null || normalizedParentChatId === null) {
+    return {
+      status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
+      chat_id: normalizedChatId,
+      parent_chat_id: normalizedParentChatId,
+      prefix_end: null,
+      prefix_length: match.commonPrefixLength,
+      method: match.method,
+      epoch_id: epochId,
+    };
+  }
+
+  return {
+    status: LINEAGE_STATUS.VERIFIED_PREFIX,
+    chat_id: normalizedChatId,
+    parent_chat_id: normalizedParentChatId,
+    prefix_end: match.branchPrefixEnd,
+    prefix_length: match.commonPrefixLength,
+    method: match.method,
+    epoch_id: epochId,
+  };
+}
+
+/**
+ * Returns true only when a record has provenance wholly inside the verified
+ * parent prefix. Empty/legacy provenance is deliberately not inheritable.
+ */
+export function canInheritRecord(record, { parentChatId, parentPrefixEnd } = {}) {
+  if (normalizeChatId(record?.source_chat_id) !== normalizeChatId(parentChatId)) return false;
+  if (!Number.isInteger(parentPrefixEnd) || parentPrefixEnd < 0) return false;
+  const ranges =
+    record?.source_messages ??
+    (Array.isArray(record?.source_message_range) ? [record.source_message_range] : null) ??
+    (Array.isArray(record?._source_message_range) ? [record._source_message_range] : null);
+  if (!Array.isArray(ranges) || ranges.length === 0) return false;
+  return ranges.every(
+    (range) =>
+      Array.isArray(range) &&
+      range.length >= 2 &&
+      Number.isInteger(range[0]) &&
+      Number.isInteger(range[1]) &&
+      range[0] >= 0 &&
+      range[1] >= range[0] &&
+      range[1] <= parentPrefixEnd,
+  );
+}
+
+/**
+ * Copies safe prefix records and retags them for the branch. The parent array
+ * and its records are never mutated.
+ */
+export function inheritDerivedRecords(records, options = {}) {
+  if (!Array.isArray(records)) return [];
+  const { parentChatId, branchChatId, parentPrefixEnd, epochId = null } = options;
+  const normalizedBranchChatId = normalizeChatId(branchChatId);
+  if (normalizedBranchChatId === null) return [];
+
+  return records
+    .filter((record) => canInheritRecord(record, { parentChatId, parentPrefixEnd }))
+    .map((record) => ({
+      ...record,
+      source_chat_id: normalizedBranchChatId,
+      origin_chat_id: record.origin_chat_id ?? normalizeChatId(parentChatId),
+      inherited: true,
+      lineage_epoch: epochId,
+    }));
+}
+
+/**
+ * Builds a clean branch-scoped Smart Memory metadata block from a parent's
+ * proven prefix. Unproven legacy projections are intentionally omitted so a
+ * branch can fall back to an explicit rebuild instead of inheriting guesses.
+ */
+export function inheritSmartMemoryMetadata(parentSmartMemory = {}, options = {}) {
+  const {
+    parentChatId,
+    branchChatId,
+    parentPrefixEnd,
+    branchPrefixLength = parentPrefixEnd + 1,
+    branchPrefixMesId = null,
+    epochId = null,
+    schemaVersion = parentSmartMemory.schema_version ?? null,
+  } = options;
+  const recordOptions = { parentChatId, branchChatId, parentPrefixEnd, epochId };
+  const result = {
+    schema_version: schemaVersion,
+    lastExtractCutoff: Math.max(0, branchPrefixLength ?? 0),
+    lastInjectionRefresh: Math.max(0, branchPrefixLength ?? 0),
+    sessionMemories: inheritDerivedRecords(parentSmartMemory.sessionMemories, recordOptions),
+    storyArcs: inheritDerivedRecords(parentSmartMemory.storyArcs, recordOptions),
+    sceneHistory: inheritDerivedRecords(parentSmartMemory.sceneHistory, recordOptions),
+    state_ledger: {},
+    profiles: {},
+  };
+
+  if (branchPrefixMesId !== null && branchPrefixMesId !== undefined) {
+    result.lastExtractMesId = branchPrefixMesId;
+  }
+
+  for (const [key, fields] of Object.entries(parentSmartMemory.state_ledger ?? {})) {
+    const candidate = {
+      ...fields,
+      source_chat_id: fields?._source_chat_id,
+      source_message_range: fields?._source_message_range,
+    };
+    if (!canInheritRecord(candidate, { parentChatId, parentPrefixEnd })) continue;
+    result.state_ledger[key] = {
+      ...fields,
+      _source_chat_id: String(branchChatId),
+      _origin_chat_id: String(parentChatId),
+      _inherited: true,
+      _lineage_epoch: epochId,
+    };
+  }
+
+  for (const [name, profile] of Object.entries(parentSmartMemory.profiles ?? {})) {
+    const inherited = inheritDerivedRecords([profile], recordOptions);
+    if (inherited.length > 0) result.profiles[name] = inherited[0];
+  }
+
+  const summaryCandidate = {
+    source_chat_id: parentSmartMemory.summary_source_chat_id,
+    source_message_range: parentSmartMemory.summary_source_message_range,
+  };
+  if (parentSmartMemory.summary && canInheritRecord(summaryCandidate, { parentChatId, parentPrefixEnd })) {
+    result.summary = parentSmartMemory.summary;
+    result.summaryUpdated = parentSmartMemory.summaryUpdated;
+    result.summaryEnd = Math.max(0, branchPrefixLength ?? 0);
+    result.summary_source_chat_id = String(branchChatId);
+    result.summary_source_message_range = parentSmartMemory.summary_source_message_range;
+    if (parentSmartMemory.summary_source_mes_range) {
+      result.summary_source_mes_range = parentSmartMemory.summary_source_mes_range;
+    }
+  }
+
+  const inheritedMemoryIds = new Set(result.sessionMemories.map((memory) => memory.id).filter(Boolean));
+  const entities = (parentSmartMemory.sessionEntities ?? []).filter((entity) => {
+    const ids = Array.isArray(entity.memory_ids) ? entity.memory_ids : [];
+    return ids.length > 0 && ids.every((id) => inheritedMemoryIds.has(id));
+  });
+  if (entities.length > 0) result.sessionEntities = entities;
+
+  return result;
 }
 
 /**
@@ -49,16 +263,20 @@ export function classifyChatLineage({ chatId, parentChatId, chat, lineage = null
     };
   }
 
-  const verifiedPrefix =
+  const verifiedLineage =
     lineage?.status === LINEAGE_STATUS.VERIFIED_PREFIX &&
     normalizeChatId(lineage.chat_id) === normalizedChatId &&
     normalizeChatId(lineage.parent_chat_id) === normalizedParentChatId &&
     Number.isInteger(lineage.prefix_end) &&
     lineage.prefix_end >= -1;
+  const rebuiltLineage =
+    lineage?.status === LINEAGE_STATUS.REBUILT &&
+    normalizeChatId(lineage.chat_id) === normalizedChatId &&
+    normalizeChatId(lineage.parent_chat_id) === normalizedParentChatId;
 
-  if (verifiedPrefix) {
+  if (verifiedLineage || rebuiltLineage) {
     return {
-      status: LINEAGE_STATUS.VERIFIED_PREFIX,
+      status: lineage.status,
       quarantined: false,
       chatId: normalizedChatId,
       parentChatId: normalizedParentChatId,

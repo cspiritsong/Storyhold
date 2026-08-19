@@ -59,6 +59,7 @@ import {
   PROMPT_KEY_EPISTEMIC,
   PROMPT_KEY_STATE_LEDGER,
   generateMemoryId,
+  SCHEMA_VERSION,
 } from './constants.js';
 import { memory_sources, fetchOllamaModels } from './generate.js';
 import { runCompaction, injectSummary, loadAndInjectSummary } from './compaction.js';
@@ -129,6 +130,7 @@ import {
 } from './state-ledger.js';
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { watermarkFromChat } from './branch-aware.js';
+import { LINEAGE_STATUS } from './lineage.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
@@ -725,6 +727,18 @@ export function bindSettingsUI(ctrl) {
     }
     return false;
   }
+
+  function updateBranchRebuildButton() {
+    const lineage = ctrl.lineageState;
+    const show =
+      Boolean(lineage?.parentChatId) &&
+      lineage.status !== LINEAGE_STATUS.STANDALONE &&
+      lineage.status !== LINEAGE_STATUS.REBUILT;
+    $('#sm_rebuild_branch').toggle(show);
+  }
+
+  $(document).on('smart_memory:lineage_changed', updateBranchRebuildButton);
+  updateBranchRebuildButton();
 
   /**
    * Runs extraction on messages generated during the read-only window, then
@@ -2435,6 +2449,69 @@ export function bindSettingsUI(ctrl) {
 
   // Token budget for chat content per catch-up chunk is computed dynamically
   // from the configured context size at the time catch-up runs - see below.
+
+  $('#sm_rebuild_branch').on('click', async function () {
+    if (isCatchUpRunning()) return;
+
+    const context = getContext();
+    const chatId = getCurrentChatId();
+    const lineage = ctrl.lineageState;
+    if (!chatId || !lineage?.parentChatId) {
+      toastr.warning('No cross-file branch is active.', 'Smart Memory', { timeOut: 3000 });
+      return;
+    }
+
+    const confirmed = await callGenericPopup(
+      'REBUILD THIS BRANCH\n\nThis clears only this branch\'s derived Smart Memory and rebuilds it from the raw transcript.\n\nWILL SURVIVE: this branch\'s chat transcript, the parent chat, all other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+
+    const characterName = ctrl.getSelectedCharacterName();
+    if (characterName) {
+      clearCharacterMemories(characterName);
+      clearRelationshipHistory(characterName);
+      clearEpistemicKnowledge(characterName);
+      clearCanon(characterName);
+    }
+    await clearSessionMemories();
+    await clearSessionEntityRegistry();
+    await clearSceneHistory();
+    await clearArcs();
+    await clearArcSummaries();
+    await clearProfiles(characterName);
+    await clearStateLedger();
+    clearRepair();
+
+    const parentChatId = lineage.parentChatId;
+    const epochId = generateMemoryId();
+    context.chatMetadata[META_KEY] = {
+      schema_version: SCHEMA_VERSION,
+      lastExtractCutoff: 0,
+      lastInjectionRefresh: 0,
+      lineage: {
+        status: LINEAGE_STATUS.REBUILT,
+        chat_id: String(chatId),
+        parent_chat_id: String(parentChatId),
+        prefix_end: null,
+        prefix_length: 0,
+        method: 'raw-rebuild',
+        epoch_id: epochId,
+        rebuilt_from_raw: true,
+      },
+    };
+    await context.saveMetadata();
+    saveSettingsDebounced();
+    ctrl.clearAllInjections();
+    ctrl.onChatChanged();
+    setStatusMessage('Branch reset. Rebuilding from raw chat...');
+
+    // Allow the debounced chat refresh to classify the rebuilt lineage before
+    // starting the existing catch-up flow.
+    setTimeout(() => {
+      if (!ctrl.lineageQuarantined) $('#sm_catch_up').trigger('click');
+    }, 300);
+  });
 
   $('#sm_catch_up').on('click', async function () {
     if (ctrl.lineageQuarantined) {

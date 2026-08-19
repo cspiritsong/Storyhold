@@ -41,6 +41,7 @@ import {
   setExtensionPrompt,
   extension_prompt_types,
   extension_prompt_roles,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { generateMemoryExtract } from './generate.js';
 import { getContext, extension_settings } from '../../../extensions.js';
@@ -273,7 +274,25 @@ export async function processSceneBreak(
   const max = settings.scene_max_history ?? 5;
 
   // source_memory_ids is populated after extraction via linkMemoriesToLastScene.
-  history.push({ summary, ts: Date.now(), source_memory_ids: [] });
+  const context = getContext();
+  const sourceChatId = getCurrentChatId() ?? null;
+  const firstIndex = context.chat?.indexOf(recentMessages[0]) ?? -1;
+  const lastIndex = context.chat?.lastIndexOf(recentMessages[recentMessages.length - 1]) ?? -1;
+  const sourceMessageRange =
+    firstIndex >= 0 && lastIndex >= firstIndex ? [firstIndex, lastIndex] : null;
+  const sourceMesIds = recentMessages
+    .filter((message) => typeof message?.mesId === 'number')
+    .map((message) => message.mesId);
+  history.push({
+    summary,
+    ts: Date.now(),
+    source_memory_ids: [],
+    source_chat_id: sourceChatId,
+    ...(sourceMessageRange ? { source_message_range: sourceMessageRange } : {}),
+    ...(sourceMesIds.length > 0
+      ? { source_mes_range: [Math.min(...sourceMesIds), Math.max(...sourceMesIds)] }
+      : {}),
+  });
   if (history.length > max) history.splice(0, history.length - max);
 
   if (abortCheck?.()) return false;

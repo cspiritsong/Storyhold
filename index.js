@@ -142,7 +142,12 @@ import {
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { chatHasRealMesIds, getMesIdWindow, watermarkFromChat } from './branch-aware.js';
 import { classifyChatLineage } from './lineage.js';
-import { isCurrentLineageQuarantined, setCurrentLineage } from './lineage-runtime.js';
+import {
+  getCurrentLineage,
+  isCurrentLineageQuarantined,
+  setCurrentLineage,
+} from './lineage-runtime.js';
+import { verifyAndInheritCurrentBranch } from './lineage-ops.js';
 import {
   setStatusMessage,
   updateShortTermUI,
@@ -1086,6 +1091,7 @@ async function onChatChangedImpl() {
   // Fail closed during the asynchronous chat transition. The new chat is
   // classified below, before any stored tier is restored or extracted.
   setCurrentLineage(null);
+  $(document).trigger('smart_memory:lineage_changed');
 
   // Reset per-load flags so warnings and trim indicators start fresh for the new chat.
   resetEpistemicWarnFlag();
@@ -1130,13 +1136,21 @@ async function onChatChangedImpl() {
   const settings = getSettings();
   if (!settings.enabled) return;
 
-  const lineage = classifyChatLineage({
+  let lineage = classifyChatLineage({
     chatId: getCurrentChatId(),
     parentChatId: getContext().chatMetadata?.main_chat,
     chat: getContext().chat,
     lineage: getContext().chatMetadata?.[META_KEY]?.lineage ?? null,
   });
+
+  // Cross-file branches are resolved against the parent raw transcript before
+  // any derived tier is released. If the parent cannot be fetched or the prefix
+  // does not match, lineage remains quarantined and no memory is injected.
+  if (lineage.quarantined && getContext().chatMetadata?.main_chat) {
+    lineage = (await verifyAndInheritCurrentBranch()) ?? lineage;
+  }
   setCurrentLineage(lineage);
+  $(document).trigger('smart_memory:lineage_changed');
 
   if (lineage.quarantined) {
     clearAllInjections();
@@ -1982,6 +1996,9 @@ jQuery(async function () {
   $('#extensions_settings').append(html);
 
   bindSettingsUI({
+    get lineageState() {
+      return getCurrentLineage();
+    },
     get lineageQuarantined() {
       return isCurrentLineageQuarantined();
     },

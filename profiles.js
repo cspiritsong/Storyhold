@@ -171,6 +171,7 @@ export async function generateProfiles(characterName, abortCheck = null) {
       ...parsed,
       generated_at: Date.now(),
       source_chat_id: getCurrentChatId() ?? null,
+      source_message_range: [0, Math.max(0, (getContext().chat?.length ?? 1) - 1)],
     };
     if (abortCheck?.()) return null;
     await saveProfiles(profiles, characterName);

@@ -268,6 +268,10 @@ export async function runStateCardExtraction(characterName, messages, abortCheck
       }
     }
     const sourceChatId = getCurrentChatId() ?? null;
+    const sourceChatLength = getContext().chat?.length ?? messages.length;
+    const sourceWindowEnd = Math.max(0, sourceChatLength - 2);
+    const sourceWindowStart = Math.max(0, sourceWindowEnd - messages.length + 1);
+    const sourceMessageRange = [sourceWindowStart, sourceWindowEnd];
     const sourceMesRange =
       maxWindowMesId === null
         ? null
@@ -278,6 +282,7 @@ export async function runStateCardExtraction(characterName, messages, abortCheck
     for (const [key, fields] of updates) {
       ledger[key] = { ...(ledger[key] ?? {}), ...fields };
       ledger[key]._source_chat_id = sourceChatId;
+      ledger[key]._source_message_range = sourceMessageRange;
       if (maxWindowMesId !== null) ledger[key]._updated_mes_id = maxWindowMesId;
       if (sourceMesRange) ledger[key]._source_mes_range = sourceMesRange;
       count++;
