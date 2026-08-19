@@ -7,6 +7,7 @@ import { MODULE_NAME, META_KEY, SCHEMA_VERSION, generateMemoryId } from './const
 import { MEMORY_SCOPE_CHAT } from './scope-core.js';
 import {
   auditNamespaces,
+  canRelinkCandidate,
   NAMESPACE_STATUS,
   archiveNamespace,
   canonicalTranscriptFingerprint,
@@ -144,11 +145,11 @@ export function auditCurrentChatNamespaces() {
 /**
  * Relinks only an exact-fingerprint candidate selected from the audit result.
  */
-export async function relinkCurrentNamespace(namespaceKey) {
+export async function relinkCurrentNamespace(namespaceKey, { manual = false } = {}) {
   const context = getContext();
   const audit = auditCurrentChatNamespaces();
   const candidate = audit.candidates.find((entry) => entry.key === String(namespaceKey));
-  if (!candidate || candidate.confidence !== 'high') {
+  if (!candidate || !canRelinkCandidate(candidate, { manual })) {
     return { ok: false, reason: 'candidate-not-high-confidence', audit };
   }
   const meta = context.chatMetadata?.[META_KEY];

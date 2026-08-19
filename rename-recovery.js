@@ -9,6 +9,15 @@ export const NAMESPACE_STATUS = Object.freeze({
   NO_MATCH: 'no-match',
 });
 
+/**
+ * Automatic relink requires an exact fingerprint. Legacy candidates may only
+ * be relinked after an explicit user confirmation; mismatches are never safe.
+ */
+export function canRelinkCandidate(candidate, { manual = false } = {}) {
+  if (candidate?.confidence === 'high') return true;
+  return manual === true && candidate?.confidence === 'legacy';
+}
+
 const HASH_SEEDS = [0x811c9dc5, 0x01000193];
 
 function normalizeMessage(message) {

@@ -4,6 +4,7 @@ import {
   NAMESPACE_STATUS,
   auditNamespaces,
   archiveNamespace,
+  canRelinkCandidate,
   canonicalTranscriptFingerprint,
   countNamespaceData,
   relinkNamespace,
@@ -210,4 +211,11 @@ test('rollback copy is reported as archived, not as a new orphan candidate', () 
   assert.equal(result.status, NAMESPACE_STATUS.LINKED);
   assert.equal(result.candidates.length, 0);
   assert.equal(result.namespaces.find((entry) => entry.key === 'old-name').status, 'archived-rollback');
+});
+
+test('legacy candidate requires explicit manual confirmation before relink', () => {
+  assert.equal(canRelinkCandidate({ confidence: 'legacy' }), false);
+  assert.equal(canRelinkCandidate({ confidence: 'legacy' }, { manual: true }), true);
+  assert.equal(canRelinkCandidate({ confidence: 'high' }), true);
+  assert.equal(canRelinkCandidate({ confidence: 'none' }, { manual: true }), false);
 });

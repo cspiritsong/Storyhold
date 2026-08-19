@@ -782,6 +782,12 @@ export function bindSettingsUI(ctrl) {
             .text('Relink exact match')
             .data('namespace-key', candidate.key),
         );
+      } else if (candidate.confidence === 'legacy' && audit.status === NAMESPACE_STATUS.ORPHANED) {
+        $row.append(
+          $('<button class="menu_button menu_button_icon sm_rename_relink_legacy" type="button">')
+            .text('Relink legacy (manual)')
+            .data('namespace-key', candidate.key),
+        );
       } else if (
         audit.status === NAMESPACE_STATUS.ORPHANED ||
         audit.status === NAMESPACE_STATUS.UNSAFE
@@ -818,6 +824,25 @@ export function bindSettingsUI(ctrl) {
       return;
     }
     toastr.success('Chat memory relinked. The old namespace remains available for rollback.', 'Smart Memory');
+    renderRenameAudit(result.audit);
+    ctrl.onChatChanged();
+  });
+
+  $('#sm_rename_audit_results').on('click', '.sm_rename_relink_legacy', async function () {
+    if (isCatchUpRunning()) return;
+    const namespaceKey = $(this).data('namespace-key');
+    const confirmed = await callGenericPopup(
+      'RELINK LEGACY CHAT MEMORY\n\nSmart Memory cannot prove the transcript fingerprint because this namespace predates the audit metadata. You are confirming that this is the same chat after a rename. The derived memory will be copied to the stable chat identity and the old namespace will remain as rollback history. If this is not the same chat, stop and rebuild instead. Continue?',
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, { manual: true });
+    if (!result?.ok) {
+      toastr.error(`Manual relink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
+      return;
+    }
+    toastr.success('Legacy chat memory relinked. The old namespace remains available for rollback.', 'Smart Memory');
     renderRenameAudit(result.audit);
     ctrl.onChatChanged();
   });
