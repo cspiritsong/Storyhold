@@ -39,6 +39,7 @@ import {
   setExtensionPrompt,
   extension_prompt_types,
   extension_prompt_roles,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { generateMemoryExtract } from './generate.js';
 import { getContext, extension_settings } from '../../../extensions.js';
@@ -85,6 +86,7 @@ import { smLog } from './logging.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 /**
  * Filters session memory candidates against existing entries, removing
@@ -293,7 +295,7 @@ async function deduplicateSession(existing, incoming, max) {
  */
 export async function extractSessionMemories(recentMessages, abortCheck = null) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.session_enabled) return 0;
+  if (isCurrentLineageQuarantined() || !settings.session_enabled) return 0;
 
   try {
     const chatHistory = recentMessages
@@ -345,6 +347,7 @@ export async function extractSessionMemories(recentMessages, abortCheck = null) 
     const chatLen = context.chat?.length ?? 1;
     const windowEnd = Math.max(0, chatLen - 2);
     const windowStart = Math.max(0, windowEnd - recentMessages.length + 1);
+    const sourceChatId = getCurrentChatId() ?? null;
     // mesId provenance for branch-aware pruning - see longterm.js for the
     // rationale (real mesIds only; never pseudo ranges).
     const hasRealMesIds = recentMessages.some((m) => typeof m.mesId === 'number');
@@ -353,6 +356,7 @@ export async function extractSessionMemories(recentMessages, abortCheck = null) 
       : null;
     for (const mem of incoming) {
       mem.source_messages = [[windowStart, windowEnd]];
+      mem.source_chat_id = sourceChatId;
       if (windowMesIds) {
         mem.source_mes_range = [Math.min(...windowMesIds), Math.max(...windowMesIds)];
       }
@@ -649,7 +653,7 @@ function formatSessionMemories(memories) {
  */
 export async function injectSessionMemories(updateTelemetry = false) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.session_enabled) {
+  if (isCurrentLineageQuarantined() || !settings.session_enabled) {
     setMacroContent(MACRO_NAMES.session, '');
     setExtensionPrompt(PROMPT_KEY_SESSION, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_SESSION);
@@ -658,7 +662,7 @@ export async function injectSessionMemories(updateTelemetry = false) {
 
   // Only inject active memories - retired ones (superseded_by set) are kept in
   // storage for history but must not appear in the prompt.
-  const memories = loadSessionMemories().filter((m) => !m.superseded_by);
+  const memories = filterCurrentChatRecords(loadSessionMemories()).filter((m) => !m.superseded_by);
   if (memories.length === 0) {
     setMacroContent(MACRO_NAMES.session, '');
     setExtensionPrompt(PROMPT_KEY_SESSION, '', extension_prompt_types.NONE, 0);

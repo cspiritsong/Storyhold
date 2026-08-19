@@ -52,6 +52,7 @@ import { getEmbeddingBatch, cosineSimilarity } from './embeddings.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 // Re-export so index.js can import directly from scenes.js as before.
 export { detectSceneBreakHeuristic };
@@ -222,7 +223,7 @@ export async function processSceneBreak(
   abortCheck = null,
 ) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.scene_enabled) return false;
+  if (isCurrentLineageQuarantined() || !settings.scene_enabled) return false;
 
   // Require a minimum number of messages in the buffer before accepting a
   // scene break. Without this, the heuristic can fire multiple times in quick
@@ -319,7 +320,7 @@ export async function linkMemoriesToLastScene(memoryIds) {
  */
 export function injectSceneHistory() {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.scene_enabled) {
+  if (isCurrentLineageQuarantined() || !settings.scene_enabled) {
     setMacroContent(MACRO_NAMES.scenes, '');
     setExtensionPrompt(PROMPT_KEY_SCENES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_SCENES);

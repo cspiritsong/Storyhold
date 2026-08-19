@@ -104,6 +104,7 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { getSceneParticipants } from './scenes.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 // Maximum new entries accepted per type per extraction pass.
 // Profile B (hosted) uses a higher cap because hosted models extract more
@@ -426,7 +427,7 @@ function mergeMemories(existing, incoming, maxTotal) {
  */
 export async function extractAndStoreMemories(characterName, recentMessages, statusFn = null) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.longterm_enabled || !characterName) return 0;
+  if (isCurrentLineageQuarantined() || !settings.longterm_enabled || !characterName) return 0;
 
   try {
     const chatHistory = recentMessages
@@ -936,7 +937,7 @@ function shouldInjectMemory(memory, respondingChar) {
 export async function injectMemories(characterName, updateTelemetry = false) {
   const settings = extension_settings[MODULE_NAME];
 
-  if (!settings.longterm_enabled || !characterName) {
+  if (isCurrentLineageQuarantined() || !settings.longterm_enabled || !characterName) {
     setMacroContent(MACRO_NAMES.longterm, '');
     setMacroContent(MACRO_NAMES.triggered, '');
     setExtensionPrompt(PROMPT_KEY_LONG, '', extension_prompt_types.NONE, 0);
@@ -947,7 +948,9 @@ export async function injectMemories(characterName, updateTelemetry = false) {
 
   // Only inject active memories - retired ones (superseded_by set) are kept in
   // storage for history but must not appear in the prompt.
-  const memories = loadCharacterMemories(characterName).filter((m) => !m.superseded_by);
+  const memories = filterCurrentChatRecords(loadCharacterMemories(characterName)).filter(
+    (m) => !m.superseded_by,
+  );
   if (memories.length === 0) {
     setMacroContent(MACRO_NAMES.longterm, '');
     setMacroContent(MACRO_NAMES.triggered, '');
@@ -1179,7 +1182,8 @@ export function injectRelationshipHistory(characterName, updateTelemetry = false
     if (updateTelemetry) updateRelationshipTelemetry(0);
   };
 
-  if (!settings.relationships_enabled || !characterName) return clear();
+  if (isCurrentLineageQuarantined() || !settings.relationships_enabled || !characterName)
+    return clear();
 
   const history = loadRelationshipHistory(characterName);
   const pairs = Object.entries(history);

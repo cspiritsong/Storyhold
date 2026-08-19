@@ -67,6 +67,7 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { getCharacterContainer } from './scope.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 // ---- Per-chat budget override -----------------------------------------------
 
@@ -257,7 +258,7 @@ export async function extractEpistemicKnowledge(
   characterName,
   _characterCardExcerpt = '',
 ) {
-  if (!isEpistemicEnabled() || !characterName) return 0;
+  if (isCurrentLineageQuarantined() || !isEpistemicEnabled() || !characterName) return 0;
 
   const settings = extension_settings[MODULE_NAME];
 
@@ -448,7 +449,7 @@ export function injectEpistemicKnowledge(
     if (updateTelemetry) updateEpistemicTelemetry(0);
   };
 
-  if (!isEpistemicEnabled() || !characterName || !respondingCharName) {
+  if (isCurrentLineageQuarantined() || !isEpistemicEnabled() || !characterName || !respondingCharName) {
     clear();
     return;
   }

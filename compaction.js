@@ -34,6 +34,7 @@ import {
   extension_prompt_types,
   extension_prompt_roles,
   getMaxContextSize,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { generateMemorySummarize } from './generate.js';
 import { getContext, extension_settings } from '../../../extensions.js';
@@ -46,6 +47,7 @@ import { loadSessionMemories } from './session.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 /**
  * Counts tokens across all non-system chat messages.
@@ -221,10 +223,24 @@ export async function runCompaction({ includeLastMessage = false } = {}) {
     // When the caller asked for the full chat (Memorize Chat), the last message
     // was included so the boundary is the full length.
     const lastChatMsg = context.chat[context.chat.length - 1];
-    context.chatMetadata[META_KEY].summaryEnd =
+    const newSummaryEnd =
       !includeLastMessage && lastChatMsg && !lastChatMsg.is_user && !lastChatMsg.is_system
         ? context.chat.length - 1
         : context.chat.length;
+    context.chatMetadata[META_KEY].summaryEnd = newSummaryEnd;
+    context.chatMetadata[META_KEY].summary_source_chat_id = getCurrentChatId() ?? null;
+    const summaryMesIds = context.chat
+      .slice(0, newSummaryEnd)
+      .filter((message) => typeof message?.mesId === 'number')
+      .map((message) => message.mesId);
+    if (summaryMesIds.length > 0) {
+      context.chatMetadata[META_KEY].summary_source_mes_range = [
+        Math.min(...summaryMesIds),
+        Math.max(...summaryMesIds),
+      ];
+    } else {
+      delete context.chatMetadata[META_KEY].summary_source_mes_range;
+    }
     await context.saveMetadata();
 
     return summary;
@@ -241,7 +257,15 @@ export async function runCompaction({ includeLastMessage = false } = {}) {
  */
 export function injectSummary(summary) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.compaction_enabled || !summary) {
+  const storedSourceChatId = getContext().chatMetadata?.[META_KEY]?.summary_source_chat_id;
+  const sourceMatches =
+    storedSourceChatId == null || String(storedSourceChatId) === String(getCurrentChatId());
+  if (
+    isCurrentLineageQuarantined() ||
+    !settings.compaction_enabled ||
+    !summary ||
+    !sourceMatches
+  ) {
     setMacroContent(MACRO_NAMES.shortterm, '');
     setExtensionPrompt(PROMPT_KEY_SHORT, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_SHORT);

@@ -43,6 +43,7 @@ import {
   setExtensionPrompt,
   extension_prompt_types,
   extension_prompt_roles,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 import { generateMemoryExtract } from './generate.js';
@@ -56,6 +57,7 @@ import { smLog } from './logging.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 // Default staleness threshold: 30 minutes. Profiles generated within this
 // window are considered current and will not be regenerated on chat load.
@@ -118,11 +120,15 @@ export function areProfilesStale(thresholdMs = DEFAULT_STALE_THRESHOLD_MS, chara
  */
 export async function generateProfiles(characterName, abortCheck = null) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.profiles_enabled || !characterName) return null;
+  if (isCurrentLineageQuarantined() || !settings.profiles_enabled || !characterName) return null;
 
   // Only pass active (non-retired) memories to the profile prompt.
-  const longtermMemories = loadCharacterMemories(characterName).filter((m) => !m.superseded_by);
-  const sessionMemories = loadSessionMemories().filter((m) => !m.superseded_by);
+  const longtermMemories = filterCurrentChatRecords(loadCharacterMemories(characterName)).filter(
+    (m) => !m.superseded_by,
+  );
+  const sessionMemories = filterCurrentChatRecords(loadSessionMemories()).filter(
+    (m) => !m.superseded_by,
+  );
 
   if (longtermMemories.length === 0 && sessionMemories.length === 0) {
     // Nothing stored yet - skip generation rather than producing empty profiles.
@@ -161,7 +167,11 @@ export async function generateProfiles(characterName, abortCheck = null) {
       return null;
     }
 
-    const profiles = { ...parsed, generated_at: Date.now() };
+    const profiles = {
+      ...parsed,
+      generated_at: Date.now(),
+      source_chat_id: getCurrentChatId() ?? null,
+    };
     if (abortCheck?.()) return null;
     await saveProfiles(profiles, characterName);
     return profiles;
@@ -213,7 +223,7 @@ function formatProfiles(profiles, budget) {
 export function injectProfiles(characterName) {
   const settings = extension_settings[MODULE_NAME];
 
-  if (!settings.profiles_enabled) {
+  if (isCurrentLineageQuarantined() || !settings.profiles_enabled) {
     setMacroContent(MACRO_NAMES.profiles, '');
     setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_PROFILES);
@@ -221,7 +231,7 @@ export function injectProfiles(characterName) {
   }
 
   const profiles = loadProfiles(characterName);
-  if (!profiles) {
+  if (!profiles || filterCurrentChatRecords([profiles]).length === 0) {
     setMacroContent(MACRO_NAMES.profiles, '');
     setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_PROFILES);

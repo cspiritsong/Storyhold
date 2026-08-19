@@ -42,6 +42,7 @@ import {
   setExtensionPrompt,
   extension_prompt_types,
   extension_prompt_roles,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, PROMPT_KEY_STATE_LEDGER, estimateTokens } from './constants.js';
@@ -53,6 +54,7 @@ import { smLog } from './logging.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { filterCurrentStateLedger, isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 // ---- Field schema -----------------------------------------------------------
 
@@ -214,7 +216,7 @@ export async function clearStateLedger() {
  * @returns {Promise<number>} Number of entity cards updated.
  */
 export async function runStateCardExtraction(characterName, messages, abortCheck = null) {
-  if (!isStateLedgerEnabled()) return 0;
+  if (isCurrentLineageQuarantined() || !isStateLedgerEnabled()) return 0;
 
   try {
     const chatExcerpt = messages
@@ -265,9 +267,19 @@ export async function runStateCardExtraction(characterName, messages, abortCheck
         maxWindowMesId = m.mesId;
       }
     }
+    const sourceChatId = getCurrentChatId() ?? null;
+    const sourceMesRange =
+      maxWindowMesId === null
+        ? null
+        : [
+            Math.min(...messages.filter((m) => typeof m?.mesId === 'number').map((m) => m.mesId)),
+            maxWindowMesId,
+          ];
     for (const [key, fields] of updates) {
       ledger[key] = { ...(ledger[key] ?? {}), ...fields };
+      ledger[key]._source_chat_id = sourceChatId;
       if (maxWindowMesId !== null) ledger[key]._updated_mes_id = maxWindowMesId;
+      if (sourceMesRange) ledger[key]._source_mes_range = sourceMesRange;
       count++;
     }
     await saveStateLedger(ledger);
@@ -332,12 +344,12 @@ export function injectStateLedger(updateTelemetry = false) {
     if (updateTelemetry) updateStateLedgerTelemetry(0);
   };
 
-  if (!isStateLedgerEnabled()) {
+  if (isCurrentLineageQuarantined() || !isStateLedgerEnabled()) {
     clear();
     return;
   }
 
-  const ledger = loadStateLedger();
+  const ledger = filterCurrentStateLedger(loadStateLedger());
   const block = buildStateLedgerBlock(ledger);
 
   if (!block) {

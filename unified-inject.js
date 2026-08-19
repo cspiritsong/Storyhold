@@ -52,6 +52,7 @@ import {
   estimateTokens,
 } from './constants.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
+import { isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 /**
  * Canonical tier ordering for the unified block.
@@ -140,6 +141,11 @@ export function invalidateUnifiedCache(key) {
  * cycle. Tiers with no content are skipped silently.
  */
 export function injectUnified() {
+  if (isCurrentLineageQuarantined()) {
+    clearUnifiedSlot();
+    return;
+  }
+
   // For each tier: use the fresh slot value if present, otherwise fall back
   // to the cache. Update the cache whenever fresh content is available.
   const populated = TIER_ORDER.map((tier) => {

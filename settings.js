@@ -2437,6 +2437,14 @@ export function bindSettingsUI(ctrl) {
   // from the configured context size at the time catch-up runs - see below.
 
   $('#sm_catch_up').on('click', async function () {
+    if (ctrl.lineageQuarantined) {
+      toastr.warning(
+        'This branch has unverified memory lineage. Rebuild or verify the branch before catch-up.',
+        'Smart Memory',
+        { timeOut: 5000 },
+      );
+      return;
+    }
     if (ctrl.extractionRunning || ctrl.compactionRunning) {
       toastr.warning('An extraction is already running.', 'Smart Memory', { timeOut: 3000 });
       return;

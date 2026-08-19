@@ -51,6 +51,7 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { getCharacterContainer } from './scope.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 // ---- Storage ------------------------------------------------------------
 
@@ -153,7 +154,7 @@ export async function generateCanon(characterName) {
 export function injectCanon(characterName) {
   const settings = extension_settings[MODULE_NAME];
 
-  if (!(settings.canon_enabled ?? true)) {
+  if (isCurrentLineageQuarantined() || !(settings.canon_enabled ?? true)) {
     setMacroContent(MACRO_NAMES.canon, '');
     setExtensionPrompt(PROMPT_KEY_CANON, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_CANON);

@@ -53,6 +53,7 @@ import {
   extension_prompt_types,
   extension_prompt_roles,
   saveSettingsDebounced,
+  getCurrentChatId,
 } from '../../../../script.js';
 import { generateMemoryExtract } from './generate.js';
 import { getContext, extension_settings } from '../../../extensions.js';
@@ -67,6 +68,7 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { getCharacterContainer, getGroupContainer } from './scope.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
+import { isCurrentLineageQuarantined, filterCurrentChatRecords } from './lineage-runtime.js';
 
 // ---- Deduplication ------------------------------------------------------
 
@@ -649,7 +651,7 @@ export async function generateArcSummary(arcContent) {
  */
 export async function extractArcs(messages, characterName = null, abortCheck = null) {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.arcs_enabled) return 0;
+  if (isCurrentLineageQuarantined() || !settings.arcs_enabled) return 0;
 
   try {
     const chatHistory = messages
@@ -684,7 +686,21 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
     // session memory it is almost certainly a rephrased scene detail, not a
     // genuine open thread. Falls back to Jaccard when embeddings are unavailable
     // so the filter still catches the most obvious overlaps without embeddings.
-    let add = rawAdd;
+    const context = getContext();
+    const sourceChatId = getCurrentChatId() ?? null;
+    const sourceWindowEnd = Math.max(0, (context.chat?.length ?? messages.length) - 2);
+    const sourceWindowStart = Math.max(0, sourceWindowEnd - messages.length + 1);
+    const sourceMesIds = messages
+      .filter((message) => typeof message?.mesId === 'number')
+      .map((message) => message.mesId);
+    const sourceMetadata = {
+      source_chat_id: sourceChatId,
+      source_messages: [[sourceWindowStart, sourceWindowEnd]],
+      ...(sourceMesIds.length > 0
+        ? { source_mes_range: [Math.min(...sourceMesIds), Math.max(...sourceMesIds)] }
+        : {}),
+    };
+    let add = rawAdd.map((arc) => ({ ...arc, ...sourceMetadata }));
     if (rawAdd.length > 0) {
       const sessionMemories = loadSessionMemories();
       if (sessionMemories.length > 0) {
@@ -852,14 +868,14 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
  */
 export function injectArcs() {
   const settings = extension_settings[MODULE_NAME];
-  if (!settings.arcs_enabled) {
+  if (isCurrentLineageQuarantined() || !settings.arcs_enabled) {
     setMacroContent(MACRO_NAMES.arcs, '');
     setExtensionPrompt(PROMPT_KEY_ARCS, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_ARCS);
     return;
   }
 
-  const arcs = loadArcs().filter((a) => !a.resolved);
+  const arcs = filterCurrentChatRecords(loadArcs()).filter((a) => !a.resolved);
   if (arcs.length === 0) {
     setMacroContent(MACRO_NAMES.arcs, '');
     setExtensionPrompt(PROMPT_KEY_ARCS, '', extension_prompt_types.NONE, 0);

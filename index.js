@@ -37,6 +37,7 @@
 import {
   eventSource,
   event_types,
+  getCurrentChatId,
   saveSettingsDebounced,
   setExtensionPrompt,
   extension_prompt_types,
@@ -140,6 +141,8 @@ import {
 } from './state-ledger.js';
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { chatHasRealMesIds, getMesIdWindow, watermarkFromChat } from './branch-aware.js';
+import { classifyChatLineage } from './lineage.js';
+import { isCurrentLineageQuarantined, setCurrentLineage } from './lineage-runtime.js';
 import {
   setStatusMessage,
   updateShortTermUI,
@@ -444,6 +447,11 @@ async function onCharacterMessageRendered(messageId, type) {
 
   const settings = getSettings();
   if (!settings.enabled) return;
+
+  // Fail closed while a chat is transitioning or when its cross-file lineage
+  // has not been verified. This prevents delayed render events from extracting
+  // into or injecting from a parent-derived branch.
+  if (isCurrentLineageQuarantined()) return;
 
   const context = getContext();
   if (!context.chat || context.chat.length === 0) return;
@@ -1075,6 +1083,10 @@ function onChatChanged() {
 async function onChatChangedImpl() {
   ++chatLoadId;
 
+  // Fail closed during the asynchronous chat transition. The new chat is
+  // classified below, before any stored tier is restored or extracted.
+  setCurrentLineage(null);
+
   // Reset per-load flags so warnings and trim indicators start fresh for the new chat.
   resetEpistemicWarnFlag();
   clearTierTrimStats();
@@ -1117,6 +1129,28 @@ async function onChatChangedImpl() {
 
   const settings = getSettings();
   if (!settings.enabled) return;
+
+  const lineage = classifyChatLineage({
+    chatId: getCurrentChatId(),
+    parentChatId: getContext().chatMetadata?.main_chat,
+    chat: getContext().chat,
+    lineage: getContext().chatMetadata?.[META_KEY]?.lineage ?? null,
+  });
+  setCurrentLineage(lineage);
+
+  if (lineage.quarantined) {
+    clearAllInjections();
+    setStatusMessage('Memory quarantined: branch lineage is not verified.');
+    if (typeof toastr !== 'undefined') {
+      toastr.warning(
+        'This branch has no verified memory lineage. Smart Memory will stay out of the prompt until the branch is rebuilt or verified.',
+        'Smart Memory',
+        { timeOut: 8000, positionClass: 'toast-bottom-right' },
+      );
+    }
+    markChatLoadComplete();
+    return;
+  }
 
   // Detect an in-file branch (regenerate/swipe that truncated the timeline)
   // and prune memories sourced from the discarded tail before any injections
@@ -1373,6 +1407,7 @@ function onGroupWrapperStarted({ type } = {}) {
 async function onGroupMemberDrafted(chId) {
   const settings = getSettings();
   if (!settings.enabled) return;
+  if (isCurrentLineageQuarantined()) return;
 
   const context = getContext();
   if (!context.chat) return;
@@ -1443,6 +1478,7 @@ async function onGroupWrapperFinished({ type } = {}) {
   if (generationInProgress) return;
   const settings = getSettings();
   if (!settings.enabled) return;
+  if (isCurrentLineageQuarantined()) return;
   const context = getContext();
   if (!context.chat || context.chat.length === 0) return;
 
@@ -1946,6 +1982,9 @@ jQuery(async function () {
   $('#extensions_settings').append(html);
 
   bindSettingsUI({
+    get lineageQuarantined() {
+      return isCurrentLineageQuarantined();
+    },
     get extractionRunning() {
       return extractionRunning;
     },
@@ -2128,6 +2167,7 @@ jQuery(async function () {
     SlashCommand.fromProps({
       name: 'sm-summarize',
       callback: async () => {
+        if (isCurrentLineageQuarantined()) return 'Memory is quarantined for this branch.';
         if (compactionRunning) return 'Compaction already running.';
         compactionRunning = true;
         setStatusMessage('Extracting short-term memories...');
@@ -2161,6 +2201,7 @@ jQuery(async function () {
     SlashCommand.fromProps({
       name: 'sm-extract',
       callback: async () => {
+        if (isCurrentLineageQuarantined()) return 'Memory is quarantined for this branch.';
         if (extractionRunning) return 'Extraction already running.';
         const characterName = getCurrentCharacterName();
         if (!characterName) return 'No character active.';
