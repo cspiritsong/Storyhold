@@ -132,6 +132,7 @@ import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { watermarkFromChat } from './branch-aware.js';
 import { LINEAGE_STATUS } from './lineage.js';
 import { NAMESPACE_STATUS } from './rename-recovery.js';
+import { applyManualBudget, applyManualBudgetReset } from './budget-policy.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
@@ -738,6 +739,20 @@ export function bindSettingsUI(ctrl) {
     $('#sm_rebuild_branch').toggle(show);
   }
 
+  /**
+   * Applies a manual per-tier budget edit. Manual edits are authoritative:
+   * auto-tune is disabled so the next extraction pass cannot reallocate the
+   * value the user just set.
+   */
+  function applyManualBudgetChange(settingKey, displayId, value, displayText = String(value)) {
+    const updated = applyManualBudget(extension_settings[MODULE_NAME], settingKey, value);
+    Object.assign(extension_settings[MODULE_NAME], updated);
+    $(`#${displayId}`).text(displayText);
+    $('#sm_auto_tune_budgets').prop('checked', false);
+    saveSettingsDebounced();
+    reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+  }
+
   function renameAuditStatusText(audit) {
     if (!audit) return 'Audit unavailable.';
     const labels = {
@@ -876,6 +891,17 @@ export function bindSettingsUI(ctrl) {
 
   $('#sm_manage_character_chat_memory').on('click', function () {
     renderCharacterMemoryManager(ctrl.listCharacterChatMemory?.());
+  });
+
+  function closeCharacterMemoryManager() {
+    $('#sm_character_memory_manager').hide();
+  }
+
+  $('#sm_close_character_memory_manager').on('click', closeCharacterMemoryManager);
+  $(document).on('keydown.smartMemoryManager', function (event) {
+    if (event.key === 'Escape' && $('#sm_character_memory_manager').is(':visible')) {
+      closeCharacterMemoryManager();
+    }
   });
 
   $('#sm_nuke_selected_chat_memory').on('click', async function () {
@@ -1161,9 +1187,10 @@ export function bindSettingsUI(ctrl) {
       'epistemic_inject_budget',
       'state_ledger_inject_budget',
     ];
-    for (const key of budgetKeys) {
-      cur[key] = defaultSettings[key];
-    }
+    const budgetDefaults = Object.fromEntries(budgetKeys.map((key) => [key, defaultSettings[key]]));
+    const reset = applyManualBudgetReset(cur, budgetKeys, budgetDefaults);
+    Object.assign(cur, reset);
+    $('#sm_auto_tune_budgets').prop('checked', false);
     // Sync all slider DOM elements to the restored values.
     for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
       $(`#${slider}`).val(cur[setting]);
@@ -1707,11 +1734,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_canon_inject_budget')
     .val(s.canon_inject_budget)
     .on('input', function () {
-      const val = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].canon_inject_budget = val;
-      $('#sm_canon_inject_budget_value').text(val);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('canon_inject_budget', 'sm_canon_inject_budget_value', parseInt($(this).val(), 10));
     });
   $('#sm_canon_inject_budget_value').text(s.canon_inject_budget);
 
@@ -1947,11 +1970,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_longterm_inject_budget')
     .val(s.longterm_inject_budget ?? 500)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].longterm_inject_budget = v;
-      $('#sm_longterm_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('longterm_inject_budget', 'sm_longterm_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   // ---- Relationship history controls ------------------------------------
@@ -1968,11 +1987,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_relationships_inject_budget')
     .val(s.relationships_inject_budget ?? 250)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].relationships_inject_budget = v;
-      $('#sm_relationships_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('relationships_inject_budget', 'sm_relationships_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   $(`input[name="sm_relationships_position"][value="${s.relationships_position ?? 1}"]`).prop(
@@ -2114,11 +2129,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_epistemic_inject_budget')
     .val(s.epistemic_inject_budget ?? 200)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].epistemic_inject_budget = v;
-      $('#sm_epistemic_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('epistemic_inject_budget', 'sm_epistemic_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   $(`input[name="sm_epistemic_position"][value="${s.epistemic_position ?? 1}"]`).prop(
@@ -2171,11 +2182,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_state_ledger_inject_budget')
     .val(s.state_ledger_inject_budget ?? 200)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].state_ledger_inject_budget = v;
-      $('#sm_state_ledger_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('state_ledger_inject_budget', 'sm_state_ledger_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   $(`input[name="sm_state_ledger_position"][value="${s.state_ledger_position ?? 1}"]`).prop(
@@ -2432,11 +2439,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_session_inject_budget')
     .val(s.session_inject_budget ?? 400)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].session_inject_budget = v;
-      $('#sm_session_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('session_inject_budget', 'sm_session_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   $('#sm_extract_session_now').on('click', async function () {
@@ -2527,11 +2530,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_scene_inject_budget')
     .val(s.scene_inject_budget ?? 300)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].scene_inject_budget = v;
-      $('#sm_scene_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('scene_inject_budget', 'sm_scene_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   $('#sm_extract_scenes_now').on('click', async function () {
@@ -2622,11 +2621,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_arcs_inject_budget')
     .val(s.arcs_inject_budget ?? 200)
     .on('input', function () {
-      const v = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].arcs_inject_budget = v;
-      $('#sm_arcs_inject_budget_value').text(v);
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange('arcs_inject_budget', 'sm_arcs_inject_budget_value', parseInt($(this).val(), 10));
     });
 
   $('#sm_extract_arcs_now').on('click', async function () {
@@ -3578,10 +3573,12 @@ export function bindSettingsUI(ctrl) {
     .val(s.profiles_inject_budget ?? 400)
     .on('input', function () {
       const val = parseInt($(this).val(), 10);
-      extension_settings[MODULE_NAME].profiles_inject_budget = val;
-      $profilesBudgetVal.text(val + ' tokens');
-      saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+      applyManualBudgetChange(
+        'profiles_inject_budget',
+        'sm_profiles_inject_budget_value',
+        val,
+        `${val} tokens`,
+      );
     });
   $profilesBudgetVal.text((s.profiles_inject_budget ?? 400) + ' tokens');
 

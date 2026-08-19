@@ -913,6 +913,10 @@
   font-size: 0.85em;
 }
 
+#smart_memory_settings .sm-memory-manager-header {
+  margin-bottom: 6px;
+}
+
 #smart_memory_settings .sm-chat-memory-name {
   min-width: 64px;
   font-weight: 600;
