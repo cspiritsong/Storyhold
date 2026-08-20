@@ -78,6 +78,7 @@ import {
   consolidateMemories,
   injectMemories,
   loadCharacterMemories,
+  saveCharacterMemories,
   isFreshStart,
   injectRelationshipHistory,
 } from './longterm.js';
@@ -114,6 +115,7 @@ import {
   cosineSimilarity,
 } from './embeddings.js';
 import { jaccardSimilarity } from './similarity.js';
+import { planDuplicateRemoval } from './dedup-audit.js';
 import { generateCanon, injectCanon } from './canon.js';
 import {
   ensureCharacterMigrated,
@@ -2028,6 +2030,73 @@ function onGroupUpdated() {
 
 // ---- Init ---------------------------------------------------------------
 
+/**
+ * Builds a similarity scorer over the given memory items using a single
+ * embedding batch with Jaccard fallback for missing vectors.
+ */
+function buildMemoryScorer(vectorMap) {
+  return (a, b) => {
+    const va = vectorMap.get(String(a.content).toLowerCase().trim());
+    const vb = vectorMap.get(String(b.content).toLowerCase().trim());
+    if (va && vb) return { score: cosineSimilarity(va, vb), semantic: true };
+    return {
+      score: jaccardSimilarity(String(a.content), String(b.content)),
+      semantic: false,
+    };
+  };
+}
+
+/** Active long-term memories eligible for duplicate comparison. */
+function dedupEligibleMemories(characterName) {
+  return loadCharacterMemories(characterName).filter(
+    (m) => m && !m.superseded_by && m.content,
+  );
+}
+
+/** Scans stored long-term memories for near-duplicates without modifying anything. */
+async function scanDuplicateMemories(characterName) {
+  const memories = dedupEligibleMemories(characterName);
+  const base = { scanned: memories.length, clusters: 0, remove_count: 0, kept: memories.length };
+  if (memories.length < 2) return base;
+  const texts = memories.map((m) => String(m.content).toLowerCase().trim());
+  const vectorMap = await getEmbeddingBatch(texts);
+  const plan = planDuplicateRemoval(memories, { scoreFor: buildMemoryScorer(vectorMap) });
+  return {
+    scanned: memories.length,
+    clusters: plan.clusters.length,
+    remove_count: plan.remove_ids.length,
+    kept: plan.keep_ids.length,
+  };
+}
+
+/** Re-runs the duplicate scan and applies the removal plan. */
+async function applyDuplicateRemoval(characterName) {
+  const memories = dedupEligibleMemories(characterName);
+  const texts = memories.map((m) => String(m.content).toLowerCase().trim());
+  const vectorMap = await getEmbeddingBatch(texts);
+  const plan = planDuplicateRemoval(memories, { scoreFor: buildMemoryScorer(vectorMap) });
+  if (plan.remove_ids.length === 0) {
+    return {
+      scanned: memories.length,
+      clusters: plan.clusters.length,
+      remove_count: 0,
+      kept: memories.length,
+      removed: 0,
+    };
+  }
+  const removeSet = new Set(plan.remove_ids);
+  const kept = memories.filter((m) => !removeSet.has(m.id));
+  saveCharacterMemories(characterName, kept);
+  saveSettingsDebounced();
+  return {
+    scanned: memories.length,
+    clusters: plan.clusters.length,
+    remove_count: plan.remove_ids.length,
+    kept: kept.length,
+    removed: plan.remove_ids.length,
+  };
+}
+
 jQuery(async function () {
   loadSettings();
   registerSmartMemoryMacros();
@@ -2096,6 +2165,8 @@ jQuery(async function () {
     nukeAllCharacterChatMemory: nukeAllCurrentCharacterChatMemory,
     emptyCharacterRollbackArchive: emptyCurrentCharacterRollbackArchive,
     unlinkManualMemory: unlinkCurrentManualMemory,
+    scanDuplicateMemories,
+    applyDuplicateRemoval,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
   });

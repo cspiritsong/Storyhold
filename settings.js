@@ -3283,6 +3283,67 @@ export function bindSettingsUI(ctrl) {
     runCatchUpFlow({ passes: RESCAN_DEFAULT_PASSES, rescan: true }),
   );
 
+  $('#sm_scan_duplicates').on('click', async function () {
+    if (ctrl.lineageQuarantined) {
+      toastr.warning(
+        'This branch has unverified memory lineage. Verify or rebuild the branch before scanning.',
+        'Smart Memory',
+        { timeOut: 5000 },
+      );
+      return;
+    }
+    if (ctrl.extractionRunning || ctrl.compactionRunning) {
+      toastr.warning('An extraction is already running.', 'Smart Memory', { timeOut: 3000 });
+      return;
+    }
+    const characterName = ctrl.getSelectedCharacterName();
+    if (!characterName) {
+      toastr.warning('No character is active.', 'Smart Memory', { timeOut: 3000 });
+      return;
+    }
+    const $btn = $(this).prop('disabled', true);
+    setStatusMessage('Scanning for duplicate memories...');
+    try {
+      const scan = await ctrl.scanDuplicateMemories?.(characterName);
+      if (!scan || scan.remove_count === 0) {
+        setStatusMessage(scan?.clusters ? 'No removable duplicates found.' : 'No duplicates found.');
+        toastr.info(
+          `No removable duplicates found. Scanned ${scan?.scanned ?? 0} memories.`,
+          'Smart Memory',
+        );
+        return;
+      }
+      const confirmed = await callGenericPopup(
+        `FOUND ${scan.remove_count} DUPLICATE MEMORIES across ${scan.clusters} cluster(s).\n\nThe earliest memory in each cluster is kept. Later near-duplicates without state-change markers will be removed.\n\nRe-running Memorize Chat or Rescan Chat can rebuild removed entries if needed.\n\nContinue?`,
+        POPUP_TYPE.CONFIRM,
+      );
+      if (!confirmed) {
+        setStatusMessage('Duplicate removal cancelled.');
+        return;
+      }
+      const applied = await ctrl.applyDuplicateRemoval?.(characterName);
+      if (!applied || applied.removed === 0) {
+        setStatusMessage('Nothing removed.');
+        toastr.info('Duplicate scan finished; nothing was removed.', 'Smart Memory');
+        return;
+      }
+      setStatusMessage(`Removed ${applied.removed} duplicate memories.`);
+      toastr.success(
+        `Removed ${applied.removed} duplicate memories; ${applied.kept} kept.`,
+        'Smart Memory',
+        { timeOut: 5000, positionClass: 'toast-bottom-right' },
+      );
+      await injectMemories(characterName);
+      updateLongTermUI(characterName);
+      updateTokenDisplay();
+    } catch (err) {
+      showError('Duplicate scan', err);
+      setStatusMessage('Duplicate scan failed.');
+    } finally {
+      $btn.prop('disabled', false);
+    }
+  });
+
   $('#sm_cancel_catch_up').on('click', function () {
     ctrl.catchUpCancelled = true;
     $(this).prop('disabled', true);
