@@ -133,7 +133,15 @@ import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { watermarkFromChat } from './branch-aware.js';
 import { LINEAGE_STATUS } from './lineage.js';
 import { NAMESPACE_STATUS } from './rename-recovery.js';
-import { applyManualBudget, applyManualBudgetReset } from './budget-policy.js';
+import {
+  DEFAULT_TOTAL_INJECT_BUDGET,
+  MAX_TOTAL_INJECT_BUDGET,
+  allocateBudgetWithinCap,
+  applyManualBudget,
+  applyManualBudgetReset,
+  normalizeTotalInjectBudget,
+  sumBudgetFloors,
+} from './budget-policy.js';
 import { buildRescanSummary, normalizeRescanPasses, RESCAN_DEFAULT_PASSES } from './rescan-policy.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
@@ -214,6 +222,10 @@ export const defaultSettings = {
   session_consolidation_threshold_revelation: 3,
   session_consolidation_threshold_development: 3,
   session_consolidation_threshold_detail: 3,
+
+  // Global maximum for all enabled Smart-Memory injection tiers combined.
+  // Auto-tune may redistribute within this ceiling but never below tier floors.
+  total_inject_budget: 8000,
 
   // Long-term
   longterm_enabled: true,
@@ -380,43 +392,56 @@ const BUDGET_RATIOS = {
 };
 
 /**
- * Returns the sum of all per-tier inject budgets from current settings.
- * Used to initialise the simplified slider from existing advanced values.
- * @param {Object} s - Settings object.
- * @returns {number}
+ * Returns the sum of current budgets for enabled tiers. This is used only for
+ * migrating older settings that predate the explicit global cap.
  */
-function totalBudgetFromSettings(s) {
-  return (
-    (s.longterm_inject_budget ?? 500) +
-    (s.session_inject_budget ?? 400) +
-    (s.scene_inject_budget ?? 300) +
-    (s.arcs_inject_budget ?? 700) +
-    (s.canon_inject_budget ?? 800) +
-    (s.profiles_inject_budget ?? 400) +
-    (s.relationships_inject_budget ?? 250) +
-    (s.epistemic_inject_budget ?? 200) +
-    (s.state_ledger_inject_budget ?? 200)
+function currentBudgetSum(s) {
+  return TUNABLE_TIERS.reduce(
+    (sum, tier) =>
+      s[tier.enabledSetting] === false ? sum : sum + Number(s[tier.setting] ?? tier.defaultBudget),
+    0,
   );
 }
 
+/** Returns the minimum floor total for the currently enabled tiers. */
+function minimumBudgetTotal(s) {
+  return sumBudgetFloors(
+    TUNABLE_TIERS.map((tier) => ({
+      key: tier.setting,
+      minimum: tier.defaultBudget,
+      enabled: s[tier.enabledSetting] !== false,
+    })),
+  );
+}
+
+/** Returns the persisted global cap, normalized so every floor can fit. */
+function totalBudgetFromSettings(s) {
+  const configured = s.total_inject_budget ?? Math.max(DEFAULT_TOTAL_INJECT_BUDGET, currentBudgetSum(s));
+  return normalizeTotalInjectBudget(configured, minimumBudgetTotal(s));
+}
+
 /**
- * Distributes a total token budget across tiers using BUDGET_RATIOS and
- * writes the results directly into the settings object. Rounds to nearest 50
- * to match the step granularity of the individual sliders.
- * @param {number} total
- * @param {Object} s - Settings object (mutated in place).
+ * Distributes a total cap across enabled tiers using the simple-mode ratios,
+ * while preserving each tier's minimum floor.
  */
 function applyTotalBudget(total, s) {
-  const snap = (v) => Math.max(50, Math.round(v / 50) * 50);
-  s.longterm_inject_budget = snap(total * BUDGET_RATIOS.longterm);
-  s.session_inject_budget = snap(total * BUDGET_RATIOS.session);
-  s.scene_inject_budget = snap(total * BUDGET_RATIOS.scenes);
-  s.arcs_inject_budget = snap(total * BUDGET_RATIOS.arcs);
-  s.canon_inject_budget = snap(total * BUDGET_RATIOS.canon);
-  s.profiles_inject_budget = snap(total * BUDGET_RATIOS.profiles);
-  s.relationships_inject_budget = snap(total * BUDGET_RATIOS.relationships);
-  s.epistemic_inject_budget = snap(total * BUDGET_RATIOS.epistemic);
-  s.state_ledger_inject_budget = snap(total * BUDGET_RATIOS.state_ledger);
+  const activeRatioTotal = TUNABLE_TIERS.reduce(
+    (sum, tier) =>
+      s[tier.enabledSetting] === false ? sum : sum + BUDGET_RATIOS[tier.ratioKey],
+    0,
+  );
+  const ratioScale = activeRatioTotal > 0 ? 1 / activeRatioTotal : 1;
+  const entries = TUNABLE_TIERS.map((tier) => ({
+    key: tier.setting,
+    minimum: tier.defaultBudget,
+    maximum: 4000,
+    target: Number(total) * BUDGET_RATIOS[tier.ratioKey] * ratioScale,
+    enabled: s[tier.enabledSetting] !== false,
+  }));
+  const result = allocateBudgetWithinCap(entries, total);
+  s.total_inject_budget = result.cap;
+  for (const [key, value] of Object.entries(result.allocations)) s[key] = value;
+  return result;
 }
 
 /**
@@ -445,10 +470,8 @@ async function reinjectAfterBudgetChange(characterName) {
   updateTokenDisplay();
 }
 
-// Minimum budget any tier will be reduced to during auto-tune, and the headroom
-// multiplier applied above actual demand so the next message doesn't immediately
-// hit the limit again.
-const AUTO_TUNE_FLOOR = 50;
+// Headroom multiplier applied above actual demand so the next message doesn't
+// immediately hit the limit again.
 const AUTO_TUNE_HEADROOM = 1.15;
 
 // Maps each tunable tier to its settings key and DOM element IDs.
@@ -457,6 +480,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_LONG,
     setting: 'longterm_inject_budget',
+    ratioKey: 'longterm',
+    enabledSetting: 'longterm_enabled',
     defaultBudget: 500,
     slider: 'sm_longterm_inject_budget',
     display: 'sm_longterm_inject_budget_value',
@@ -465,6 +490,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_SESSION,
     setting: 'session_inject_budget',
+    ratioKey: 'session',
+    enabledSetting: 'session_enabled',
     defaultBudget: 400,
     slider: 'sm_session_inject_budget',
     display: 'sm_session_inject_budget_value',
@@ -473,6 +500,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_CANON,
     setting: 'canon_inject_budget',
+    ratioKey: 'canon',
+    enabledSetting: 'canon_enabled',
     defaultBudget: 800,
     slider: 'sm_canon_inject_budget',
     display: 'sm_canon_inject_budget_value',
@@ -481,6 +510,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_SCENES,
     setting: 'scene_inject_budget',
+    ratioKey: 'scenes',
+    enabledSetting: 'scene_enabled',
     defaultBudget: 300,
     slider: 'sm_scene_inject_budget',
     display: 'sm_scene_inject_budget_value',
@@ -489,6 +520,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_ARCS,
     setting: 'arcs_inject_budget',
+    ratioKey: 'arcs',
+    enabledSetting: 'arcs_enabled',
     defaultBudget: 700,
     slider: 'sm_arcs_inject_budget',
     display: 'sm_arcs_inject_budget_value',
@@ -497,6 +530,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_PROFILES,
     setting: 'profiles_inject_budget',
+    ratioKey: 'profiles',
+    enabledSetting: 'profiles_enabled',
     defaultBudget: 400,
     slider: 'sm_profiles_inject_budget',
     display: 'sm_profiles_inject_budget_value',
@@ -505,6 +540,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_RELATIONSHIPS,
     setting: 'relationships_inject_budget',
+    ratioKey: 'relationships',
+    enabledSetting: 'relationships_enabled',
     defaultBudget: 250,
     slider: 'sm_relationships_inject_budget',
     display: 'sm_relationships_inject_budget_value',
@@ -513,6 +550,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_EPISTEMIC,
     setting: 'epistemic_inject_budget',
+    ratioKey: 'epistemic',
+    enabledSetting: 'epistemic_enabled',
     defaultBudget: 200,
     slider: 'sm_epistemic_inject_budget',
     display: 'sm_epistemic_inject_budget_value',
@@ -521,6 +560,8 @@ const TUNABLE_TIERS = [
   {
     promptKey: PROMPT_KEY_STATE_LEDGER,
     setting: 'state_ledger_inject_budget',
+    ratioKey: 'state_ledger',
+    enabledSetting: 'state_ledger_enabled',
     defaultBudget: 200,
     slider: 'sm_state_ledger_inject_budget',
     display: 'sm_state_ledger_inject_budget_value',
@@ -528,14 +569,46 @@ const TUNABLE_TIERS = [
   },
 ];
 
+/** Updates the global cap slider and explains how much floor reserve remains. */
+function updateBudgetCapUI(s) {
+  const minimum = minimumBudgetTotal(s);
+  const cap = totalBudgetFromSettings(s);
+  $('#sm_total_budget')
+    .attr({ min: minimum, max: Math.max(MAX_TOTAL_INJECT_BUDGET, minimum) })
+    .val(cap);
+  $('#sm_total_budget_value').text(cap.toLocaleString());
+  $('#sm_budget_floor_hint').text(
+    `Minimum floor reserve: ${minimum.toLocaleString()} tokens · flexible headroom: ${Math.max(0, cap - minimum).toLocaleString()} tokens`,
+  );
+  return cap;
+}
+
+/** Builds policy entries from the current per-tier settings. */
+function currentBudgetEntries(s, targetFor = (tier) => s[tier.setting]) {
+  return TUNABLE_TIERS.map((tier) => ({
+    key: tier.setting,
+    minimum: tier.defaultBudget,
+    maximum: 4000,
+    target: targetFor(tier),
+    enabled: s[tier.enabledSetting] !== false,
+  }));
+}
+
+/** Fits current active per-tier allocations under the global cap. */
+function fitCurrentBudgetsToCap(s) {
+  const result = allocateBudgetWithinCap(
+    currentBudgetEntries(s),
+    totalBudgetFromSettings(s),
+  );
+  for (const [key, value] of Object.entries(result.allocations)) s[key] = value;
+  s.total_inject_budget = result.cap;
+  return result;
+}
+
 /**
  * Redistributes the per-tier token budget based on observed demand.
- * Tiers reporting unused headroom give it to tiers that are trimming.
- * The sum of all tier budgets never exceeds the current configured total.
- *
- * Only runs when `auto_tune_budgets` is enabled. Safe to call after every
- * extraction pass - does nothing if no trim stats have been recorded yet
- * or if no tier's demand has changed enough to warrant an update.
+ * Every enabled tier receives its floor first; remaining capacity is assigned
+ * to the tiers with the largest unmet demand, never exceeding the global cap.
  *
  * @param {string|null} characterName - Active character (or group selection).
  */
@@ -543,54 +616,28 @@ export function autoTuneBudgets(characterName) {
   const s = extension_settings[MODULE_NAME];
   if (!s.auto_tune_budgets) return;
 
-  const snap = (v, floor) => Math.max(floor ?? AUTO_TUNE_FLOOR, Math.round(v / 50) * 50);
-
-  // Compute target budget for each tier from its actual demand.
-  // Uses the high water mark so group chat budgets are sized for the greediest
-  // character seen this session, not just whichever character injected last.
-  // Tiers with no recorded stats (disabled or never injected) keep their
-  // current budget so they are not silently shrunk.
-  // The per-tier defaultBudget acts as a hard floor: auto-tune can grow a tier
-  // above its default when demand is high, but never shrinks it below, so
-  // characters with light content do not end up with sub-default budgets.
-  const targets = TUNABLE_TIERS.map((tier) => {
+  const targets = currentBudgetEntries(s, (tier) => {
     const stats = getTierHWStats(tier.promptKey);
-    if (!stats || stats.full === 0) {
-      return { tier, budget: s[tier.setting] };
-    }
-    return { tier, budget: snap(stats.full * AUTO_TUNE_HEADROOM, tier.defaultBudget) };
+    const current = Number(s[tier.setting] ?? tier.defaultBudget);
+    return !stats || stats.full === 0 ? current : stats.full * AUTO_TUNE_HEADROOM;
   });
 
-  // In simple mode the user has set an explicit total budget cap; honour it by
-  // scaling targets down if they exceed it. In advanced mode each tier slider
-  // is independent and there is no user-set total, so auto-tune sets each tier
-  // to exactly what it needs without a cap constraint.
-  if ((s.settings_mode ?? 'simple') === 'simple') {
-    const totalCap = totalBudgetFromSettings(s);
-    const totalTarget = targets.reduce((sum, t) => sum + t.budget, 0);
-    if (totalTarget > totalCap) {
-      const scale = totalCap / totalTarget;
-      for (const t of targets) {
-        t.budget = Math.max(snap(t.tier.defaultBudget ?? AUTO_TUNE_FLOOR), snap(t.budget * scale));
-      }
-    }
-  }
+  const allocation = allocateBudgetWithinCap(targets, totalBudgetFromSettings(s));
+  const previousCap = s.total_inject_budget;
+  s.total_inject_budget = allocation.cap;
+  updateBudgetCapUI(s);
+  let changed = previousCap !== allocation.cap;
 
-  // Apply any changes and update DOM sliders.
-  let changed = false;
-  for (const { tier, budget } of targets) {
-    if (s[tier.setting] !== budget) {
-      s[tier.setting] = budget;
-      $(`#${tier.slider}`).val(budget);
-      $(`#${tier.display}`).text(tier.fmt(budget));
-      // Invalidate stale trim stats for this tier. reinjectAfterBudgetChange fires
-      // async inject calls (injectMemories, injectSessionMemories) without awaiting
-      // them, so updateTokenDisplay may run before those Promises resolve and see
-      // the load-pass trim data rather than the fresh post-tune data. Clearing here
-      // ensures the token bar shows no trim until the next real injection reports.
-      clearTierStats(tier.promptKey);
-      changed = true;
-    }
+  for (const tier of TUNABLE_TIERS) {
+    if (s[tier.enabledSetting] === false) continue;
+    const budget = allocation.allocations[tier.setting];
+    if (budget === undefined || s[tier.setting] === budget) continue;
+    s[tier.setting] = budget;
+    $(`#${tier.slider}`).val(budget);
+    $(`#${tier.display}`).text(tier.fmt(budget));
+    // Invalidate stale trim stats before the reinjection pass recalculates them.
+    clearTierStats(tier.promptKey);
+    changed = true;
   }
 
   if (changed) {
@@ -601,18 +648,14 @@ export function autoTuneBudgets(characterName) {
 
 /**
  * Shows or hides advanced-only controls based on the current settings mode.
- * Also syncs the simplified budget slider value from the current per-tier totals.
+ * The global total injection cap remains visible in both modes.
  * @param {'simple'|'advanced'} mode
  */
 function applySettingsMode(mode) {
   const isSimple = mode === 'simple';
   $('.sm-advanced-only').toggle(!isSimple);
   $('.sm-simple-only').toggle(isSimple);
-  if (isSimple) {
-    const total = totalBudgetFromSettings(extension_settings[MODULE_NAME]);
-    $('#sm_total_budget').val(total);
-    $('#sm_total_budget_value').text(total);
-  }
+  updateBudgetCapUI(extension_settings[MODULE_NAME]);
 }
 
 // ---- Settings loading and migration -------------------------------------
@@ -625,11 +668,26 @@ export function loadSettings() {
   if (!extension_settings[MODULE_NAME]) {
     extension_settings[MODULE_NAME] = {};
   }
+  const current = extension_settings[MODULE_NAME];
+  const hadTotalInjectBudget = Object.prototype.hasOwnProperty.call(current, 'total_inject_budget');
+  const legacyTotalInjectBudget = currentBudgetSum(current);
   for (const [key, value] of Object.entries(defaultSettings)) {
-    if (extension_settings[MODULE_NAME][key] === undefined) {
-      extension_settings[MODULE_NAME][key] = value;
+    if (current[key] === undefined) {
+      current[key] = value;
     }
   }
+  // Migration: preserve the old effective allocation as the initial cap, but
+  // never allow a cap that cannot satisfy the enabled tier floors.
+  const migratedTotal = hadTotalInjectBudget
+    ? current.total_inject_budget
+    : Math.max(DEFAULT_TOTAL_INJECT_BUDGET, legacyTotalInjectBudget);
+  const normalizedTotal = normalizeTotalInjectBudget(
+    migratedTotal,
+    minimumBudgetTotal(current),
+  );
+  const totalChanged = current.total_inject_budget !== normalizedTotal;
+  current.total_inject_budget = normalizedTotal;
+  if (totalChanged) saveSettingsDebounced();
 
   // Migration: replace old bracket-wrapped template defaults with plain-text equivalents.
   // Only affects users who never customized these fields (exact match on the old default).
@@ -747,11 +805,27 @@ export function bindSettingsUI(ctrl) {
    * value the user just set.
    */
   function applyManualBudgetChange(settingKey, displayId, value, displayText = String(value)) {
-    const updated = applyManualBudget(extension_settings[MODULE_NAME], settingKey, value);
-    Object.assign(extension_settings[MODULE_NAME], updated);
-    $(`#${displayId}`).text(displayText);
+    const settings = extension_settings[MODULE_NAME];
+    const updated = applyManualBudget(settings, settingKey, value);
+    Object.assign(settings, updated);
+    const allocation = fitCurrentBudgetsToCap(settings);
+    for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
+      $(`#${slider}`).val(settings[setting]);
+      $(`#${display}`).text(fmt(settings[setting]));
+    }
+    const tier = TUNABLE_TIERS.find((entry) => entry.setting === settingKey);
+    $(`#${displayId}`).text(tier?.fmt(settings[settingKey]) ?? displayText);
     $('#sm_auto_tune_budgets').prop('checked', false);
+    updateBudgetCapUI(settings);
     saveSettingsDebounced();
+    if (allocation.allocations[settingKey] !== value) {
+      const corrected = allocation.allocations[settingKey];
+      const message =
+        value > corrected
+          ? `That value would exceed the ${allocation.cap.toLocaleString()}-token total cap. Other tiers were reduced to preserve their minimum floors.`
+          : `That value was below this tier's minimum floor, so it was restored to ${corrected.toLocaleString()} tokens.`;
+      toastr.warning(message, 'Smart Memory', { timeOut: 6000, positionClass: 'toast-bottom-right' });
+    }
     reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
   }
 
@@ -1212,16 +1286,43 @@ export function bindSettingsUI(ctrl) {
       applyInjectionOverrideUI();
     });
 
-  // ---- Simplified total budget slider ---------------------------------
-  $('#sm_total_budget')
-    .val(totalBudgetFromSettings(s))
-    .on('input', function () {
-      const total = parseInt($(this).val(), 10);
-      $('#sm_total_budget_value').text(total);
-      applyTotalBudget(total, extension_settings[MODULE_NAME]);
+  // ---- Global total injection budget cap -------------------------------
+  updateBudgetCapUI(s);
+  $('#sm_total_budget').on('input', function () {
+    const settings = extension_settings[MODULE_NAME];
+    const requested = parseInt($(this).val(), 10);
+    const mode = settings.settings_mode ?? 'simple';
+    if (mode === 'simple') {
+      applyTotalBudget(requested, settings);
+    } else {
+      settings.total_inject_budget = normalizeTotalInjectBudget(
+        requested,
+        minimumBudgetTotal(settings),
+      );
+      fitCurrentBudgetsToCap(settings);
+    }
+    updateBudgetCapUI(settings);
+    for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
+      $(`#${slider}`).val(settings[setting]);
+      $(`#${display}`).text(fmt(settings[setting]));
+    }
+    saveSettingsDebounced();
+    reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+  });
+
+  $('#smart_memory_settings').on(
+    'change.budgetCap',
+    '#sm_longterm_enabled, #sm_session_enabled, #sm_scene_enabled, #sm_arcs_enabled, #sm_canon_enabled, #sm_profiles_enabled, #sm_relationships_enabled, #sm_epistemic_enabled, #sm_state_ledger_enabled',
+    function () {
+      const settings = extension_settings[MODULE_NAME];
+      settings.total_inject_budget = normalizeTotalInjectBudget(
+        settings.total_inject_budget,
+        minimumBudgetTotal(settings),
+      );
+      updateBudgetCapUI(settings);
       saveSettingsDebounced();
-      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
-    });
+    },
+  );
 
   $('#sm_reset_budgets').on('click', function () {
     const cur = extension_settings[MODULE_NAME];
@@ -1239,6 +1340,10 @@ export function bindSettingsUI(ctrl) {
     const budgetDefaults = Object.fromEntries(budgetKeys.map((key) => [key, defaultSettings[key]]));
     const reset = applyManualBudgetReset(cur, budgetKeys, budgetDefaults);
     Object.assign(cur, reset);
+    cur.total_inject_budget = normalizeTotalInjectBudget(
+      DEFAULT_TOTAL_INJECT_BUDGET,
+      minimumBudgetTotal(cur),
+    );
     $('#sm_auto_tune_budgets').prop('checked', false);
     // Sync all slider DOM elements to the restored values.
     for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
