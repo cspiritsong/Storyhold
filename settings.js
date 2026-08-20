@@ -94,6 +94,7 @@ import {
   extractSessionMemories,
   consolidateSessionMemories,
   injectSessionMemories,
+  loadSessionMemories,
   clearSessionMemories,
   purgeSessionMemoriesSince,
 } from './session.js';
@@ -107,7 +108,7 @@ import {
   detectSceneBreakAI,
   detectSceneBreakHeuristic,
 } from './scenes.js';
-import { extractArcs, injectArcs, clearArcs, clearArcSummaries, loadArcSummaries } from './arcs.js';
+import { extractArcs, injectArcs, clearArcs, clearArcSummaries, loadArcSummaries, loadArcs } from './arcs.js';
 import { runModelTest } from './model-test.js';
 
 /** Set to true while a model test is running to allow cancellation. */
@@ -133,6 +134,7 @@ import { watermarkFromChat } from './branch-aware.js';
 import { LINEAGE_STATUS } from './lineage.js';
 import { NAMESPACE_STATUS } from './rename-recovery.js';
 import { applyManualBudget, applyManualBudgetReset } from './budget-policy.js';
+import { buildRescanSummary, normalizeRescanPasses, RESCAN_DEFAULT_PASSES } from './rescan-policy.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
@@ -2812,7 +2814,7 @@ export function bindSettingsUI(ctrl) {
     }, 300);
   });
 
-  $('#sm_catch_up').on('click', async function () {
+  async function runCatchUpFlow({ passes = 1, rescan = false } = {}) {
     if (ctrl.lineageQuarantined) {
       toastr.warning(
         'This branch has unverified memory lineage. Rebuild or verify the branch before catch-up.',
@@ -2854,13 +2856,10 @@ export function bindSettingsUI(ctrl) {
       (name) => loadCharacterMemories(name).length > 0,
     );
     if (existingMemories) {
-      if (
-        !(await callGenericPopup(
-          'Memories already exist for one or more characters. Running Memorize Chat again may add near-duplicate entries on top of existing ones.\n\nContinue?',
-          POPUP_TYPE.CONFIRM,
-        ))
-      )
-        return;
+      const message = rescan
+        ? 'Rescan Chat rereads the full transcript and adds only memories that are not already recorded. Existing memories are kept and used to skip duplicates.\n\nContinue?'
+        : 'Memories already exist for one or more characters. Running Memorize Chat again may add near-duplicate entries on top of existing ones.\n\nContinue?';
+      if (!(await callGenericPopup(message, POPUP_TYPE.CONFIRM))) return;
     }
 
     // The catch-up loop holds extractionRunning=true for its entire duration.
@@ -2872,6 +2871,7 @@ export function bindSettingsUI(ctrl) {
     ctrl.compactionRunning = true;
     ctrl.catchUpCancelled = false;
     $('#sm_catch_up').hide();
+    $('#sm_rescan_chat').hide();
     $('#sm_cancel_catch_up').show().prop('disabled', false);
 
     try {
@@ -2894,6 +2894,17 @@ export function bindSettingsUI(ctrl) {
       // the chunk count or confuse the model.
       const allMessages = stableChat.filter((m) => m.mes && !m.is_system);
       const total = allMessages.length;
+      const totalPasses = normalizeRescanPasses(passes);
+      const rescanBefore = rescan
+        ? {
+            longterm: catchUpCharacterNames.reduce(
+              (sum, name) => sum + loadCharacterMemories(name).length,
+              0,
+            ),
+            session: loadSessionMemories().length,
+            arcs: loadArcs().length,
+          }
+        : null;
 
       // Process the chat in token-limited chunks sequentially. Each extraction
       // function loads its existing results and passes them as context to the
@@ -2901,6 +2912,8 @@ export function bindSettingsUI(ctrl) {
       // Budget = 35% of the configured context size, leaving the remainder for
       // prompt overhead (instructions, existing memories) and the model response.
       const catchUpTokenBudget = Math.max(500, Math.floor(getMaxContextSize(0) * 0.35));
+      for (let pass = 1; pass <= totalPasses; pass++) {
+      const passInfo = totalPasses > 1 ? `Pass ${pass}/${totalPasses}` : 'Catching up';
       let i = 0;
       while (i < total) {
         if (ctrl.catchUpCancelled) break;
@@ -2925,7 +2938,7 @@ export function bindSettingsUI(ctrl) {
         const processed = Math.min(i + chunk.length, total);
         const pct = Math.round((processed / total) * 100);
         setStatusMessage(
-          `Catching up... (${i}/${total} messages, ${Math.round((i / total) * 100)}%)`,
+          `${passInfo}... (${i}/${total} messages, ${Math.round((i / total) * 100)}%)`,
         );
 
         if (settings.longterm_enabled && !isFreshStart()) {
@@ -3023,10 +3036,13 @@ export function bindSettingsUI(ctrl) {
 
         // Update progress and token display after each chunk so the user can
         // see memories accumulating in real time rather than only at the end.
-        setStatusMessage(`Catching up... (${processed}/${total} messages, ${pct}%)`);
+        setStatusMessage(`${passInfo}... (${processed}/${total} messages, ${pct}%)`);
         updateTokenDisplay();
 
         i += chunk.length;
+      }
+
+      if (ctrl.catchUpCancelled) break;
       }
 
       if (!ctrl.catchUpCancelled) {
@@ -3225,6 +3241,22 @@ export function bindSettingsUI(ctrl) {
           timeOut: 5000,
           positionClass: 'toast-bottom-right',
         });
+      } else if (rescan && rescanBefore) {
+        const rescanAfter = {
+          longterm: catchUpCharacterNames.reduce(
+            (sum, name) => sum + loadCharacterMemories(name).length,
+            0,
+          ),
+          session: loadSessionMemories().length,
+          arcs: loadArcs().length,
+        };
+        const summary = buildRescanSummary(rescanBefore, rescanAfter);
+        setStatusMessage(`Rescan complete. +${summary.total_added} new memory items.`);
+        toastr.success(
+          `Rescan finished: +${summary.longterm_added} long-term, +${summary.session_added} session, +${summary.arcs_added} arcs. Existing memories kept; duplicates skipped.`,
+          'Smart Memory',
+          { timeOut: 6000, positionClass: 'toast-bottom-right' },
+        );
       } else {
         setStatusMessage('Catch-up complete.');
         toastr.success('Full catch-up extraction finished.', 'Smart Memory', {
@@ -3239,11 +3271,17 @@ export function bindSettingsUI(ctrl) {
       unpinChatScope();
       $('#sm_cancel_catch_up').hide();
       $('#sm_catch_up').show();
+      $('#sm_rescan_chat').show();
       ctrl.extractionRunning = false;
       ctrl.compactionRunning = false;
       ctrl.catchUpCancelled = false;
     }
-  });
+  }
+
+  $('#sm_catch_up').on('click', () => runCatchUpFlow({ passes: 1, rescan: false }));
+  $('#sm_rescan_chat').on('click', () =>
+    runCatchUpFlow({ passes: RESCAN_DEFAULT_PASSES, rescan: true }),
+  );
 
   $('#sm_cancel_catch_up').on('click', function () {
     ctrl.catchUpCancelled = true;
