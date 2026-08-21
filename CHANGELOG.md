@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-08-21
+
+### Fixed
+
+- **Storyhold settings path after repository rename.** The runtime now requests `settings.html` from the renamed `third-party/Storyhold` install directory instead of the retired `third-party/Smart-Memory` path.
+
 ## [1.10.0] - 2026-08-21
 
 ### Changed

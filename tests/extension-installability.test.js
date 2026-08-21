@@ -39,6 +39,13 @@ test('chat memory clear uses the canonical product reset', async () => {
   assert.match(source, /\/\/ Clear all injection slots and cached unified content\.\s+clearUnifiedSlot\(\);/);
 });
 
+test('runtime requests settings from the Storyhold install directory', async () => {
+  const source = await readFile(resolve(root, 'index.js'), 'utf8');
+
+  assert.match(source, /renderExtensionTemplateAsync\(['"]third-party\/Storyhold['"],\s*['"]settings['"]/);
+  assert.doesNotMatch(source, /third-party\/Smart-Memory/);
+});
+
 test('README explains derivative origin, credits, and independent changes', async () => {
   const readme = await readFile(resolve(root, 'README.md'), 'utf8');
 

@@ -2277,7 +2277,7 @@ jQuery(async function () {
   loadSettings();
   registerSmartMemoryMacros();
 
-  const html = await renderExtensionTemplateAsync('third-party/Smart-Memory', 'settings', {
+  const html = await renderExtensionTemplateAsync('third-party/Storyhold', 'settings', {
     defaultSettings,
   });
   $('#extensions_settings').append(html);
