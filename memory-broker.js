@@ -51,18 +51,15 @@ export function buildSectionsFromTypedState({
   const sections = Object.fromEntries(BROKER_SECTION_ORDER.map((name) => [name, []]));
   const narrative = narrativeState ? assembleNarrative(narrativeState) : '';
   if (narrative) {
+    const resolvedChatUid = chatUid ?? narrativeState?.chat_uid ?? 'smart-memory-narrative';
+    const resolvedBranchUid = branchUid ?? narrativeState?.branch_uid ?? null;
+    const scope = { chat_uid: resolvedChatUid };
+    if (resolvedBranchUid != null) scope.branch_uid = resolvedBranchUid;
     sections.narrative.push({
       id: 'smart_memory_narrative_chain',
       kind: 'narrative_delta',
       content: narrative,
-      scope: {
-        chat_uid: chatUid ?? narrativeState?.chat_uid ?? 'smart-memory-narrative',
-        ...(branchUid != null
-          ? { branch_uid: branchUid }
-          : narrativeState?.branch_uid != null
-            ? { branch_uid: narrativeState.branch_uid }
-            : {}),
-      },
+      scope,
     });
   }
   return sections;
