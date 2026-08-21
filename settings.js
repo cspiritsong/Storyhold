@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -357,7 +357,7 @@ export const defaultSettings = {
   auto_tune_budgets: false,
 
   // Show a non-blocking activity indicator while background extraction is running.
-  // Gives users a visible signal that Smart Memory is working so they know not
+  // Gives users a visible signal that Storyhold is working so they know not
   // to send a new message until it finishes.
   show_activity_indicator: true,
 
@@ -756,14 +756,14 @@ export function loadSettings() {
 // ---- Settings UI binding ------------------------------------------------
 
 /**
- * Shows a toastr error notification for a failed Smart Memory operation.
+ * Shows a toastr error notification for a failed Storyhold operation.
  * Used by all manual button handlers so failures are visible to the user.
  * @param {string} operation - Short label for what failed (e.g. "Summary generation").
  * @param {Error} err - The caught error.
  */
 function showError(operation, err) {
   console.error(`[SmartMemory] ${operation} failed:`, err);
-  toastr.error(`${operation} failed. Check the browser console for details.`, 'Smart Memory', {
+  toastr.error(`${operation} failed. Check the browser console for details.`, 'Storyhold', {
     timeOut: 6000,
     positionClass: 'toast-bottom-right',
   });
@@ -793,7 +793,7 @@ export function bindSettingsUI(ctrl) {
     if (ctrl.extractionRunning || ctrl.compactionRunning) {
       toastr.warning(
         'Cannot do this while Memorize Chat is running. Cancel it first.',
-        'Smart Memory',
+        'Storyhold',
         {
           timeOut: 4000,
           positionClass: 'toast-bottom-right',
@@ -838,7 +838,7 @@ export function bindSettingsUI(ctrl) {
         value > corrected
           ? `That value would exceed the ${allocation.cap.toLocaleString()}-token total cap. Other tiers were reduced to preserve their minimum floors.`
           : `That value was below this tier's minimum floor, so it was restored to ${corrected.toLocaleString()} tokens.`;
-      toastr.warning(message, 'Smart Memory', { timeOut: 6000, positionClass: 'toast-bottom-right' });
+      toastr.warning(message, 'Storyhold', { timeOut: 6000, positionClass: 'toast-bottom-right' });
     }
     reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
   }
@@ -1007,20 +1007,20 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const keys = selectedCharacterMemoryKeys();
     if (keys.length === 0) {
-      toastr.info('Select one or more chat memory rows first.', 'Smart Memory');
+      toastr.info('Select one or more chat memory rows first.', 'Storyhold');
       return;
     }
     const confirmed = await callGenericPopup(
-      `NUKE SELECTED CHAT MEMORY\n\nThis permanently deletes derived Smart-Memory for ${keys.length} selected chat namespace(s). Raw chat JSONL, parent chats, settings outside Smart Memory, and native Vector Storage survive. This does not create trash. Continue?`,
+      `NUKE SELECTED CHAT MEMORY\n\nThis permanently deletes derived Smart-Memory for ${keys.length} selected chat namespace(s). Raw chat JSONL, parent chats, settings outside Storyhold, and native Vector Storage survive. This does not create trash. Continue?`,
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
     const result = ctrl.nukeCharacterChatMemory?.(keys);
     if (!result?.ok) {
-      toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
     }
-    toastr.success(`Nuked ${result.deleted.length} chat memory namespace(s).`, 'Smart Memory');
+    toastr.success(`Nuked ${result.deleted.length} chat memory namespace(s).`, 'Storyhold');
     renderCharacterMemoryManager(result.state);
     ctrl.onChatChanged();
   });
@@ -1031,16 +1031,16 @@ export function bindSettingsUI(ctrl) {
     const count = state?.active?.length ?? 0;
     if (count === 0) return;
     const confirmed = await callGenericPopup(
-      `NUKE ALL ACTIVE CHAT MEMORY\n\nThis permanently deletes all ${count} active per-chat Smart-Memory namespaces for this character. Raw chat JSONL, parent chats, settings outside Smart Memory, rollback archive, and native Vector Storage survive. Continue?`,
+      `NUKE ALL ACTIVE CHAT MEMORY\n\nThis permanently deletes all ${count} active per-chat Smart-Memory namespaces for this character. Raw chat JSONL, parent chats, settings outside Storyhold, rollback archive, and native Vector Storage survive. Continue?`,
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
     const result = ctrl.nukeAllCharacterChatMemory?.();
     if (!result?.ok) {
-      toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
     }
-    toastr.success(`Nuked ${result.deleted.length} active chat namespace(s).`, 'Smart Memory');
+    toastr.success(`Nuked ${result.deleted.length} active chat namespace(s).`, 'Storyhold');
     renderCharacterMemoryManager(result.state);
     ctrl.onChatChanged();
   });
@@ -1057,10 +1057,10 @@ export function bindSettingsUI(ctrl) {
     if (!confirmed) return;
     const result = ctrl.emptyCharacterRollbackArchive?.();
     if (!result?.ok) {
-      toastr.error(`Archive cleanup stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Archive cleanup stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
     }
-    toastr.success(`Removed ${result.deleted.length} rollback archive(s).`, 'Smart Memory');
+    toastr.success(`Removed ${result.deleted.length} rollback archive(s).`, 'Storyhold');
     renderCharacterMemoryManager(result.state);
   });
 
@@ -1073,10 +1073,10 @@ export function bindSettingsUI(ctrl) {
     if (!confirmed) return;
     const result = await ctrl.unlinkManualMemory?.();
     if (!result?.ok) {
-      toastr.error(`Unlink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Unlink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
     }
-    toastr.success('Force-linked memory unlatched; the imported namespace is in rollback archive.', 'Smart Memory');
+    toastr.success('Force-linked memory unlatched; the imported namespace is in rollback archive.', 'Storyhold');
     renderCharacterMemoryManager(result.state);
     ctrl.onChatChanged();
   });
@@ -1087,16 +1087,16 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
     const confirmed = await callGenericPopup(
-      'FORCE LINK THIS MEMORY\n\nYou are overriding Smart Memory\'s branch-safety check and attaching this entire orphaned namespace to the current chat. This imports all derived memories from the selected source; it does not prove a shared prefix. The old namespace remains as rollback history. If this is not intentional, cancel. Continue?',
+      'FORCE LINK THIS MEMORY\n\nYou are overriding Storyhold\'s branch-safety check and attaching this entire orphaned namespace to the current chat. This imports all derived memories from the selected source; it does not prove a shared prefix. The old namespace remains as rollback history. If this is not intentional, cancel. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
     const result = await ctrl.relinkRenameNamespace?.(namespaceKey, { manual: true });
     if (!result?.ok) {
-      toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
     }
-    toastr.success('Memory relinked to the current chat; old namespace kept for rollback.', 'Smart Memory');
+    toastr.success('Memory relinked to the current chat; old namespace kept for rollback.', 'Storyhold');
     renderCharacterMemoryManager(ctrl.listCharacterChatMemory?.());
     renderRenameAudit(result.audit);
     ctrl.onChatChanged();
@@ -1106,17 +1106,17 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
     const confirmed = await callGenericPopup(
-      'RELINK EXACT CHAT MEMORY\n\nThe transcript fingerprint matches this namespace. Smart Memory will copy the derived namespace to the stable chat identity and keep the old namespace as rollback history. Raw chat, parent chat, settings outside Smart Memory, and native vectors are not changed. Continue?',
+      'RELINK EXACT CHAT MEMORY\n\nThe transcript fingerprint matches this namespace. Storyhold will copy the derived namespace to the stable chat identity and keep the old namespace as rollback history. Raw chat, parent chat, settings outside Storyhold, and native vectors are not changed. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
     const result = await ctrl.relinkRenameNamespace?.(namespaceKey);
     if (!result?.ok) {
-      toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
       return;
     }
-    toastr.success('Chat memory relinked. The old namespace remains available for rollback.', 'Smart Memory');
+    toastr.success('Chat memory relinked. The old namespace remains available for rollback.', 'Storyhold');
     renderRenameAudit(result.audit);
     ctrl.onChatChanged();
   });
@@ -1125,17 +1125,17 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
     const confirmed = await callGenericPopup(
-      'RELINK LEGACY CHAT MEMORY\n\nSmart Memory cannot prove the transcript fingerprint because this namespace predates the audit metadata. You are confirming that this is the same chat after a rename. The derived memory will be copied to the stable chat identity and the old namespace will remain as rollback history. If this is not the same chat, stop and rebuild instead. Continue?',
+      'RELINK LEGACY CHAT MEMORY\n\nStoryhold cannot prove the transcript fingerprint because this namespace predates the audit metadata. You are confirming that this is the same chat after a rename. The derived memory will be copied to the stable chat identity and the old namespace will remain as rollback history. If this is not the same chat, stop and rebuild instead. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
     const result = await ctrl.relinkRenameNamespace?.(namespaceKey, { manual: true });
     if (!result?.ok) {
-      toastr.error(`Manual relink stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Manual relink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
       return;
     }
-    toastr.success('Legacy chat memory relinked. The old namespace remains available for rollback.', 'Smart Memory');
+    toastr.success('Legacy chat memory relinked. The old namespace remains available for rollback.', 'Storyhold');
     renderRenameAudit(result.audit);
     ctrl.onChatChanged();
   });
@@ -1150,11 +1150,11 @@ export function bindSettingsUI(ctrl) {
     if (!confirmed) return;
     const result = await ctrl.archiveRenameNamespace?.(namespaceKey, 'manual-orphan-archive');
     if (!result?.ok) {
-      toastr.error(`Archive stopped: ${result?.reason ?? 'unknown error'}`, 'Smart Memory');
+      toastr.error(`Archive stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
       return;
     }
-    toastr.success('Orphaned derived memory archived; the raw chat was preserved.', 'Smart Memory');
+    toastr.success('Orphaned derived memory archived; the raw chat was preserved.', 'Storyhold');
     renderRenameAudit(result.audit);
     ctrl.onChatChanged();
   });
@@ -1446,7 +1446,7 @@ export function bindSettingsUI(ctrl) {
     } catch (err) {
       toastr.error(
         `Could not reach Ollama at ${extension_settings[MODULE_NAME].ollama_url || 'http://localhost:11434'}. Is it running?`,
-        'Smart Memory',
+        'Storyhold',
       );
       console.error('[SmartMemory] Ollama model fetch failed:', err);
       // Fetch failed - reveal the manual text input and hide the refresh
@@ -1491,7 +1491,7 @@ export function bindSettingsUI(ctrl) {
       $manual.hide();
       $btn.show();
     } catch (err) {
-      toastr.error(`Could not reach Ollama at ${embeddingUrl}. Is it running?`, 'Smart Memory');
+      toastr.error(`Could not reach Ollama at ${embeddingUrl}. Is it running?`, 'Storyhold');
       console.error('[SmartMemory] Embedding model fetch failed:', err);
       $select.hide();
       $manual.val(prevModel ?? '').show();
@@ -1652,7 +1652,7 @@ export function bindSettingsUI(ctrl) {
       $btn
         .prop('disabled', false)
         .html(
-          '<i class="fa-solid fa-flask"></i> <span>Test Extraction Model <span class="sm-info" data-tooltip="Runs a fixed test scenario through all extraction tiers. Use this to check whether your configured model is suitable for Smart Memory before committing to a session.">ⓘ</span></span>',
+          '<i class="fa-solid fa-flask"></i> <span>Test Extraction Model <span class="sm-info" data-tooltip="Runs a fixed test scenario through all extraction tiers. Use this to check whether your configured model is suitable for Storyhold before committing to a session.">ⓘ</span></span>',
         );
 
     // If a test is already running, cancel it and give immediate feedback.
@@ -1703,7 +1703,7 @@ export function bindSettingsUI(ctrl) {
 
     if (outcome.failedTier) {
       $result.html(
-        `<div class="sm_model_test_fail"><i class="fa-solid fa-circle-xmark"></i> <strong>${outcome.failedTier}</strong> returned no output. Your model may not be suitable for Smart Memory, or may need a stronger prompt style. Consider trying a different model.</div>`,
+        `<div class="sm_model_test_fail"><i class="fa-solid fa-circle-xmark"></i> <strong>${outcome.failedTier}</strong> returned no output. Your model may not be suitable for Storyhold, or may need a stronger prompt style. Consider trying a different model.</div>`,
       );
       return;
     }
@@ -1940,13 +1940,13 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
-      toastr.warning('No character loaded.', 'Smart Memory');
+      toastr.warning('No character loaded.', 'Storyhold');
       return;
     }
     if (loadArcSummaries().length === 0) {
       toastr.warning(
         'Canon requires at least one resolved arc summary. Resolve a story arc first.',
-        'Smart Memory',
+        'Storyhold',
       );
       return;
     }
@@ -1962,7 +1962,7 @@ export function bindSettingsUI(ctrl) {
         setStatusMessage('Canon summary updated.');
       } else {
         setStatusMessage('');
-        toastr.warning('Canon generation returned no output.', 'Smart Memory');
+        toastr.warning('Canon generation returned no output.', 'Storyhold');
       }
     } catch (err) {
       showError('Canon generation', err);
@@ -2841,12 +2841,12 @@ export function bindSettingsUI(ctrl) {
     const chatId = getCurrentChatId();
     const lineage = ctrl.lineageState;
     if (!chatId || !lineage?.parentChatId) {
-      toastr.warning('No cross-file branch is active.', 'Smart Memory', { timeOut: 3000 });
+      toastr.warning('No cross-file branch is active.', 'Storyhold', { timeOut: 3000 });
       return;
     }
 
     const confirmed = await callGenericPopup(
-      'REBUILD THIS BRANCH\n\nThis clears only this branch\'s derived Smart Memory and rebuilds it from the raw transcript.\n\nWILL SURVIVE: this branch\'s chat transcript, the parent chat, all other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
+      'REBUILD THIS BRANCH\n\nThis clears only this branch\'s derived Storyhold and rebuilds it from the raw transcript.\n\nWILL SURVIVE: this branch\'s chat transcript, the parent chat, all other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
@@ -2902,18 +2902,18 @@ export function bindSettingsUI(ctrl) {
     if (ctrl.lineageQuarantined) {
       toastr.warning(
         'This branch has unverified memory lineage. Rebuild or verify the branch before catch-up.',
-        'Smart Memory',
+        'Storyhold',
         { timeOut: 5000 },
       );
       return;
     }
     if (ctrl.extractionRunning || ctrl.compactionRunning) {
-      toastr.warning('An extraction is already running.', 'Smart Memory', { timeOut: 3000 });
+      toastr.warning('An extraction is already running.', 'Storyhold', { timeOut: 3000 });
       return;
     }
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
-      toastr.warning('No character is active.', 'Smart Memory', { timeOut: 3000 });
+      toastr.warning('No character is active.', 'Storyhold', { timeOut: 3000 });
       return;
     }
 
@@ -2930,21 +2930,21 @@ export function bindSettingsUI(ctrl) {
           setStatusMessage('Product catch-up cancelled.');
           toastr.warning(
             `Product catch-up cancelled after ${outcome.windows} window(s). Partial results were saved.`,
-            'Smart Memory',
+            'Storyhold',
             { timeOut: 5000, positionClass: 'toast-bottom-right' },
           );
         } else if (outcome.last?.status !== 'completed' && outcome.last !== null) {
           setStatusMessage('Product catch-up incomplete.');
           toastr.warning(
             'Product catch-up stopped after a projection failure. Check the browser console and retry.',
-            'Smart Memory',
+            'Storyhold',
             { timeOut: 6000, positionClass: 'toast-bottom-right' },
           );
         } else {
           setStatusMessage(rescan ? 'Product rescan complete.' : 'Product catch-up complete.');
           toastr.success(
             `${rescan ? 'Product rescan' : 'Product catch-up'} finished: ${outcome.windows} window(s) processed.`,
-            'Smart Memory',
+            'Storyhold',
             { timeOut: 5000, positionClass: 'toast-bottom-right' },
           );
         }
@@ -3366,7 +3366,7 @@ export function bindSettingsUI(ctrl) {
 
       if (ctrl.catchUpCancelled) {
         setStatusMessage('Catch-up cancelled.');
-        toastr.warning('Catch-up cancelled. Partial results have been saved.', 'Smart Memory', {
+        toastr.warning('Catch-up cancelled. Partial results have been saved.', 'Storyhold', {
           timeOut: 5000,
           positionClass: 'toast-bottom-right',
         });
@@ -3383,12 +3383,12 @@ export function bindSettingsUI(ctrl) {
         setStatusMessage(`Rescan complete. +${summary.total_added} new memory items.`);
         toastr.success(
           `Rescan finished: +${summary.longterm_added} long-term, +${summary.session_added} session, +${summary.arcs_added} arcs. Existing memories kept; duplicates skipped.`,
-          'Smart Memory',
+          'Storyhold',
           { timeOut: 6000, positionClass: 'toast-bottom-right' },
         );
       } else {
         setStatusMessage('Catch-up complete.');
-        toastr.success('Full catch-up extraction finished.', 'Smart Memory', {
+        toastr.success('Full catch-up extraction finished.', 'Storyhold', {
           timeOut: 4000,
           positionClass: 'toast-bottom-right',
         });
@@ -3416,18 +3416,18 @@ export function bindSettingsUI(ctrl) {
     if (ctrl.lineageQuarantined) {
       toastr.warning(
         'This branch has unverified memory lineage. Verify or rebuild the branch before scanning.',
-        'Smart Memory',
+        'Storyhold',
         { timeOut: 5000 },
       );
       return;
     }
     if (ctrl.extractionRunning || ctrl.compactionRunning) {
-      toastr.warning('An extraction is already running.', 'Smart Memory', { timeOut: 3000 });
+      toastr.warning('An extraction is already running.', 'Storyhold', { timeOut: 3000 });
       return;
     }
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
-      toastr.warning('No character is active.', 'Smart Memory', { timeOut: 3000 });
+      toastr.warning('No character is active.', 'Storyhold', { timeOut: 3000 });
       return;
     }
     const $btn = $(this).prop('disabled', true);
@@ -3438,7 +3438,7 @@ export function bindSettingsUI(ctrl) {
         setStatusMessage(scan?.clusters ? 'No removable duplicates found.' : 'No duplicates found.');
         toastr.info(
           `No removable duplicates found. Scanned ${scan?.scanned ?? 0} memories.`,
-          'Smart Memory',
+          'Storyhold',
         );
         return;
       }
@@ -3453,13 +3453,13 @@ export function bindSettingsUI(ctrl) {
       const applied = await ctrl.applyDuplicateRemoval?.(characterName);
       if (!applied || applied.removed === 0) {
         setStatusMessage('Nothing removed.');
-        toastr.info('Duplicate scan finished; nothing was removed.', 'Smart Memory');
+        toastr.info('Duplicate scan finished; nothing was removed.', 'Storyhold');
         return;
       }
       setStatusMessage(`Removed ${applied.removed} duplicate memories.`);
       toastr.success(
         `Removed ${applied.removed} duplicate memories; ${applied.kept} kept.`,
-        'Smart Memory',
+        'Storyhold',
         { timeOut: 5000, positionClass: 'toast-bottom-right' },
       );
       await injectMemories(characterName);
@@ -3484,7 +3484,7 @@ export function bindSettingsUI(ctrl) {
     if (isCatchUpRunning()) return;
     if (
       !(await callGenericPopup(
-        'Clear all Smart Memory for this chat?\n\nThis removes every derived memory belonging to this chat, including long-term chat memory, relationships, Perspectives & Secrets, state cards, canon, summaries, scenes, arcs, profiles, and the memory cursor.\n\nWILL SURVIVE: the raw chat transcript, the character card, and other chats. This cannot be undone.',
+        'Clear all Storyhold for this chat?\n\nThis removes every derived memory belonging to this chat, including long-term chat memory, relationships, Perspectives & Secrets, state cards, canon, summaries, scenes, arcs, profiles, and the memory cursor.\n\nWILL SURVIVE: the raw chat transcript, the character card, and other chats. This cannot be undone.',
         POPUP_TYPE.CONFIRM,
       ))
     )
@@ -3741,7 +3741,7 @@ export function bindSettingsUI(ctrl) {
   $('#sm_profiles_regenerate').on('click', async function () {
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
-      toastr.warning('No active character - profiles need a character.', 'Smart Memory', {
+      toastr.warning('No active character - profiles need a character.', 'Storyhold', {
         timeOut: 3000,
         positionClass: 'toast-bottom-right',
       });
@@ -3991,7 +3991,7 @@ export function bindSettingsUI(ctrl) {
             $repairBlock.append($cancel);
             $result.append($repairBlock);
             setStatusMessage('Correction queued.');
-            toastr.info('Correction queued for next response.', 'Smart Memory');
+            toastr.info('Correction queued for next response.', 'Storyhold');
           } catch (repairErr) {
             console.error('[SmartMemory] Repair generation failed:', repairErr);
             setStatusMessage('Repair failed - see console.');

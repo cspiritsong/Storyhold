@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -266,13 +266,13 @@ let lastKnownChatLength = 0;
  * Shows a sticky toastr notification if the activity indicator setting is enabled.
  * Returns the toast element so it can be cleared when the operation finishes.
  * Returns null if the setting is off.
- * @param {object} settings - The Smart Memory settings object.
+ * @param {object} settings - The Storyhold settings object.
  * @param {string} [message] - Status text to display.
  * @returns {JQuery|null}
  */
 function startActivityLoader(settings, message = 'Processing...') {
   if (!(settings.show_activity_indicator ?? true)) return null;
-  return toastr.info(message, 'Smart Memory', {
+  return toastr.info(message, 'Storyhold', {
     timeOut: 0,
     extendedTimeOut: 0,
     tapToDismiss: false,
@@ -570,7 +570,7 @@ function getSelectedCharacterName() {
 
 /**
  * Clears all active injection slots. Called when the master toggle is turned
- * off so that no Smart Memory content lingers in the current prompt.
+ * off so that no Storyhold content lingers in the current prompt.
  * This only removes the live prompt injections - stored memories and metadata
  * are not touched. Re-enabling the extension restores them from storage.
  */
@@ -1024,7 +1024,7 @@ async function onCharacterMessageRendered(messageId, type) {
                   );
                   toastr.info(
                     `Merged ${removed} redundant ${removed === 1 ? 'memory' : 'memories'}.`,
-                    'Smart Memory',
+                    'Storyhold',
                     { timeOut: 3000 },
                   );
                 }
@@ -1233,7 +1233,7 @@ async function onCharacterMessageRendered(messageId, type) {
                   $result.append($repairBlock);
                   toastr.info(
                     `${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'} found - correction queued for next response.`,
-                    'Smart Memory',
+                    'Storyhold',
                   );
                 } catch (repairErr) {
                   console.error('[SmartMemory] Auto-repair failed:', repairErr);
@@ -1361,8 +1361,8 @@ async function onChatChangedImpl() {
     setStatusMessage('Memory quarantined: branch lineage is not verified.');
     if (typeof toastr !== 'undefined') {
       toastr.warning(
-        'This branch has no verified memory lineage. Smart Memory will stay out of the prompt until the branch is rebuilt or verified.',
-        'Smart Memory',
+        'This branch has no verified memory lineage. Storyhold will stay out of the prompt until the branch is rebuilt or verified.',
+        'Storyhold',
         { timeOut: 8000, positionClass: 'toast-bottom-right' },
       );
     }
@@ -1975,7 +1975,7 @@ async function onGroupWrapperFinished({ type } = {}) {
                       );
                       toastr.info(
                         `Merged ${removed} redundant ${removed === 1 ? 'memory' : 'memories'}.`,
-                        'Smart Memory',
+                        'Storyhold',
                         { timeOut: 3000 },
                       );
                     }
@@ -2351,7 +2351,7 @@ jQuery(async function () {
   initTypePickers();
   updateTokenDisplay();
 
-  // makeLast ensures Smart Memory processes the message after all other
+  // makeLast ensures Storyhold processes the message after all other
   // extensions have had their turn with it.
   eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, onCharacterMessageRendered);
   eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
@@ -2361,7 +2361,7 @@ jQuery(async function () {
   // message arrives. GENERATION_STARTED covers the race condition where the
   // message arrives while the recap model call is still running (overlay not yet
   // created), then the overlay appears after MESSAGE_SENT fired. Restricted to
-  // 'normal' type only - 'quiet' is Smart Memory's own background extraction,
+  // 'normal' type only - 'quiet' is Storyhold's own background extraction,
   // and other types (e.g. expression classification) are extension background
   // calls that should not dismiss the overlay.
   eventSource.on(event_types.MESSAGE_SENT, () => {
@@ -2419,8 +2419,8 @@ jQuery(async function () {
   $(document).on('click', '.mes_create_bookmark, .mes_create_branch', () => {
     if (!isFreshStart()) {
       toastr.warning(
-        'Smart Memory is still active. Enable read-only mode first to keep this session consequence-free.',
-        'Smart Memory',
+        'Storyhold is still active. Enable read-only mode first to keep this session consequence-free.',
+        'Storyhold',
         { timeOut: 7000, positionClass: 'toast-bottom-right' },
       );
     }
@@ -2458,7 +2458,7 @@ jQuery(async function () {
         if (!characterName) return 'No character active.';
         const contradictions = await checkContinuity(characterName);
         if (contradictions.length === 0) {
-          toastr.info('No contradictions found.', 'Smart Memory', {
+          toastr.info('No contradictions found.', 'Storyhold', {
             timeOut: 4000,
             positionClass: 'toast-bottom-right',
           });
@@ -2466,8 +2466,8 @@ jQuery(async function () {
         }
         const message = contradictions.map((c, i) => `${i + 1}. ${c}`).join('\n');
         toastr.warning(
-          `${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'} found. Check the Smart Memory panel for details.`,
-          'Smart Memory',
+          `${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'} found. Check the Storyhold panel for details.`,
+          'Storyhold',
           { timeOut: 8000, positionClass: 'toast-bottom-right' },
         );
         return message;
@@ -2492,13 +2492,13 @@ jQuery(async function () {
             injectSummary(summary);
             updateShortTermUI(summary);
             setStatusMessage('Summary updated.');
-            toastr.success('Short-term summary updated.', 'Smart Memory', {
+            toastr.success('Short-term summary updated.', 'Storyhold', {
               timeOut: 4000,
               positionClass: 'toast-bottom-right',
             });
             return summary;
           }
-          toastr.info('Nothing to summarize yet.', 'Smart Memory', {
+          toastr.info('Nothing to summarize yet.', 'Storyhold', {
             timeOut: 4000,
             positionClass: 'toast-bottom-right',
           });
@@ -2507,7 +2507,7 @@ jQuery(async function () {
           compactionRunning = false;
         }
       },
-      helpString: 'Forces Smart Memory to generate or update the short-term context summary now.',
+      helpString: 'Forces Storyhold to generate or update the short-term context summary now.',
       returns: ARGUMENT_TYPE.STRING,
     }),
   );
@@ -2542,7 +2542,7 @@ jQuery(async function () {
           updateArcsUI();
           saveSettingsDebounced();
           setStatusMessage('Extraction complete.');
-          toastr.success('Memory extraction complete.', 'Smart Memory', {
+          toastr.success('Memory extraction complete.', 'Storyhold', {
             timeOut: 4000,
             positionClass: 'toast-bottom-right',
           });
@@ -2552,7 +2552,7 @@ jQuery(async function () {
         }
       },
       helpString:
-        'Forces Smart Memory to extract long-term memories, session details, and story arcs from the current chat now.',
+        'Forces Storyhold to extract long-term memories, session details, and story arcs from the current chat now.',
       returns: ARGUMENT_TYPE.STRING,
     }),
   );
@@ -2563,7 +2563,7 @@ jQuery(async function () {
       callback: async () => {
         const recap = await generateRecap();
         if (!recap) {
-          toastr.error('Recap generation failed.', 'Smart Memory', {
+          toastr.error('Recap generation failed.', 'Storyhold', {
             timeOut: 4000,
             positionClass: 'toast-bottom-right',
           });
@@ -2585,7 +2585,7 @@ jQuery(async function () {
       callback: async (args, query) => {
         const q = String(query || '').trim();
         if (!q) {
-          toastr.warning('Usage: /sm-search <query>', 'Smart Memory', {
+          toastr.warning('Usage: /sm-search <query>', 'Storyhold', {
             timeOut: 3000,
             positionClass: 'toast-bottom-right',
           });
@@ -2603,7 +2603,7 @@ jQuery(async function () {
         ];
 
         if (allMems.length === 0) {
-          toastr.info('No memories to search.', 'Smart Memory', {
+          toastr.info('No memories to search.', 'Storyhold', {
             timeOut: 3000,
             positionClass: 'toast-bottom-right',
           });

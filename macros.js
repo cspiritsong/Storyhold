@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -18,7 +18,7 @@
  */
 
 /**
- * Macro injection: registers Smart Memory content as SillyTavern macros.
+ * Macro injection: registers Storyhold content as SillyTavern macros.
  *
  * Each memory tier exposes a {{smartmemory-*}} macro that injects its content
  * wherever the user places the token in a character card or instruct template.
@@ -118,7 +118,7 @@ export function isMacroActive(macroName) {
 }
 
 /**
- * Registers all 11 Smart Memory macros with the SillyTavern macro system.
+ * Registers all 11 Storyhold macros with the SillyTavern macro system.
  * Called once at extension load time. The cache starts empty so each macro
  * returns an empty string until the first inject call populates it.
  *
@@ -131,7 +131,7 @@ export function registerSmartMemoryMacros() {
     if (power_user?.experimental_macro_engine) {
       stMacros.register(macroName, {
         category: stMacros.category.MISC,
-        description: `Smart Memory: ${tierKey} tier content`,
+        description: `Storyhold: ${tierKey} tier content`,
         returns: 'Formatted memory tier content, empty string if tier is disabled or has no data',
         handler: () => contentCache.get(macroName) ?? '',
       });
@@ -139,7 +139,7 @@ export function registerSmartMemoryMacros() {
       MacrosParser.registerMacro(
         macroName,
         () => contentCache.get(macroName) ?? '',
-        `Smart Memory: ${tierKey} tier content`,
+        `Storyhold: ${tierKey} tier content`,
       );
     }
   }

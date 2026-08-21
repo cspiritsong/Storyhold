@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -59,7 +59,7 @@ export function getAwayHours() {
   const meta = context.chatMetadata?.[META_KEY];
 
   // Prefer the precise lastActive timestamp. Fall back to summaryUpdated if
-  // Smart Memory was not active the last time this chat was open - that gives
+  // Storyhold was not active the last time this chat was open - that gives
   // a rough "last seen" time from the most recent compaction pass.
   const lastSeen = meta?.lastActive ?? meta?.summaryUpdated ?? null;
   if (!lastSeen) return 0;

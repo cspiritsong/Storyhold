@@ -1,8 +1,8 @@
 {
-  "name": "smart-memory",
+  "name": "storyhold",
   "version": "1.10.0",
   "type": "module",
-  "description": "Smart Memory - SillyTavern extension",
+  "description": "Storyhold - chat-local narrative memory for SillyTavern",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "test": "node test-harness.mjs && node --test tests/*.test.js",

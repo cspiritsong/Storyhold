@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *

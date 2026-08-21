@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -183,7 +183,7 @@ export async function detectAndPruneInFileBranch(characterName) {
     toastr.info(
       `In-chat branch detected - memory rolled back to message ${branchPoint} ` +
         `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative, ${counts.structured} structured, ${counts.ingest_windows} queue).`,
-      'Smart Memory',
+      'Storyhold',
       { timeOut: 7000, positionClass: 'toast-bottom-right' },
     );
   }

@@ -149,7 +149,7 @@ export function inheritDerivedRecords(records, options = {}) {
 }
 
 /**
- * Builds a clean branch-scoped Smart Memory metadata block from a parent's
+ * Builds a clean branch-scoped Storyhold metadata block from a parent's
  * proven prefix. Unproven legacy projections are intentionally omitted so a
  * branch can fall back to an explicit rebuild instead of inheriting guesses.
  */

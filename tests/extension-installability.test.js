@@ -23,6 +23,9 @@ test('extension payload is self-contained and manifest-installable', async () =>
   assert.ok(payload.files.includes('index.js'));
   assert.ok(payload.files.includes('style.css'));
   assert.ok(payload.files.includes('settings.html'));
+  assert.equal(manifest.display_name, 'Storyhold');
+  assert.equal(manifest.homepage, 'https://github.com/cspiritsong/Storyhold');
+  assert.equal(manifest.homePage, 'https://github.com/cspiritsong/Storyhold');
   assert.ok(payload.local_javascript.length > 10);
   assert.equal(payload.external_runtime_dependencies.length, 0);
   assert.equal(payload.external_memory_extension_imports.length, 0);
@@ -36,10 +39,19 @@ test('chat memory clear uses the canonical product reset', async () => {
   assert.match(source, /\/\/ Clear all injection slots and cached unified content\.\s+clearUnifiedSlot\(\);/);
 });
 
+test('README explains derivative origin, credits, and independent changes', async () => {
+  const readme = await readFile(resolve(root, 'README.md'), 'utf8');
+
+  assert.match(readme, /independent derivative of \[Smart Memory\]/);
+  assert.match(readme, /Summaryception/);
+  assert.match(readme, /What Storyhold changed/);
+  assert.match(readme, /chat-local storage as the only mutable memory boundary/);
+  assert.match(readme, /https:\/\/github\.com\/cspiritsong\/Storyhold/);
+});
+
 test('product runtime has one extension-owned narrative owner and no Summaryception prompt writer', async () => {
   const payload = await collectExtensionPayload(root);
   const source = payload.local_javascript_sources.join('\n');
-
   assert.match(source, /smart-memory:narrative-chain/);
   assert.doesNotMatch(source, /setExtensionPrompt\s*\(\s*['"]summaryception['"]/i);
   assert.equal(payload.external_runtime_dependencies.length, 0);

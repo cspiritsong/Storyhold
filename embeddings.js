@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -145,7 +145,7 @@ export async function getEmbeddingBatch(texts) {
       embeddingWarnedThisSession = true;
       toastr?.warning(
         'Embedding model unreachable - falling back to keyword matching. Check your embedding URL and model name.',
-        'Smart Memory',
+        'Storyhold',
         { timeOut: 8000 },
       );
     }

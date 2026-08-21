@@ -1,12 +1,12 @@
 {
-  "display_name": "Smart Memory",
+  "display_name": "Storyhold",
   "loading_order": 5,
   "requires": [],
   "optional": [],
   "js": "index.js",
   "css": "style.css",
-  "author": "cspiritsong <cspiritsong@users.noreply.github.com> (fork of Senjin the Dragon)",
-  "homepage": "https://github.com/cspiritsong/Smart-Memory",
+  "author": "cspiritsong <cspiritsong@users.noreply.github.com> (independent derivative of Smart Memory by Senjin the Dragon)",
+  "homepage": "https://github.com/cspiritsong/Storyhold",
   "version": "1.10.0",
-  "homePage": "https://github.com/cspiritsong/Smart-Memory"
+  "homePage": "https://github.com/cspiritsong/Storyhold"
 }

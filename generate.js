@@ -1,5 +1,5 @@
 /**
- * Smart Memory - SillyTavern Extension
+ * Storyhold - SillyTavern Extension
  * Copyright (C) 2026 Senjin the Dragon
  * https://github.com/senjinthedragon/Smart-Memory
  *
@@ -18,7 +18,7 @@
  */
 
 /**
- * LLM dispatch layer for Smart Memory operations.
+ * LLM dispatch layer for Storyhold operations.
  *
  * All generation calls within the extension go through the two functions here
  * rather than calling generateRaw / generateQuietPrompt directly. This allows
@@ -151,7 +151,7 @@ async function generateWithConnectionProfile(
   const profileId = getConnectionProfileId();
   if (!profileId)
     throw new Error(
-      'No ST connection profile selected. Choose a profile in Smart Memory settings.',
+      'No ST connection profile selected. Choose a profile in Storyhold settings.',
     );
 
   // Build a messages array so chat completion profiles get conversational context.
@@ -204,7 +204,7 @@ async function generateOllama(prompt, priorMessages = [], numPredict = getGenera
   const settings = extension_settings[MODULE_NAME];
   const url = getOllamaUrl();
   const model = settings?.ollama_model;
-  if (!model) throw new Error('No Ollama model selected. Choose a model in Smart Memory settings.');
+  if (!model) throw new Error('No Ollama model selected. Choose a model in Storyhold settings.');
 
   const messages = [...priorMessages, { role: 'user', content: prompt }];
 
