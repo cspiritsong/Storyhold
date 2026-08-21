@@ -1,0 +1,96 @@
+{
+  "contract_version": 1,
+  "window": {
+    "window_id": "chat-uid-a:mesId:101-102:sha256-window-a",
+    "chat_uid": "chat-uid-a",
+    "branch_uid": "branch-uid-a",
+    "source_range": {
+      "kind": "mesId",
+      "start": 101,
+      "end": 102
+    },
+    "fingerprint": "sha256-window-a"
+  },
+  "ownership": {
+    "structured": "smart-memory",
+    "narrative": "summaryception",
+    "evidence": "st-vector-storage",
+    "canon": "lorebook"
+  },
+  "records": [
+    {
+      "id": "state-record-a",
+      "kind": "state",
+      "scope": {
+        "chat_uid": "chat-uid-a",
+        "branch_uid": "branch-uid-a",
+        "character": "Mira"
+      },
+      "source_range": {
+        "kind": "mesId",
+        "start": 101,
+        "end": 102
+      },
+      "story_time": {
+        "epoch": "temple-arc",
+        "day": 12,
+        "role": "current"
+      },
+      "knowledge_time": {
+        "conversation_index": 42,
+        "mes_id": 102
+      },
+      "validity": {
+        "status": "active",
+        "valid_from": "message-102",
+        "valid_to": null
+      },
+      "confidence": 0.95,
+      "provenance": {
+        "source_chat_uid": "chat-uid-a",
+        "source_messages": [101, 102],
+        "source_kind": "raw-jsonl"
+      },
+      "supersedes": null
+    },
+    {
+      "id": "narrative-record-a",
+      "kind": "narrative_delta",
+      "scope": {
+        "chat_uid": "chat-uid-a",
+        "branch_uid": "branch-uid-a"
+      },
+      "source_range": {
+        "kind": "mesId",
+        "start": 101,
+        "end": 102
+      },
+      "story_time": {
+        "epoch": "temple-arc",
+        "day": 12,
+        "role": "current"
+      },
+      "knowledge_time": {
+        "conversation_index": 42,
+        "mes_id": 102
+      },
+      "validity": {
+        "status": "active",
+        "valid_from": "message-102",
+        "valid_to": null
+      },
+      "confidence": 0.9,
+      "provenance": {
+        "source_chat_uid": "chat-uid-a",
+        "source_messages": [101, 102],
+        "source_kind": "raw-jsonl"
+      },
+      "supersedes": null
+    }
+  ],
+  "quarantined_lineage": {
+    "status": "unverified-branch",
+    "quarantined": true,
+    "injectable_record_ids": []
+  }
+}
