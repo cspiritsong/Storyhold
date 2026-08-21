@@ -1,6 +1,6 @@
 {
   "name": "storyhold",
-  "version": "1.10.1",
+  "version": "1.10.2",
   "type": "module",
   "description": "Storyhold - chat-local narrative memory for SillyTavern",
   "license": "AGPL-3.0-or-later",

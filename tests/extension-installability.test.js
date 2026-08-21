@@ -46,6 +46,13 @@ test('runtime requests settings from the Storyhold install directory', async () 
   assert.doesNotMatch(source, /third-party\/Smart-Memory/);
 });
 
+test('About version lookup uses the Storyhold install directory', async () => {
+  const source = await readFile(resolve(root, 'settings.js'), 'utf8');
+
+  assert.match(source, /fetch\(\s*['"]\/scripts\/extensions\/third-party\/Storyhold\/manifest\.json['"]/);
+  assert.doesNotMatch(source, /\/scripts\/extensions\/third-party\/Smart-Memory\/manifest\.json/);
+});
+
 test('README explains derivative origin, credits, and independent changes', async () => {
   const readme = await readFile(resolve(root, 'README.md'), 'utf8');
 

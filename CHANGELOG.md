@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-08-21
+
+### Fixed
+
+- **Storyhold About version lookup after repository rename.** The About dialog now reads the manifest from the renamed Storyhold install directory instead of the retired Smart-Memory path.
+
 ## [1.10.1] - 2026-08-21
 
 ### Fixed

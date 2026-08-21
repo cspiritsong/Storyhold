@@ -4010,7 +4010,7 @@ export function bindSettingsUI(ctrl) {
     // Populate version from manifest.json so it stays in sync automatically.
     try {
       const manifest = await fetch(
-        '/scripts/extensions/third-party/Smart-Memory/manifest.json',
+        '/scripts/extensions/third-party/Storyhold/manifest.json',
       ).then((r) => r.json());
       $('#sm_about_version').text(manifest.version ?? '');
     } catch {
