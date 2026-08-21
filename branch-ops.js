@@ -30,6 +30,7 @@ import { getContext } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 import { META_KEY } from './constants.js';
 import { smLog } from './logging.js';
+import { pruneNarrativeAtBranch } from './narrative-chain.js';
 import { loadCharacterMemories, saveCharacterMemories } from './longterm.js';
 import { loadSessionMemories, saveSessionMemories } from './session.js';
 import { loadStateLedger, saveStateLedger } from './state-ledger.js';
@@ -64,7 +65,12 @@ export async function detectAndPruneInFileBranch(characterName) {
   const meta = context.chatMetadata?.[META_KEY];
   if (!meta) return null;
 
-  const watermark = meta.lastExtractMesId ?? null;
+  const watermark =
+    meta.product_cursor?.last_mes_id ??
+    meta.lastExtractMesId ??
+    (meta.narrative?.watermark?.source_range?.kind === 'mesId'
+      ? meta.narrative.watermark.source_range.end
+      : null);
   if (watermark == null) return null;
 
   const chat = context.chat ?? [];
@@ -74,7 +80,7 @@ export async function detectAndPruneInFileBranch(characterName) {
   if (!detection.truncated) return null;
 
   const branchPoint = detection.branchPointMesId;
-  const counts = { longterm: 0, session: 0, ledger: 0 };
+  const counts = { longterm: 0, session: 0, ledger: 0, narrative: 0 };
 
   // Long-term memories for the active character (routed to the per-chat
   // container when memory scope is Per chat).
@@ -107,19 +113,41 @@ export async function detectAndPruneInFileBranch(characterName) {
     }
   }
 
+  // Embedded recursive narrative chain (product mode). Its provenance is
+  // stricter than legacy tiers: only mesId-backed snippets are retained.
+  if (meta.narrative) {
+    const result = pruneNarrativeAtBranch(meta.narrative, {
+      branchPointMesId: branchPoint,
+      requireMesIds: true,
+    });
+    if (result.changed) {
+      meta.narrative = result.state;
+      counts.narrative = result.removed;
+    }
+  }
+
   // Roll both watermarks back to the branch point so the next pass starts
   // from the first divergent message instead of replaying history.
   meta.lastExtractMesId = branchPoint;
   const firstNew = firstIndexAfterMesId(chat, branchPoint);
   meta.lastExtractCutoff = firstNew >= 0 ? firstNew : chat.length;
+  if (meta.product_cursor) {
+    meta.product_cursor = {
+      ...meta.product_cursor,
+      window_id: null,
+      fingerprint: null,
+      last_mes_id: branchPoint,
+      last_index: firstNew >= 0 ? firstNew - 1 : chat.length - 1,
+    };
+  }
   context.saveMetadata();
   saveSettingsDebounced();
 
-  const total = counts.longterm + counts.session + counts.ledger;
+  const total = counts.longterm + counts.session + counts.ledger + counts.narrative;
   if (typeof toastr !== 'undefined') {
     toastr.info(
       `In-chat branch detected - memory rolled back to message ${branchPoint} ` +
-        `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state cards).`,
+        `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative).`,
       'Smart Memory',
       { timeOut: 7000, positionClass: 'toast-bottom-right' },
     );

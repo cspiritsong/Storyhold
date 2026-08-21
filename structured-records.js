@@ -7,6 +7,7 @@
  */
 
 import { buildDerivedRecord, PROJECTION_KINDS, PROJECTION_OWNERS } from './projections.js';
+import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './timeline.js';
 
 const EMPTY_RESPONSE = Object.freeze({
   facts: [],
@@ -159,6 +160,7 @@ export function buildStructuredExtractionPrompt({
   chatText = '',
   existingRecords = [],
   respondingCharacter = '',
+  timeline = null,
 } = {}) {
   const existing = list(existingRecords)
     .slice(-40)
@@ -177,6 +179,15 @@ export function buildStructuredExtractionPrompt({
     'arcs: [{content, status, confidence}]',
     'epistemic: [{subject, target, type, content, witnessed_by, confidence}]',
     `Responding character: ${text(respondingCharacter) || '(unknown)'}`,
+    ...(timeline
+      ? [
+          `Current story clock: ${buildTimelinePromptBlock(timeline).replace(/\n/g, ' ')}`,
+          'Backstory and flashback dates are historical; do not replace the current story clock with them.',
+          ...(timeline.conflicts?.length > 0
+            ? ['Temporal conflict is present; mark uncertain or preserve both readings rather than silently choosing.']
+            : []),
+        ]
+      : []),
     '<existing_records>',
     JSON.stringify(existing),
     '</existing_records>',
@@ -187,7 +198,7 @@ export function buildStructuredExtractionPrompt({
 }
 
 /** Converts the combined payload into canonical derived records. */
-export function normalizeStructuredRecords(payload, window) {
+export function normalizeStructuredRecords(payload, window, { timeline = null } = {}) {
   if (!window?.window_id || !window?.chat_uid || !window?.source_range) {
     throw new TypeError('a valid ingest window is required');
   }
@@ -198,7 +209,15 @@ export function normalizeStructuredRecords(payload, window) {
       const content = contentBuilder(item);
       if (!content) return;
       const base = commonFields({ ...item, content }, kind, index, window);
-      records.push(withMetadata(buildDerivedRecord(base), item));
+      const record = withMetadata(buildDerivedRecord(base), item);
+      if (
+        kind === PROJECTION_KINDS.STATE &&
+        timeline &&
+        !isProjectionTemporallyCompatible(record.content, timeline)
+      ) {
+        return;
+      }
+      records.push(record);
     });
   };
 

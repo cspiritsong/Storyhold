@@ -59,6 +59,10 @@ test('structured extraction prompt defines one combined response and includes cu
     chatText: 'Mira takes the silver key.',
     existingRecords: [{ kind: 'state', content: 'Mira is at the temple.' }],
     respondingCharacter: 'Mira',
+    timeline: {
+      current_anchor: { year: 2041, month: 9, day: 15 },
+      conflicts: [{ type: 'progression-reversal' }],
+    },
   });
 
   assert.match(prompt, /facts/i);
@@ -68,6 +72,22 @@ test('structured extraction prompt defines one combined response and includes cu
   assert.match(prompt, /epistemic/i);
   assert.match(prompt, /Mira takes the silver key/);
   assert.match(prompt, /Mira is at the temple/);
+  assert.match(prompt, /current story clock.*2041.*15/i);
+  assert.match(prompt, /temporal conflict/i);
+});
+
+test('stale current-state clock projections are rejected while backstory remains admissible', () => {
+  const timeline = {
+    current_anchor: { year: 2041, month: 9, day: 15 },
+    conflicts: [],
+  };
+  const result = normalizeStructuredRecords({
+    facts: [{ content: 'Years ago on Day 12, Mira fought Gustav in Djibouti.' }],
+    state: [{ content: 'Current story time is Day 12.', entity: 'world', entity_type: 'timeline' }],
+  }, window, { timeline });
+
+  assert.ok(result.some((record) => /Years ago on Day 12/i.test(record.content)));
+  assert.equal(result.some((record) => /Current story time is Day 12/i.test(record.content)), false);
 });
 
 test('merge deduplicates incoming records and retires explicitly superseded state', () => {

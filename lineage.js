@@ -1,4 +1,5 @@
 import { chatHasRealMesIds } from './branch-aware.js';
+import { inheritNarrativePrefix } from './narrative-chain.js';
 
 /**
  * Runtime lineage states. A branch is trusted only after a later branch
@@ -182,6 +183,20 @@ export function inheritSmartMemoryMetadata(parentSmartMemory = {}, options = {})
     sceneHistory: inheritDerivedRecords(parentSmartMemory.sceneHistory, recordOptions),
     state_ledger: {},
     profiles: {},
+    ...(parentSmartMemory.narrative
+      ? {
+          narrative: inheritNarrativePrefix(parentSmartMemory.narrative, {
+            parentChatUid: parentSmartMemory.narrative.chat_uid ?? parentChatId,
+            branchChatUid: branchChatId,
+            branchUid: epochId,
+            parentPrefixEnd,
+            // A verified narrative inheritance must be mesId-proven. A
+            // fingerprint-only branch remains eligible for explicit rebuild,
+            // but cannot silently receive recursive history.
+            requireMesIds: true,
+          }),
+        }
+      : {}),
   };
 
   if (branchPrefixMesId !== null && branchPrefixMesId !== undefined) {

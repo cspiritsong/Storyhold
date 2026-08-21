@@ -317,6 +317,32 @@ test('chat metadata inheritance carries only proven prefix projections', () => {
       summary: 'prefix summary',
       summary_source_chat_id: 'chat-30',
       summary_source_message_range: [0, 2],
+      narrative: {
+        schema_version: 1,
+        chat_uid: 'chat-30',
+        branch_uid: 'parent-epoch',
+        settings: { snippetsPerLayer: 2, snippetsPerPromotion: 1, maxLayers: 3 },
+        layers: [[
+          {
+            id: 'narrative-prefix',
+            text: 'prefix narrative',
+            source_range: { kind: 'mesId', start: 0, end: 2 },
+            scope: { chat_uid: 'chat-30', branch_uid: 'parent-epoch' },
+          },
+          {
+            id: 'narrative-tail',
+            text: 'tail narrative',
+            source_range: { kind: 'mesId', start: 3, end: 4 },
+            scope: { chat_uid: 'chat-30', branch_uid: 'parent-epoch' },
+          },
+        ]],
+        processed_windows: [],
+        watermark: {
+          window_id: 'tail-window',
+          source_range: { kind: 'mesId', start: 3, end: 4 },
+          fingerprint: 'tail',
+        },
+      },
     },
     {
       parentChatId: 'chat-30',
@@ -334,4 +360,9 @@ test('chat metadata inheritance carries only proven prefix projections', () => {
   assert.equal(result.summary, 'prefix summary');
   assert.equal(result.summaryEnd, 3);
   assert.equal(result.lastExtractCutoff, 3);
+  assert.ok(result.narrative);
+  assert.deepEqual(result.narrative.layers[0].map((snippet) => snippet.id), ['narrative-prefix']);
+  assert.equal(result.narrative.chat_uid, 'branch-31');
+  assert.equal(result.narrative.branch_uid, 'epoch-31');
+  assert.equal(result.narrative.watermark, null);
 });

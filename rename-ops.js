@@ -6,6 +6,7 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, SCHEMA_VERSION, generateMemoryId } from './constants.js';
 import { MEMORY_SCOPE_CHAT } from './scope-core.js';
 import { LINEAGE_STATUS } from './lineage.js';
+import { retagNarrativeChatUid } from './narrative-chain.js';
 import {
   emptyRollbackArchive,
   listChatMemoryNamespaces,
@@ -95,6 +96,16 @@ export async function ensureStableChatIdentity() {
     metadataChanged = true;
   }
   meta.schema_version = Math.max(meta.schema_version ?? 0, SCHEMA_VERSION);
+  if (meta.narrative) {
+    const retaggedNarrative = retagNarrativeChatUid(meta.narrative, {
+      chatUid: meta.chat_uid,
+      branchUid: meta.lineage?.epoch_id ?? meta.chat_uid,
+    });
+    if (JSON.stringify(retaggedNarrative) !== JSON.stringify(meta.narrative)) {
+      meta.narrative = retaggedNarrative;
+      metadataChanged = true;
+    }
+  }
   context.chatMetadata[META_KEY] = meta;
 
   if (store) {

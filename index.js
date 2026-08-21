@@ -415,6 +415,10 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
     lineage.epochId ??
     meta.lineage?.epoch_id ??
     meta.chat_uid;
+  const timeline = rebuildTimeline(context.chat, {
+    chatId: meta.chat_uid,
+    epochId: branchUid,
+  });
   const cursor = loadProductCursor(context.chatMetadata);
   const window = buildProductWindow({
     chat: context.chat,
@@ -435,6 +439,7 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
     settings: {
       respondingCharacter: characterName,
       narrativeSettings,
+      timeline,
     },
     narrativeSettings,
     shouldAbort: chatChanged,

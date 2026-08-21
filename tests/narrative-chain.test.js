@@ -6,8 +6,12 @@ import { fileURLToPath } from 'node:url';
 import {
   assembleNarrative,
   createNarrativeState,
+  inheritNarrativePrefix,
   ingestNarrativeBatch,
   promoteNarrativeLayers,
+  pruneNarrativeAtBranch,
+  rebuildNarrativeChain,
+  retagNarrativeChatUid,
 } from '../narrative-chain.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -177,4 +181,115 @@ test('assembled narrative places deeper layers before layer zero', () => {
   ];
 
   assert.equal(assembleNarrative(state), 'deep history older history near history');
+});
+
+test('verified narrative prefix inheritance excludes divergent and provenance-less snippets', () => {
+  const parent = createNarrativeState({ chatUid: 'parent-chat', branchUid: 'parent-branch' });
+  parent.layers = [
+    [{
+      id: 'prefix',
+      text: 'prefix event',
+      source_range: { kind: 'mesId', start: 1, end: 3 },
+      scope: { chat_uid: 'parent-chat', branch_uid: 'parent-branch' },
+    }, {
+      id: 'tail',
+      text: 'divergent event',
+      source_range: { kind: 'mesId', start: 4, end: 5 },
+      scope: { chat_uid: 'parent-chat', branch_uid: 'parent-branch' },
+    }, { id: 'unknown', text: 'legacy without provenance' }],
+    [{
+      id: 'promoted-prefix',
+      text: 'older prefix',
+      source_ranges: [{ kind: 'mesId', start: 1, end: 3 }],
+      scope: { chat_uid: 'parent-chat', branch_uid: 'parent-branch' },
+    }],
+  ];
+
+  const child = inheritNarrativePrefix(parent, {
+    parentChatUid: 'parent-chat',
+    branchChatUid: 'child-chat',
+    branchUid: 'child-branch',
+    parentPrefixEnd: 3,
+  });
+
+  const ids = child.layers.flat().map((snippet) => snippet.id);
+  assert.deepEqual(ids.sort(), ['prefix', 'promoted-prefix']);
+  assert.ok(child.layers.flat().every((snippet) => snippet.scope.chat_uid === 'child-chat'));
+  assert.ok(child.layers.flat().every((snippet) => snippet.scope.branch_uid === 'child-branch'));
+  assert.deepEqual(parent.layers[0].map((snippet) => snippet.id), ['prefix', 'tail', 'unknown']);
+});
+
+test('narrative branch pruning removes tail layers and rolls watermark back', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: 'branch-a' });
+  state.layers = [[
+    { id: 'prefix', text: 'prefix', source_range: { kind: 'mesId', start: 1, end: 3 } },
+    { id: 'tail', text: 'tail', source_range: { kind: 'mesId', start: 4, end: 5 } },
+  ]];
+  state.watermark = {
+    window_id: 'tail-window',
+    source_range: { kind: 'mesId', start: 4, end: 5 },
+    fingerprint: 'tail',
+  };
+
+  const result = pruneNarrativeAtBranch(state, { branchPointMesId: 3 });
+
+  assert.deepEqual(result.state.layers[0].map((snippet) => snippet.id), ['prefix']);
+  assert.equal(result.state.watermark, null);
+  assert.equal(result.removed, 1);
+  assert.deepEqual(state.layers[0].map((snippet) => snippet.id), ['prefix', 'tail']);
+});
+
+test('renaming a narrative store preserves its layers while updating stable scope', () => {
+  const state = createNarrativeState({ chatUid: 'old-chat', branchUid: 'old-branch' });
+  state.layers = [[{
+    id: 'one',
+    text: 'event',
+    scope: { chat_uid: 'old-chat', branch_uid: 'old-branch' },
+    source_range: { kind: 'mesId', start: 1, end: 1 },
+  }]];
+
+  const renamed = retagNarrativeChatUid(state, {
+    chatUid: 'renamed-chat',
+    branchUid: 'renamed-branch',
+  });
+
+  assert.equal(renamed.chat_uid, 'renamed-chat');
+  assert.equal(renamed.branch_uid, 'renamed-branch');
+  assert.deepEqual(renamed.layers[0][0].scope, {
+    chat_uid: 'renamed-chat',
+    branch_uid: 'renamed-branch',
+  });
+});
+
+test('mesId-less or missing provenance is not inherited automatically', () => {
+  const parent = createNarrativeState({ chatUid: 'parent-chat' });
+  parent.layers = [[
+    { id: 'mesidless', text: 'unknown', source_range: { kind: 'index', start: 1, end: 2 } },
+    { id: 'missing', text: 'missing' },
+  ]];
+
+  const child = inheritNarrativePrefix(parent, {
+    parentChatUid: 'parent-chat',
+    branchChatUid: 'child-chat',
+    parentPrefixEnd: 2,
+    requireMesIds: true,
+  });
+
+  assert.deepEqual(child.layers.flat(), []);
+});
+
+test('rebuild processes raw windows into a fresh narrative chain', async () => {
+  const windows = [
+    { ...baseWindow, window_id: 'rebuild-1', fingerprint: 'one', story_text: 'first event' },
+    { ...baseWindow, window_id: 'rebuild-2', fingerprint: 'two', source_range: { kind: 'mesId', start: 12, end: 13 }, story_text: 'second event' },
+  ];
+  const result = await rebuildNarrativeChain(windows, {
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
+    summarize: async ({ storyText }) => `summary:${storyText}`,
+  });
+
+  assert.equal(result.failed, false);
+  assert.equal(result.state.layers[0].length, 2);
+  assert.equal(result.state.watermark.window_id, 'rebuild-2');
 });

@@ -18,6 +18,7 @@ import {
   normalizeStructuredRecords,
   parseStructuredResponse,
 } from './structured-records.js';
+import { isProjectionTemporallyCompatible } from './timeline.js';
 
 const META_KEY = 'smartMemory';
 
@@ -74,12 +75,19 @@ export function buildProductWindow({
   });
 }
 
-function recordsFromExtraction(extracted, window) {
+function recordsFromExtraction(extracted, window, timeline = null) {
+  const temporalFilter = (records) => {
+    if (!timeline) return records;
+    return records.filter(
+      (record) =>
+        record?.kind !== 'state' || isProjectionTemporallyCompatible(record.content, timeline),
+    );
+  };
   if (Array.isArray(extracted)) {
     const canonical = extracted.every(
       (record) => record?.scope?.chat_uid && record?.source_range && record?.provenance,
     );
-    if (canonical) return extracted;
+    if (canonical) return temporalFilter(extracted);
     const payload = { facts: [], relationships: [], state: [], arcs: [], epistemic: [] };
     const keyByKind = {
       fact: 'facts',
@@ -92,14 +100,14 @@ function recordsFromExtraction(extracted, window) {
       const key = keyByKind[record?.kind];
       if (key) payload[key].push(record);
     }
-    return normalizeStructuredRecords(payload, window);
+    return normalizeStructuredRecords(payload, window, { timeline });
   }
   if (typeof extracted === 'string') {
-    return normalizeStructuredRecords(parseStructuredResponse(extracted), window);
+    return normalizeStructuredRecords(parseStructuredResponse(extracted), window, { timeline });
   }
   if (extracted && typeof extracted === 'object') {
-    if (Array.isArray(extracted.records)) return recordsFromExtraction(extracted.records, window);
-    return normalizeStructuredRecords(extracted, window);
+    if (Array.isArray(extracted.records)) return recordsFromExtraction(extracted.records, window, timeline);
+    return normalizeStructuredRecords(extracted, window, { timeline });
   }
   return [];
 }
@@ -165,12 +173,13 @@ export function createProductPipeline({
             .join('\n\n'),
           existingRecords: priorRecords,
           respondingCharacter: settings.respondingCharacter ?? '',
+          timeline: settings.timeline ?? null,
         }),
       });
-      return recordsFromExtraction(extracted, window);
+      return recordsFromExtraction(extracted, window, settings.timeline ?? null);
     },
     applyStructured: async (extracted, { window }) => {
-      const incoming = recordsFromExtraction(extracted, window);
+      const incoming = recordsFromExtraction(extracted, window, settings.timeline ?? null);
       const existing = (await structuredStore.load()) ?? [];
       const merged = mergeStructuredRecords(existing, incoming);
       await structuredStore.save(merged);
