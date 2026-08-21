@@ -120,7 +120,6 @@ independent runtimes each read the same window and establish separate watermarks
 | `state-ledger.js` | Extracts current entity state and injects state cards | Keep latest-state projection; broker owns injection |
 | `epistemic.js` | Extracts knowledge, suspicions, false beliefs, and secrets | Keep POV projection; broker filters it |
 | `profiles.js` | Generates compact snapshots and injects profiles | Keep only where it adds information beyond state cards |
-| `summaryception-adapter.js` | Stamps snippets from a separate Summaryception slot | Migration-only; not a product runtime |
 | `unified-inject.js` | Merges legacy slots | Delegate to the typed broker; never read a foreign slot |
 | `continuity.js` | Checks contradictions and queues one-shot repair | Keep as validator/temporary repair input |
 

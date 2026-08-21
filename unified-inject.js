@@ -180,7 +180,11 @@ export function injectUnified() {
       respondingCharacter: context.name2 ?? context.characterName ?? null,
       query,
       records: structuredRecords,
-      sections: buildSectionsFromTypedState({ narrativeState: meta.narrative ?? null }),
+      sections: buildSectionsFromTypedState({
+        narrativeState: meta.narrative ?? null,
+        chatUid: meta.chat_uid ?? lineage?.chatUid ?? null,
+        branchUid: lineage?.epoch_id ?? lineage?.epochId ?? meta.lineage?.epoch_id ?? meta.chat_uid,
+      }),
       lineage,
       totalBudget: settings.total_inject_budget ?? 8000,
     });
@@ -217,10 +221,8 @@ export function injectUnified() {
   const slotValues = {};
   for (const { key } of BROKER_SLOT_SECTIONS) {
     const fresh = extension_prompts[key]?.value ?? '';
-    const externalSlot = key === 'summaryception';
-    if (fresh.length > 0 && !externalSlot) contentCache[key] = fresh;
-    slotValues[key] =
-      fresh.length > 0 ? fresh : externalSlot ? '' : (contentCache[key] ?? '');
+    if (fresh.length > 0) contentCache[key] = fresh;
+    slotValues[key] = fresh.length > 0 ? fresh : (contentCache[key] ?? '');
   }
 
   const lineage = getCurrentLineage();

@@ -92,16 +92,17 @@ test('conflicting active records are marked uncertain rather than silently merge
   assert.equal(result.trace.conflicts.length, 1);
 });
 
-test('legacy slot mapping includes current-state channels without duplicating triggered memories', () => {
+test('legacy slot mapping ignores foreign narrative slots and preserves current-state channels', () => {
   const sections = buildSectionsFromSlots({
-    summaryception: 'compressed narrative',
+    summaryception: 'foreign narrative must not be consumed',
+    smart_memory_canon: 'embedded canon',
     smart_memory_long: 'long-term',
     smart_memory_triggered: 'triggered duplicate',
     smart_memory_state_ledger: 'current state',
     smart_memory_epistemic: 'private knowledge',
   });
 
-  assert.deepEqual(sections.narrative.map((item) => item.id), ['summaryception']);
+  assert.deepEqual(sections.narrative.map((item) => item.id), ['smart_memory_canon']);
   assert.deepEqual(sections.facts.map((item) => item.id), ['smart_memory_long']);
   assert.deepEqual(sections.state.map((item) => item.id), ['smart_memory_state_ledger']);
   assert.deepEqual(sections.epistemic.map((item) => item.id), ['smart_memory_epistemic']);
@@ -112,11 +113,15 @@ test('typed-store broker path reads embedded narrative and only matching structu
     record({ id: 'unrelated-state', kind: 'state', content: 'The weather is rainy.' }),
   ];
   const sections = buildSectionsFromTypedState({
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
     narrativeState: {
       layers: [[{ id: 'narrative-chain-0', text: 'The party enters the temple.' }]],
     },
     structuredRecords,
   });
+  assert.equal(sections.narrative[0].scope.chat_uid, 'chat-a');
+  assert.equal(sections.narrative[0].scope.branch_uid, 'branch-a');
   const result = buildMemoryEnvelopeSync({
     chatUid: 'chat-a',
     branchUid: 'branch-a',

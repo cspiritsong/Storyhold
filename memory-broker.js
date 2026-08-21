@@ -4,7 +4,7 @@
  * This module is pure and owns presentation only: it combines typed records,
  * filters duplicates/superseded records, marks unresolved conflicts, applies a
  * total token budget, and returns one injectable block. It does not mutate
- * Smart-Memory or Summaryception storage.
+ * Smart-Memory chat storage.
  */
 
 import { estimateTokens } from './constants.js';
@@ -12,9 +12,6 @@ import { assembleNarrative } from './narrative-chain.js';
 import { filterRetrievalRecords, retrieveDeterministic, retrieveWithLadder } from './retrieval.js';
 
 export const BROKER_SLOT_SECTIONS = Object.freeze([
-  // Summaryception remains the narrative owner; this slot is consumed into the
-  // broker envelope so it is not injected a second time independently.
-  { key: 'summaryception', section: 'narrative' },
   { key: 'smart_memory_canon', section: 'narrative' },
   { key: 'smart_memory_short', section: 'narrative' },
   { key: 'smart_memory_scenes', section: 'narrative' },
@@ -46,7 +43,11 @@ export function buildSectionsFromSlots(slotValues = {}) {
 }
 
 /** Builds broker sections from the embedded Smart-Memory typed narrative state. */
-export function buildSectionsFromTypedState({ narrativeState = null } = {}) {
+export function buildSectionsFromTypedState({
+  narrativeState = null,
+  chatUid = null,
+  branchUid = null,
+} = {}) {
   const sections = Object.fromEntries(BROKER_SECTION_ORDER.map((name) => [name, []]));
   const narrative = narrativeState ? assembleNarrative(narrativeState) : '';
   if (narrative) {
@@ -54,7 +55,14 @@ export function buildSectionsFromTypedState({ narrativeState = null } = {}) {
       id: 'smart_memory_narrative_chain',
       kind: 'narrative_delta',
       content: narrative,
-      scope: { chat_uid: 'smart-memory-narrative' },
+      scope: {
+        chat_uid: chatUid ?? narrativeState?.chat_uid ?? 'smart-memory-narrative',
+        ...(branchUid != null
+          ? { branch_uid: branchUid }
+          : narrativeState?.branch_uid != null
+            ? { branch_uid: narrativeState.branch_uid }
+            : {}),
+      },
     });
   }
   return sections;
@@ -90,7 +98,6 @@ const SECTION_PRIORITY = Object.freeze({
 });
 
 const ALL_INDIVIDUAL_SLOTS = Object.freeze([
-  'summaryception',
   'smart_memory_short',
   'smart_memory_long',
   'smart_memory_session',

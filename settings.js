@@ -364,9 +364,8 @@ export const defaultSettings = {
   // suppressed. Errors (console.error) are always shown regardless of this flag.
   verbose_logging: false,
 
-  // Experimental: route all active memory slots through one synchronous broker
-  // envelope instead of injecting each tier independently. The broker includes
-  // the Summaryception slot and clears every source slot after composition.
+  // Experimental compatibility path: route active Smart-Memory slots through
+  // one broker envelope. Product mode uses the embedded typed broker directly.
   unified_injection: false,
   unified_position: 2, // extension_prompt_types.IN_PROMPT (Before Main Prompt)
   unified_depth: 0,
