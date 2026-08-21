@@ -1,0 +1,109 @@
+{
+  "chat_uid": "qualification-product-chat",
+  "branch_uid": "qualification-product-branch",
+  "messages": [
+    {
+      "mesId": 100,
+      "name": "Badi",
+      "is_user": true,
+      "mes": "Current story time is Day 15. Mira enters the temple."
+    },
+    {
+      "mesId": 101,
+      "name": "Mira",
+      "is_user": false,
+      "mes": "I carry the silver key, but the sealed door remains closed."
+    },
+    {
+      "mesId": 102,
+      "name": "Badi",
+      "is_user": true,
+      "mes": "Years ago on Day 12, Mira fought Gustav in Djibouti."
+    },
+    {
+      "mesId": 103,
+      "name": "Mira",
+      "is_user": false,
+      "mes": "I know the priest lied, but Tomas must not know that I know."
+    },
+    {
+      "mesId": 104,
+      "name": "Badi",
+      "is_user": true,
+      "mes": "Open the sealed temple door."
+    }
+  ],
+  "structured_response": {
+    "facts": [
+      {
+        "id": "backstory-day12",
+        "content": "Years ago on Day 12, Mira fought Gustav in Djibouti.",
+        "confidence": 0.9
+      },
+      {
+        "id": "key-fact",
+        "content": "The silver key opens the sealed temple door.",
+        "confidence": 0.95
+      }
+    ],
+    "relationships": [
+      {
+        "id": "trust-badi-mira",
+        "subject": "Mira",
+        "target": "Badi",
+        "content": "Mira trusts Badi with the silver key.",
+        "confidence": 0.85
+      }
+    ],
+    "state": [
+      {
+        "id": "stale-clock",
+        "entity": "world",
+        "entity_type": "timeline",
+        "content": "Current story time is Day 12.",
+        "confidence": 0.99
+      },
+      {
+        "id": "mira-current-state",
+        "entity": "Mira",
+        "entity_type": "character",
+        "content": "Mira is at the temple and carries the silver key.",
+        "fields": { "location": "temple", "carried": "silver key" },
+        "confidence": 0.95
+      }
+    ],
+    "arcs": [
+      {
+        "id": "door-thread",
+        "content": "Active thread: open the sealed temple door.",
+        "status": "active",
+        "confidence": 0.9
+      }
+    ],
+    "epistemic": [
+      {
+        "id": "mira-secret",
+        "subject": "Mira",
+        "target": "Tomas",
+        "type": "hidden knowledge",
+        "content": "Mira knows the priest lied, but Tomas does not know that Mira knows.",
+        "witnessed_by": ["Mira"],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "expectations": {
+    "must_keep_records": [
+      "backstory-day12",
+      "key-fact",
+      "trust-badi-mira",
+      "mira-current-state",
+      "door-thread",
+      "mira-secret"
+    ],
+    "must_drop_records": ["stale-clock"],
+    "must_include_text": ["silver key", "temple", "Day 12", "Tomas"],
+    "must_not_include_text": ["Current story time is Day 12"],
+    "max_tokens": 220
+  }
+}

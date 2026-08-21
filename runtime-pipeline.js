@@ -85,6 +85,8 @@ export function createRuntimePipeline({
         window_id: window.window_id,
         source_range: window.source_range,
         fingerprint: window.fingerprint,
+        chat_uid: window.chat_uid,
+        branch_uid: window.branch_uid,
         story_text: context.narrativeText ?? narrativeText(window),
         summarize: async (request) =>
           summarizeNarrative({ ...request, sourceWindowId: window.window_id, window }),

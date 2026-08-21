@@ -28,7 +28,7 @@ function normalized(value) {
 }
 
 function queryObject(query) {
-  if (typeof query === 'string') return { text: query, entities: [] };
+  if (typeof query === 'string') return { text: query, entities: [], intent: null, keys: [] };
   return {
     text: String(query?.text ?? ''),
     entities: Array.isArray(query?.entities) ? query.entities.map(normalized).filter(Boolean) : [],

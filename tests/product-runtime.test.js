@@ -81,6 +81,8 @@ test('single-extension product pipeline stores narrative and one combined struct
   assert.equal(result.status, 'completed');
   assert.deepEqual(calls, { narrative: 1, structured: 1 });
   assert.equal(metadata.smartMemory.narrative.layers[0].length, 1);
+  assert.equal(metadata.smartMemory.narrative.chat_uid, 'chat-uid-a');
+  assert.equal(metadata.smartMemory.narrative.branch_uid, 'branch-uid-a');
   assert.equal(metadata.smartMemory.structured_records.length, 1);
   assert.equal(metadata.smartMemory.structured_records[0].id, 'state-a');
   assert.ok(saves >= 3);
