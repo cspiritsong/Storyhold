@@ -4,6 +4,7 @@ import { buildIngestWindow } from '../projections.js';
 import {
   buildProductWindow,
   createProductPipeline,
+  resetProductMemory,
 } from '../product-runtime.js';
 
 const chat = [
@@ -31,6 +32,24 @@ test('product window selects only unprocessed messages and prefers mesId provena
   assert.deepEqual(second.source_range, { kind: 'mesId', start: 12, end: 12 });
   assert.equal(first.messages.length, 3);
   assert.equal(second.messages.length, 1);
+});
+
+test('product window caps the first catch-up slice instead of loading the whole chat', () => {
+  const longChat = Array.from({ length: 100 }, (_, index) => ({
+    mesId: index + 1,
+    name: index % 2 === 0 ? 'Badi' : 'Mira',
+    is_user: index % 2 === 0,
+    mes: `message-${index + 1}`,
+  }));
+  const window = buildProductWindow({
+    chat: longChat,
+    chatUid: 'chat-uid-long',
+    branchUid: 'branch-long',
+    maxMessages: 12,
+  });
+
+  assert.equal(window.messages.length, 12);
+  assert.deepEqual(window.source_range, { kind: 'mesId', start: 1, end: 12 });
 });
 
 test('product window returns null when the cursor is already at the stable chat tip', () => {
@@ -86,4 +105,31 @@ test('single-extension product pipeline stores narrative and one combined struct
   assert.equal(metadata.smartMemory.structured_records.length, 1);
   assert.equal(metadata.smartMemory.structured_records[0].id, 'state-a');
   assert.ok(saves >= 3);
+});
+
+test('rescan reset clears only product stores and preserves unrelated metadata', async () => {
+  const metadata = {
+    unrelated: { keep: true },
+    smartMemory: {
+      lineage: { status: 'standalone' },
+      timeline: { current_anchor: { day: 15 } },
+      product_cursor: { last_mes_id: 10 },
+      narrative: { layers: [[{ text: 'old' }]] },
+      structured_records: [{ id: 'old-record' }],
+      ingest_windows: { old: { status: 'completed' } },
+    },
+  };
+  let saves = 0;
+  await resetProductMemory(metadata, async () => {
+    saves++;
+  });
+
+  assert.deepEqual(metadata.unrelated, { keep: true });
+  assert.deepEqual(metadata.smartMemory.lineage, { status: 'standalone' });
+  assert.deepEqual(metadata.smartMemory.timeline, { current_anchor: { day: 15 } });
+  assert.equal(metadata.smartMemory.product_cursor, null);
+  assert.equal(metadata.smartMemory.narrative, null);
+  assert.deepEqual(metadata.smartMemory.structured_records, []);
+  assert.deepEqual(metadata.smartMemory.ingest_windows, {});
+  assert.equal(saves, 1);
 });

@@ -182,6 +182,8 @@ export const defaultSettings = {
   narrative_max_layers: 5,
   narrative_response_length: 500,
   structured_response_length: 700,
+  product_window_size: 40,
+  product_catchup_max_windows: 1000,
 
   // LLM source for all memory operations (extraction, summarization, recap)
   source: memory_sources.main,
@@ -2944,6 +2946,51 @@ export function bindSettingsUI(ctrl) {
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
       toastr.warning('No character is active.', 'Smart Memory', { timeOut: 3000 });
+      return;
+    }
+
+    if (s.single_extension_mode && typeof ctrl.runProductCatchUp === 'function') {
+      ctrl.extractionRunning = true;
+      ctrl.compactionRunning = true;
+      ctrl.catchUpCancelled = false;
+      $('#sm_catch_up').hide();
+      $('#sm_rescan_chat').hide();
+      $('#sm_cancel_catch_up').show().prop('disabled', false);
+      try {
+        const outcome = await ctrl.runProductCatchUp({ rescan, passes });
+        if (ctrl.catchUpCancelled || outcome.cancelled) {
+          setStatusMessage('Product catch-up cancelled.');
+          toastr.warning(
+            `Product catch-up cancelled after ${outcome.windows} window(s). Partial results were saved.`,
+            'Smart Memory',
+            { timeOut: 5000, positionClass: 'toast-bottom-right' },
+          );
+        } else if (outcome.last?.status !== 'completed' && outcome.last !== null) {
+          setStatusMessage('Product catch-up incomplete.');
+          toastr.warning(
+            'Product catch-up stopped after a projection failure. Check the browser console and retry.',
+            'Smart Memory',
+            { timeOut: 6000, positionClass: 'toast-bottom-right' },
+          );
+        } else {
+          setStatusMessage(rescan ? 'Product rescan complete.' : 'Product catch-up complete.');
+          toastr.success(
+            `${rescan ? 'Product rescan' : 'Product catch-up'} finished: ${outcome.windows} window(s) processed.`,
+            'Smart Memory',
+            { timeOut: 5000, positionClass: 'toast-bottom-right' },
+          );
+        }
+      } catch (err) {
+        showError('Product catch-up', err);
+        setStatusMessage('Product catch-up failed.');
+      } finally {
+        $('#sm_cancel_catch_up').hide();
+        $('#sm_catch_up').show();
+        $('#sm_rescan_chat').show();
+        ctrl.extractionRunning = false;
+        ctrl.compactionRunning = false;
+        ctrl.catchUpCancelled = false;
+      }
       return;
     }
 

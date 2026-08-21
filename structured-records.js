@@ -6,7 +6,8 @@
  * runtime can test them without SillyTavern or a provider.
  */
 
-import { buildDerivedRecord, PROJECTION_KINDS, PROJECTION_OWNERS } from './projections.js';
+import { buildDerivedRecord, defaultSourceMessages, PROJECTION_KINDS, PROJECTION_OWNERS } from './projections.js';
+import { hash32 } from './identity.js';
 import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './timeline.js';
 
 const EMPTY_RESPONSE = Object.freeze({
@@ -23,15 +24,6 @@ function emptyResponse() {
   return Object.fromEntries(RESPONSE_KEYS.map((key) => [key, []]));
 }
 
-function hash32(text, seed = 0x811c9dc5) {
-  let hash = seed >>> 0;
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
-}
-
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -43,13 +35,6 @@ function list(value) {
 function confidence(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : 0.7;
-}
-
-function sourceMessages(sourceRange) {
-  if (sourceRange.kind !== 'mesId') return [];
-  return sourceRange.start === sourceRange.end
-    ? [sourceRange.start]
-    : [sourceRange.start, sourceRange.end];
 }
 
 function recordId(kind, item, index, window) {
@@ -82,7 +67,7 @@ function commonFields(item, kind, index, window) {
     provenance: {
       ...(item?.provenance ?? {}),
       source_chat_uid: window.chat_uid,
-      source_messages: item?.provenance?.source_messages ?? sourceMessages(window.source_range),
+      source_messages: item?.provenance?.source_messages ?? defaultSourceMessages(window.source_range),
       source_kind: 'raw-jsonl',
     },
     supersedes: item?.supersedes ?? null,
@@ -296,4 +281,104 @@ export function mergeStructuredRecords(existing = [], incoming = []) {
     }
   }
   return result;
+}
+
+function sourceRanges(record) {
+  const ranges = [];
+  if (record?.source_range && typeof record.source_range === 'object') {
+    ranges.push(record.source_range);
+  }
+  const provenanceMessages = record?.provenance?.source_messages;
+  if (Array.isArray(provenanceMessages) && provenanceMessages.length > 0) {
+    const numeric = provenanceMessages.filter((value) => Number.isInteger(value));
+    if (numeric.length === provenanceMessages.length) {
+      ranges.push({ kind: 'mesId', start: Math.min(...numeric), end: Math.max(...numeric) });
+    }
+  }
+  const legacyRange = record?.source_message_range;
+  if (Array.isArray(legacyRange) && legacyRange.length >= 2) {
+    ranges.push({ kind: 'index', start: legacyRange[0], end: legacyRange[1] });
+  }
+  return ranges;
+}
+
+function hasMesIdTail(record, branchPointMesId) {
+  return sourceRanges(record).some(
+    (range) =>
+      range?.kind === 'mesId' &&
+      Number.isInteger(range.end) &&
+      range.end > branchPointMesId,
+  );
+}
+
+function fullyWithinMesIdPrefix(record, parentPrefixEnd) {
+  const ranges = sourceRanges(record);
+  return (
+    ranges.length > 0 &&
+    ranges.every(
+      (range) =>
+        range?.kind === 'mesId' &&
+        Number.isInteger(range.start) &&
+        Number.isInteger(range.end) &&
+        range.start >= 0 &&
+        range.end >= range.start &&
+        range.end <= parentPrefixEnd,
+    )
+  );
+}
+
+/** Prunes product records sourced from a discarded in-file branch tail. */
+export function pruneStructuredRecordsAtBranch(
+  records = [],
+  { branchPointMesId } = {},
+) {
+  const original = list(records);
+  const removedIds = new Set();
+  const kept = [];
+  const removed = [];
+  for (const record of original) {
+    if (hasMesIdTail(record, branchPointMesId)) {
+      removed.push(record);
+      if (record?.id) removedIds.add(String(record.id));
+    } else {
+      kept.push(cloneRecord(record));
+    }
+  }
+
+  if (removedIds.size > 0) {
+    for (const record of kept) {
+      if (record.superseded_by && removedIds.has(String(record.superseded_by))) {
+        delete record.superseded_by;
+        record.validity = { ...(record.validity ?? {}), status: 'active' };
+      }
+    }
+  }
+  return { kept, removed: removed.map(cloneRecord), changed: removed.length > 0 };
+}
+
+/** Inherits only fully mesId-proven structured records from a parent prefix. */
+export function inheritStructuredRecordsPrefix(
+  records = [],
+  { parentChatUid, branchChatUid, branchUid = null, parentPrefixEnd } = {},
+) {
+  const parent = text(parentChatUid);
+  const branch = text(branchChatUid);
+  if (!parent || !branch || !Number.isInteger(parentPrefixEnd) || parentPrefixEnd < 0) return [];
+  return list(records)
+    .filter((record) => {
+      const sourceChat = text(record?.provenance?.source_chat_uid ?? record?.scope?.chat_uid);
+      return sourceChat === parent && fullyWithinMesIdPrefix(record, parentPrefixEnd);
+    })
+    .map((record) => {
+      const copy = cloneRecord(record);
+      copy.scope = { ...(copy.scope ?? {}), chat_uid: branch };
+      if (branchUid != null) copy.scope.branch_uid = String(branchUid);
+      copy.provenance = {
+        ...(copy.provenance ?? {}),
+        source_chat_uid: branch,
+      };
+      copy.origin_chat_uid = copy.origin_chat_uid ?? parent;
+      copy.inherited = true;
+      return copy;
+    });
 }

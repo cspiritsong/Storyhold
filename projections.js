@@ -6,6 +6,8 @@
  * these helpers only add stable identity and provenance to derived projections.
  */
 
+import { canonicalMessage, hash32 } from './identity.js';
+
 export const PROJECTION_OWNERS = Object.freeze({
   STRUCTURED: 'smart-memory',
   NARRATIVE: 'smart-memory:narrative-chain',
@@ -44,27 +46,6 @@ function assertInteger(value, label) {
     throw new TypeError(`${label} must be a non-negative integer`);
   }
   return value;
-}
-
-function hash32(text, seed) {
-  let hash = seed >>> 0;
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
-}
-
-function canonicalMessage(message) {
-  return JSON.stringify({
-    name: String(message?.name ?? ''),
-    is_user: Boolean(message?.is_user),
-    is_system: Boolean(message?.is_system),
-    mes: String(message?.mes ?? '')
-      .replace(/\r\n?/g, '\n')
-      .replace(/\s+/g, ' ')
-      .trim(),
-  });
 }
 
 /**
@@ -149,7 +130,7 @@ function normalizeValidity(validity) {
   };
 }
 
-function defaultSourceMessages(sourceRange) {
+export function defaultSourceMessages(sourceRange) {
   if (sourceRange.kind !== 'mesId') return [];
   return sourceRange.start === sourceRange.end
     ? [sourceRange.start]

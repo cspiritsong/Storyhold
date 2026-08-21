@@ -1,5 +1,7 @@
 import { chatHasRealMesIds } from './branch-aware.js';
+import { canonicalMessage } from './identity.js';
 import { inheritNarrativePrefix } from './narrative-chain.js';
+import { inheritStructuredRecordsPrefix } from './structured-records.js';
 
 /**
  * Runtime lineage states. A branch is trusted only after a later branch
@@ -17,18 +19,6 @@ export const LINEAGE_STATUS = Object.freeze({
 function normalizeChatId(value) {
   if (value === null || value === undefined || value === '') return null;
   return String(value);
-}
-
-function canonicalMessage(message) {
-  return JSON.stringify({
-    name: String(message?.name ?? ''),
-    is_user: Boolean(message?.is_user),
-    is_system: Boolean(message?.is_system),
-    mes: String(message?.mes ?? '')
-      .replace(/\r\n?/g, '\n')
-      .replace(/\s+/g, ' ')
-      .trim(),
-  });
 }
 
 function messagesMatch(parentMessage, branchMessage, method) {
@@ -167,6 +157,7 @@ export function inheritSmartMemoryMetadata(parentSmartMemory = {}, options = {})
   const {
     parentChatId,
     branchChatId,
+    branchChatUid = branchChatId,
     parentPrefixEnd,
     branchPrefixLength = parentPrefixEnd + 1,
     branchPrefixMesId = null,
@@ -183,11 +174,17 @@ export function inheritSmartMemoryMetadata(parentSmartMemory = {}, options = {})
     sceneHistory: inheritDerivedRecords(parentSmartMemory.sceneHistory, recordOptions),
     state_ledger: {},
     profiles: {},
+    structured_records: inheritStructuredRecordsPrefix(parentSmartMemory.structured_records, {
+      parentChatUid: parentSmartMemory.chat_uid ?? parentChatId,
+      branchChatUid,
+      branchUid: epochId,
+      parentPrefixEnd,
+    }),
     ...(parentSmartMemory.narrative
       ? {
           narrative: inheritNarrativePrefix(parentSmartMemory.narrative, {
             parentChatUid: parentSmartMemory.narrative.chat_uid ?? parentChatId,
-            branchChatUid: branchChatId,
+            branchChatUid,
             branchUid: epochId,
             parentPrefixEnd,
             // A verified narrative inheritance must be mesId-proven. A

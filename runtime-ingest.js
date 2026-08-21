@@ -7,8 +7,9 @@
 
 import { createIngestQueue } from './ingest-queue.js';
 import { buildIngestWindow } from './projections.js';
+import { META_KEY } from './constants.js';
 
-const DEFAULT_META_KEY = 'smartMemory';
+const DEFAULT_META_KEY = META_KEY;
 const DEFAULT_QUEUE_KEY = 'ingest_windows';
 
 function clone(value) {

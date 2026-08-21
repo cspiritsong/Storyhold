@@ -53,6 +53,37 @@ test('replaying a committed window does not run projections twice', async () => 
   assert.deepEqual(second.record_ids.sort(), ['narrative-a', 'state-a']);
 });
 
+test('concurrent callers share one in-flight projection for the same window', async () => {
+  const stored = new Map();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const calls = { structured: 0 };
+  const queue = createIngestQueue({
+    load: (id) => stored.get(id),
+    save: (id, state) => stored.set(id, structuredClone(state)),
+    projectors: {
+      structured: async () => {
+        calls.structured++;
+        await gate;
+        return [{ id: 'state-a', kind: 'state', content: 'Mira is healed.' }];
+      },
+    },
+  });
+  const window = makeWindow();
+
+  const firstPromise = queue.ingest(window);
+  const secondPromise = queue.ingest(window);
+  release();
+  const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+  assert.equal(first.status, 'completed');
+  assert.equal(second.status, 'completed');
+  assert.equal(calls.structured, 1);
+});
+
+
 test('a failed projection retries alone while completed projections are skipped', async () => {
   const stored = new Map();
   const calls = { structured: 0, narrative: 0 };

@@ -8,6 +8,7 @@
  */
 
 import { normalizeSourceRange } from './projections.js';
+import { hash32 } from './identity.js';
 
 const DEFAULT_SETTINGS = Object.freeze({
   snippetsPerLayer: 20,
@@ -34,15 +35,6 @@ function positiveInteger(value, label, fallback) {
     throw new RangeError(`${label} must be a positive integer`);
   }
   return resolved;
-}
-
-function hash32(text, seed = 0x811c9dc5) {
-  let hash = seed >>> 0;
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
 }
 
 function normalizeSettings(settings = {}) {

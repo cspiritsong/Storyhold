@@ -343,10 +343,29 @@ test('chat metadata inheritance carries only proven prefix projections', () => {
           fingerprint: 'tail',
         },
       },
+      structured_records: [
+        {
+          id: 'structured-prefix',
+          kind: 'fact',
+          content: 'Prefix fact.',
+          source_range: { kind: 'mesId', start: 0, end: 2 },
+          scope: { chat_uid: 'chat-30', branch_uid: 'parent-epoch' },
+          provenance: { source_chat_uid: 'chat-30', source_messages: [0, 2] },
+        },
+        {
+          id: 'structured-tail',
+          kind: 'fact',
+          content: 'Tail fact.',
+          source_range: { kind: 'mesId', start: 3, end: 4 },
+          scope: { chat_uid: 'chat-30', branch_uid: 'parent-epoch' },
+          provenance: { source_chat_uid: 'chat-30', source_messages: [3, 4] },
+        },
+      ],
     },
     {
       parentChatId: 'chat-30',
       branchChatId: 'branch-31',
+      branchChatUid: 'stable-branch-uid',
       parentPrefixEnd: 2,
       branchPrefixLength: 3,
       epochId: 'epoch-31',
@@ -362,7 +381,11 @@ test('chat metadata inheritance carries only proven prefix projections', () => {
   assert.equal(result.lastExtractCutoff, 3);
   assert.ok(result.narrative);
   assert.deepEqual(result.narrative.layers[0].map((snippet) => snippet.id), ['narrative-prefix']);
-  assert.equal(result.narrative.chat_uid, 'branch-31');
+  assert.equal(result.narrative.chat_uid, 'stable-branch-uid');
   assert.equal(result.narrative.branch_uid, 'epoch-31');
   assert.equal(result.narrative.watermark, null);
+  assert.deepEqual(result.structured_records.map((record) => record.id), ['structured-prefix']);
+  assert.equal(result.structured_records[0].scope.chat_uid, 'stable-branch-uid');
+  assert.equal(result.structured_records[0].scope.branch_uid, 'epoch-31');
+  assert.equal(result.structured_records[0].provenance.source_chat_uid, 'stable-branch-uid');
 });

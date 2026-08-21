@@ -7,23 +7,36 @@
  * Smart-Memory chat storage.
  */
 
-import { estimateTokens } from './constants.js';
+import {
+  estimateTokens,
+  PROMPT_KEY_ARCS,
+  PROMPT_KEY_CANON,
+  PROMPT_KEY_EPISTEMIC,
+  PROMPT_KEY_LONG,
+  PROMPT_KEY_PROFILES,
+  PROMPT_KEY_REPAIR,
+  PROMPT_KEY_RELATIONSHIPS,
+  PROMPT_KEY_SCENES,
+  PROMPT_KEY_SESSION,
+  PROMPT_KEY_SHORT,
+  PROMPT_KEY_STATE_LEDGER,
+  PROMPT_KEY_TRIGGERED,
+  PROMPT_KEY_UNIFIED,
+} from './constants.js';
 import { assembleNarrative } from './narrative-chain.js';
 import { filterRetrievalRecords, retrieveDeterministic, retrieveWithLadder } from './retrieval.js';
 
 export const BROKER_SLOT_SECTIONS = Object.freeze([
-  { key: 'smart_memory_canon', section: 'narrative' },
-  { key: 'smart_memory_short', section: 'narrative' },
-  { key: 'smart_memory_scenes', section: 'narrative' },
-  { key: 'smart_memory_long', section: 'facts' },
-  { key: 'smart_memory_relationships', section: 'facts' },
-  { key: 'smart_memory_session', section: 'evidence' },
-  { key: 'smart_memory_profiles', section: 'state' },
-  { key: 'smart_memory_state_ledger', section: 'state' },
-  { key: 'smart_memory_arcs', section: 'arcs' },
-  { key: 'smart_memory_epistemic', section: 'epistemic' },
-  // smart_memory_triggered is intentionally excluded: it is a closer duplicate
-  // of smart_memory_long and would defeat the single-envelope invariant.
+  { key: PROMPT_KEY_CANON, section: 'narrative' },
+  { key: PROMPT_KEY_SHORT, section: 'narrative' },
+  { key: PROMPT_KEY_SCENES, section: 'narrative' },
+  { key: PROMPT_KEY_LONG, section: 'facts' },
+  { key: PROMPT_KEY_RELATIONSHIPS, section: 'facts' },
+  { key: PROMPT_KEY_SESSION, section: 'evidence' },
+  { key: PROMPT_KEY_PROFILES, section: 'state' },
+  { key: PROMPT_KEY_STATE_LEDGER, section: 'state' },
+  { key: PROMPT_KEY_ARCS, section: 'arcs' },
+  { key: PROMPT_KEY_EPISTEMIC, section: 'epistemic' },
 ]);
 
 /** Converts legacy prompt-slot strings into broker section records. */
@@ -66,7 +79,7 @@ export function buildSectionsFromTypedState({
 }
 
 
-export const BROKER_INJECTION_KEY = 'smart_memory_unified';
+export const BROKER_INJECTION_KEY = PROMPT_KEY_UNIFIED;
 export const BROKER_SECTION_ORDER = Object.freeze([
   'narrative',
   'facts',
@@ -95,17 +108,9 @@ const SECTION_PRIORITY = Object.freeze({
 });
 
 const ALL_INDIVIDUAL_SLOTS = Object.freeze([
-  'smart_memory_short',
-  'smart_memory_long',
-  'smart_memory_session',
-  'smart_memory_scenes',
-  'smart_memory_arcs',
-  'smart_memory_profiles',
-  'smart_memory_canon',
-  'smart_memory_triggered',
-  'smart_memory_relationships',
-  'smart_memory_epistemic',
-  'smart_memory_state_ledger',
+  ...BROKER_SLOT_SECTIONS.map(({ key }) => key),
+  PROMPT_KEY_TRIGGERED,
+  PROMPT_KEY_REPAIR,
 ]);
 
 function normalizedContent(record) {

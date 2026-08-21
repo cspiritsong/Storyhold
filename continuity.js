@@ -54,6 +54,7 @@ import { loadSessionMemories } from './session.js';
 import { parseContradictions } from './parsers.js';
 import { smLog } from './logging.js';
 import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { shouldInjectDirectRepair } from './runtime-policy.js';
 
 /**
  * Collects all established facts into a single labelled text block.
@@ -178,6 +179,7 @@ export async function generateRepair(contradictions, characterName) {
  * @param {string} repairNote - The corrective note text.
  */
 export function injectRepair(repairNote) {
+  if (!shouldInjectDirectRepair(extension_settings[MODULE_NAME])) return;
   if (isCurrentLineageQuarantined()) return;
   const context = getContext();
   if (!context.chatMetadata) return;
@@ -215,6 +217,10 @@ export function clearRepair() {
  */
 export function loadAndInjectRepair() {
   const context = getContext();
+  if (!shouldInjectDirectRepair(extension_settings[MODULE_NAME])) {
+    clearRepair();
+    return;
+  }
   if (isCurrentLineageQuarantined()) {
     setExtensionPrompt(PROMPT_KEY_REPAIR, '', extension_prompt_types.NONE, 0);
     return;

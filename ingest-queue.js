@@ -61,8 +61,7 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
   const entries = Object.entries(projectors).filter(([, projector]) => typeof projector === 'function');
   const names = entries.map(([name]) => name);
 
-  return {
-    async ingest(window, context = {}) {
+  const ingestWindow = async (window, context = {}) => {
       if (!window?.window_id || !window.chat_uid || !window.source_range) {
         throw new TypeError('ingest requires a canonical window');
       }
@@ -147,6 +146,22 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
       state.updated_at = now();
       await save(window.window_id, state);
       return { ...state, replayed: false };
+  };
+
+  const inFlight = new Map();
+  return {
+    async ingest(window, context = {}) {
+      const windowId = window?.window_id;
+      if (!windowId) return ingestWindow(window, context);
+      const active = inFlight.get(windowId);
+      if (active) return active;
+      const operation = ingestWindow(window, context);
+      inFlight.set(windowId, operation);
+      try {
+        return await operation;
+      } finally {
+        if (inFlight.get(windowId) === operation) inFlight.delete(windowId);
+      }
     },
   };
 }

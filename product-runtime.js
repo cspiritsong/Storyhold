@@ -18,9 +18,8 @@ import {
   normalizeStructuredRecords,
   parseStructuredResponse,
 } from './structured-records.js';
+import { META_KEY } from './constants.js';
 import { isProjectionTemporallyCompatible } from './timeline.js';
-
-const META_KEY = 'smartMemory';
 
 function assertMetadata(metadata) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
@@ -43,8 +42,12 @@ export function buildProductWindow({
   branchUid = null,
   cursor = null,
   lineage = null,
+  maxMessages = 40,
 } = {}) {
   if (!Array.isArray(chat)) throw new TypeError('chat must be an array');
+  if (!Number.isInteger(maxMessages) || maxMessages < 1) {
+    throw new RangeError('maxMessages must be a positive integer');
+  }
   const endExclusive =
     chat.length > 0 && !chat[chat.length - 1]?.is_user && !chat[chat.length - 1]?.is_system
       ? chat.length - 1
@@ -65,12 +68,13 @@ export function buildProductWindow({
   }
 
   if (startIndex >= endExclusive) return null;
+  const endIndex = Math.min(startIndex + maxMessages - 1, endExclusive - 1);
   return buildWindowFromChat({
     chat,
     chatUid,
     branchUid,
     startIndex,
-    endIndex: endExclusive - 1,
+    endIndex,
     lineage,
   });
 }
@@ -135,6 +139,7 @@ export function createProductPipeline({
   if (typeof extractStructured !== 'function') {
     throw new TypeError('extractStructured must be a function');
   }
+  const resolvedNarrativeSettings = narrativeSettings ?? settings.narrativeSettings ?? null;
 
   const guardedSaveMetadata = async () => {
     if (shouldAbort()) throw new Error('product pipeline aborted');
@@ -185,7 +190,7 @@ export function createProductPipeline({
       await structuredStore.save(merged);
       return { records: incoming };
     },
-    narrativeSettings: narrativeSettings ?? settings.narrativeSettings,
+    narrativeSettings: resolvedNarrativeSettings,
   });
 }
 
@@ -212,4 +217,21 @@ export async function advanceProductCursor(
 export function loadProductCursor(metadata, metaKey = META_KEY) {
   assertMetadata(metadata);
   return metadata[metaKey]?.product_cursor ?? null;
+}
+
+/** Clears only product-derived stores for an explicit rescan/rebuild. */
+export async function resetProductMemory(
+  metadata,
+  saveMetadata = async () => {},
+  metaKey = META_KEY,
+) {
+  assertMetadata(metadata);
+  if (typeof saveMetadata !== 'function') throw new TypeError('saveMetadata must be a function');
+  const root = (metadata[metaKey] ??= {});
+  root.product_cursor = null;
+  root.narrative = null;
+  root.structured_records = [];
+  root.ingest_windows = {};
+  await saveMetadata();
+  return root;
 }

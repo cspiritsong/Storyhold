@@ -2,7 +2,7 @@
 
 **Status:** E0 single-extension contract and writer kill-list
 **Owner:** Bobby/default
-**Source plan:** `/home/badi/.hermes/plans/2026-08-21_092551-smart-memory-extension-only.md`
+**Source plan:** Smart-Memory Extension-Only Replan (Hermes plan artifact, 2026-08-21)
 
 ## Goal
 

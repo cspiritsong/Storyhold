@@ -31,6 +31,7 @@ import { saveSettingsDebounced } from '../../../../script.js';
 import { META_KEY } from './constants.js';
 import { smLog } from './logging.js';
 import { pruneNarrativeAtBranch } from './narrative-chain.js';
+import { pruneStructuredRecordsAtBranch } from './structured-records.js';
 import { loadCharacterMemories, saveCharacterMemories } from './longterm.js';
 import { loadSessionMemories, saveSessionMemories } from './session.js';
 import { loadStateLedger, saveStateLedger } from './state-ledger.js';
@@ -80,7 +81,7 @@ export async function detectAndPruneInFileBranch(characterName) {
   if (!detection.truncated) return null;
 
   const branchPoint = detection.branchPointMesId;
-  const counts = { longterm: 0, session: 0, ledger: 0, narrative: 0 };
+  const counts = { longterm: 0, session: 0, ledger: 0, narrative: 0, structured: 0 };
 
   // Long-term memories for the active character (routed to the per-chat
   // container when memory scope is Per chat).
@@ -126,6 +127,16 @@ export async function detectAndPruneInFileBranch(characterName) {
     }
   }
 
+  if (Array.isArray(meta.structured_records)) {
+    const result = pruneStructuredRecordsAtBranch(meta.structured_records, {
+      branchPointMesId: branchPoint,
+    });
+    if (result.changed) {
+      meta.structured_records = result.kept;
+      counts.structured = result.removed.length;
+    }
+  }
+
   // Roll both watermarks back to the branch point so the next pass starts
   // from the first divergent message instead of replaying history.
   meta.lastExtractMesId = branchPoint;
@@ -143,11 +154,11 @@ export async function detectAndPruneInFileBranch(characterName) {
   context.saveMetadata();
   saveSettingsDebounced();
 
-  const total = counts.longterm + counts.session + counts.ledger + counts.narrative;
+  const total = counts.longterm + counts.session + counts.ledger + counts.narrative + counts.structured;
   if (typeof toastr !== 'undefined') {
     toastr.info(
       `In-chat branch detected - memory rolled back to message ${branchPoint} ` +
-        `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative).`,
+        `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative, ${counts.structured} structured).`,
       'Smart Memory',
       { timeOut: 7000, positionClass: 'toast-bottom-right' },
     );

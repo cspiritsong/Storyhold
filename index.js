@@ -172,7 +172,9 @@ import {
   createProductPipeline,
   advanceProductCursor,
   loadProductCursor,
+  resetProductMemory,
 } from './product-runtime.js';
+import { runProductCatchUp } from './product-catchup.js';
 import {
   setStatusMessage,
   updateShortTermUI,
@@ -426,6 +428,7 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
     branchUid,
     cursor,
     lineage,
+    maxMessages: settings.product_window_size ?? 40,
   });
   if (!window) return null;
 
@@ -441,7 +444,6 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
       narrativeSettings,
       timeline,
     },
-    narrativeSettings,
     shouldAbort: chatChanged,
     saveMetadata: async () => {
       if (chatChanged()) throw CHAT_SWITCHED;
@@ -471,7 +473,6 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
 
   const result = await pipeline.ingest(window, {
     shouldAbort: chatChanged,
-    narrativeSettings,
   });
   if (chatChanged()) return result;
   if (result.status === 'completed') {
@@ -480,6 +481,36 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
       await context.saveMetadata();
     });
   }
+  if (!chatChanged()) maybeInjectUnified();
+  return result;
+}
+
+/** Runs product-mode catch-up over bounded windows until the chat is current. */
+async function runSingleExtensionCatchUp({ rescan = false } = {}) {
+  const context = getContext();
+  const settings = getSettings();
+  const capturedGen = chatLoadId;
+  const chatChanged = () => chatLoadId !== capturedGen;
+  if (!context.chatMetadata || !Array.isArray(context.chat)) {
+    return { windows: 0, last: null, cancelled: false, exhausted: true };
+  }
+
+  if (rescan) {
+    await resetProductMemory(context.chatMetadata, async () => {
+      if (chatChanged()) throw CHAT_SWITCHED;
+      await context.saveMetadata();
+    });
+  }
+
+  const result = await runProductCatchUp({
+    ingestOne: async () =>
+      runSingleExtensionIngest(
+        getCurrentCharacterName(),
+        () => chatChanged() || catchUpCancelled,
+      ),
+    shouldAbort: () => chatChanged() || catchUpCancelled,
+    maxWindows: settings.product_catchup_max_windows ?? 1000,
+  });
   if (!chatChanged()) maybeInjectUnified();
   return result;
 }
@@ -2324,6 +2355,7 @@ jQuery(async function () {
     applyDuplicateRemoval,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
+    runProductCatchUp: runSingleExtensionCatchUp,
   });
   initTooltips();
   initTypePickers();

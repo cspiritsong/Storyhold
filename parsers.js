@@ -222,10 +222,9 @@ export function parseArcOutput(text, existingArcs) {
   let match;
   while ((match = addPattern.exec(text)) !== null) {
     const content = match[1].trim();
-    // Require a minimum length to filter obvious noise; rely on the prompt
-    // to distinguish arcs from facts rather than vocabulary-based signals,
-    // which reject valid arcs from models that phrase threads as noun phrases.
-    if (content.length > 15) toAdd.push({ content, ts: Date.now() });
+    // Require a minimum length to filter obvious noise while accepting concise
+    // but meaningful arc labels and noun phrases.
+    if (content.length > 5) toAdd.push({ content, ts: Date.now() });
   }
 
   while ((match = resolvedPattern.exec(text)) !== null) {

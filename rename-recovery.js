@@ -1,4 +1,5 @@
 import { CHARACTER_TIER_KEYS } from './scope-core.js';
+import { canonicalMessage, hash32 } from './identity.js';
 
 export const NAMESPACE_STATUS = Object.freeze({
   LINKED: 'linked',
@@ -20,34 +21,13 @@ export function canRelinkCandidate(candidate, { manual = false } = {}) {
 
 const HASH_SEEDS = [0x811c9dc5, 0x01000193];
 
-function normalizeMessage(message) {
-  return JSON.stringify({
-    name: String(message?.name ?? ''),
-    is_user: Boolean(message?.is_user),
-    is_system: Boolean(message?.is_system),
-    mes: String(message?.mes ?? '')
-      .replace(/\r\n?/g, '\n')
-      .replace(/\s+/g, ' ')
-      .trim(),
-  });
-}
-
-function hash32(text, seed) {
-  let hash = seed >>> 0;
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
-}
-
 /**
  * Canonical fingerprint for rename detection. It intentionally excludes mesId,
  * timestamps, swipes, and filename metadata: a rename should not change it.
  */
 export function canonicalTranscriptFingerprint(chat) {
   const messages = Array.isArray(chat) ? chat : [];
-  const canonical = messages.map(normalizeMessage).join('\n');
+  const canonical = messages.map(canonicalMessage).join('\n');
   return `chat-v1:${messages.length}:${hash32(canonical, HASH_SEEDS[0])}:${hash32(canonical, HASH_SEEDS[1])}`;
 }
 

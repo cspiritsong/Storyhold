@@ -41,6 +41,7 @@ import {
 } from '../../../../script.js';
 import {
   MODULE_NAME,
+  META_KEY,
   PROMPT_KEY_SHORT,
   PROMPT_KEY_LONG,
   PROMPT_KEY_SESSION,
@@ -52,6 +53,7 @@ import {
   PROMPT_KEY_RELATIONSHIPS,
   PROMPT_KEY_EPISTEMIC,
   PROMPT_KEY_STATE_LEDGER,
+  PROMPT_KEY_REPAIR,
   PROMPT_KEY_UNIFIED,
   estimateTokens,
 } from './constants.js';
@@ -86,6 +88,7 @@ const INDIVIDUAL_KEYS = [
     ...TIER_ORDER.map((tier) => tier.key),
     ...BROKER_SLOT_SECTIONS.map(({ key }) => key),
     PROMPT_KEY_TRIGGERED,
+    PROMPT_KEY_REPAIR,
   ]),
 ];
 
@@ -164,7 +167,7 @@ export function injectUnified() {
   const settings = extension_settings[MODULE_NAME];
   if (settings.single_extension_mode) {
     const context = getContext();
-    const meta = context.chatMetadata?.[MODULE_NAME === 'smart_memory' ? 'smartMemory' : MODULE_NAME] ?? {};
+    const meta = context.chatMetadata?.[META_KEY] ?? {};
     const lineage = getCurrentLineage();
     const structuredRecords = Array.isArray(meta.structured_records)
       ? meta.structured_records

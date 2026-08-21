@@ -104,6 +104,7 @@ export async function verifyAndInheritCurrentBranch() {
   const inheritedSmartMemory = inheritSmartMemoryMetadata(parentSmartMemory, {
     parentChatId,
     branchChatId,
+    branchChatUid: context.chatMetadata?.[META_KEY]?.chat_uid ?? branchChatId,
     parentPrefixEnd: lineage.prefix_end,
     branchPrefixLength: lineage.prefix_length,
     branchPrefixMesId: typeof branchPrefixMesId === 'number' ? branchPrefixMesId : null,
