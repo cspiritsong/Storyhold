@@ -1,0 +1,15 @@
+{
+  "settings": {
+    "snippets_per_layer": 2,
+    "snippets_per_promotion": 2,
+    "max_layers": 4
+  },
+  "windows": [
+    {
+      "window_id": "chat-a:branch-a:mesId:10-11:window-a",
+      "source_range": { "kind": "mesId", "start": 10, "end": 11 },
+      "fingerprint": "window-a",
+      "story_text": "Mira takes the silver key and promises to help."
+    }
+  ]
+}
