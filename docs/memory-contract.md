@@ -13,8 +13,16 @@ The raw chat JSONL is the evidence layer. **Derived records never outrank the ra
 transcript that produced them.** A summary, state card, vector result, or profile is a
 projection and must remain traceable to its source messages.
 
-## Ownership
+## Implementation boundary
 
+This redesign is **solely a SillyTavern extension**. All components must remain inside
+extension code and SillyTavern-supported browser/chat storage: chat metadata, extension
+settings for small configuration, browser storage where appropriate, and optional native
+Vector Storage APIs. There is no sidecar service, separate database process, or core fork
+in the base architecture. Auxiliary model calls are initiated and bounded by the
+extension; they are not a reason to introduce a new runtime service.
+
+## Ownership
 | Owner | Owns | Prompt role |
 |---|---|---|
 | Smart-Memory | Structured facts, relationships, active arcs, epistemic/POV state, current entity state | Current structured state and selected facts |
