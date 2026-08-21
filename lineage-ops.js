@@ -44,12 +44,7 @@ async function loadParentChat(parentChatId) {
 
 function resetBranchContainer(characterName, branchChatId, inheritedMemories) {
   const store = extension_settings[MODULE_NAME]?.characters;
-  if (
-    extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT ||
-    !store ||
-    !characterName ||
-    !branchChatId
-  ) {
+  if (!store || !characterName || !branchChatId) {
     return 0;
   }
 
@@ -74,12 +69,7 @@ export async function verifyAndInheritCurrentBranch() {
   const context = getContext();
   const branchChatId = getCurrentChatId() ?? null;
   const parentChatId = context.chatMetadata?.main_chat ?? null;
-  if (
-    extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT ||
-    !branchChatId ||
-    !parentChatId ||
-    context.groupId
-  ) {
+  if (!branchChatId || !parentChatId || context.groupId) {
     return null;
   }
 

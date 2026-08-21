@@ -20,20 +20,17 @@
         </label>
       </div>
 
-      <!-- Memory scope (fork: per-chat isolation) -->
+      <!-- Memory scope: Smart Memory is intentionally chat-only -->
       <div class="sm-block">
-        <label for="sm_memory_scope" style="display: block; margin-bottom: 4px">
+        <label style="display: block; margin-bottom: 4px">
           Memory scope
           <span
             class="sm-info"
-            data-tooltip="Per character: long-term memories are shared across all chats with this character (upstream behaviour). Per chat: each chat gets its own isolated long-term memory - new chats start clean and never see other chats' memories. Switching to Per chat seeds the current chat so it keeps its accumulated memory."
+            data-tooltip="All mutable Smart-Memory data is isolated to this chat. The character card remains reference material; memories are never shared automatically with another chat."
             >ⓘ</span
           >
         </label>
-        <select id="sm_memory_scope" class="text_pole widthNatural">
-          <option value="character">Per character (shared across chats)</option>
-          <option value="chat">Per chat (isolated)</option>
-        </select>
+        <div class="sm-muted">Per chat (fixed)</div>
       </div>
 
       <!-- Embedding inactive notice - toggled by updateEmbeddingNotice() in index.js -->
@@ -100,21 +97,10 @@
           <button id="sm_clear_chat_context" class="menu_button menu_button_icon">
             <i class="fa-solid fa-broom"></i>
             <span>
-              Forget This Chat
+              Clear Chat Memory
               <span
                 class="sm-info"
-                data-tooltip="Clears all Smart Memory context specific to this chat. Long-term memories, relationship history, Perspectives &amp; Secrets, state cards, canon, and pinned arcs are not affected."
-                >ⓘ</span
-              >
-            </span>
-          </button>
-          <button id="sm_fresh_start_button" class="menu_button menu_button_icon">
-            <i class="fa-solid fa-rotate-left"></i>
-            <span>
-              Fresh Start
-              <span
-                class="sm-info"
-                data-tooltip="Permanently deletes all Smart Memory data for this character and chat - long-term memories, canon, all chat context, everything. Cannot be undone."
+                data-tooltip="Clears all derived Smart-Memory data for this chat only. The raw chat transcript, character card, and other chats are not changed."
                 >ⓘ</span
               >
             </span>
@@ -149,7 +135,7 @@
           <div class="sm-btn-row" style="margin-top: 6px">
             <button id="sm_manage_character_chat_memory" class="menu_button menu_button_icon">
               <i class="fa-solid fa-list-check"></i>
-              <span>Manage Character Chat Memory</span>
+              <span>Manage Chat Memory</span>
             </button>
           </div>
           <div id="sm_character_memory_manager" style="display: none">
@@ -195,10 +181,10 @@
         <label class="checkbox_label">
           <input id="sm_read_only" type="checkbox" />
           <span>
-            Read-only mode - protect character memories
+            Read-only mode - protect this chat's memory
             <span
               class="sm-info"
-              data-tooltip="The character arrives with all their memories and behaves normally, but nothing from this chat is saved. Use it to try out a risky scene before committing it to their history, or to let loose without consequences - wreck the relationship, start a fight, test a dramatic confession. Turn it off again and their memories are exactly as you left them."
+              data-tooltip="Nothing from this chat is saved while read-only mode is active. The character card remains available as reference, but this chat's memory is not changed."
               >ⓘ</span
             >
           </span>
@@ -230,7 +216,7 @@
         </button>
       </div>
 
-      <!-- Hidden backing store for the group character selection - driven by clicking the per-character token bar rows -->
+      <!-- Hidden backing store for the group character selection - driven by clicking the per-chat token rows -->
       <select id="sm_group_char_select" style="display: none"></select>
 
       <!-- ══ LONG-TERM ══ -->
@@ -238,15 +224,15 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_longterm_enabled" class="sm-section-toggle" />
-          Long-term Memory
+          Long-term Chat Memory
           <span
             class="sm-info"
-            data-tooltip="Extracts facts, relationship history, preferences, and significant events from the conversation and stores them permanently per character. These memories are injected at the start of every chat with that character so the AI always knows who they are."
+            data-tooltip="Extracts durable facts, relationships, preferences, and significant events from this chat and stores them in this chat's isolated memory namespace. Other chats do not read them."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
-          <p class="sm-section-title">Memories for Current Character</p>
+          <p class="sm-section-title">Memory for Current Chat</p>
           <div id="sm_memories_list" class="sm_memories_list"></div>
           <div class="sm-block sm-btn-row" style="margin-top: 6px">
             <button id="sm_extract_now" class="menu_button menu_button_icon">
@@ -283,7 +269,7 @@
           </div>
           <div class="sm-block">
             <label
-              >Max stored memories per character:
+              >Max stored memories per chat:
               <b><span id="sm_longterm_max_memories_value"></span></b
             ></label>
             <input

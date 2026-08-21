@@ -18,11 +18,11 @@
  */
 
 /**
- * Long-term memory: per-character persistent facts stored in extension_settings.
+ * Long-term memory: chat-local durable facts stored in scoped extension settings.
  *
- * Memories survive across all sessions and are injected at the start of every
- * new chat with the same character. A fresh-start flag in chatMetadata suppresses
- * extraction for a specific chat while keeping injection active.
+ * Memories survive across turns and reloads of this chat, but never become
+ * automatically visible in another chat with the same character. Read-only mode
+ * suppresses extraction for a specific chat while keeping that chat's data intact.
  *
  * loadCharacterMemories       - returns the stored memory array for a character
  * saveCharacterMemories       - persists the memory array for a character
@@ -250,6 +250,7 @@ export function saveCharacterMemories(characterName, memories) {
   // Spread semantics are preserved by the scoped container: writing a field
   // on it never touches sibling tiers (entities, canon, chats, etc.).
   const container = getCharacterContainer(characterName);
+  if (!container) return;
   container.memories = memories;
   container.lastUpdated = Date.now();
 }
@@ -303,7 +304,9 @@ export function loadRelationshipHistory(characterName) {
  */
 export function saveRelationshipHistory(characterName, history) {
   if (!characterName || typeof history !== 'object') return;
-  getCharacterContainer(characterName).relationship_history = history;
+  const container = getCharacterContainer(characterName);
+  if (!container) return;
+  container.relationship_history = history;
 }
 
 /**

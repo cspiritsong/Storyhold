@@ -4,7 +4,7 @@ import {
 } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, SCHEMA_VERSION, generateMemoryId } from './constants.js';
-import { MEMORY_SCOPE_CHAT } from './scope-core.js';
+import { isPerChatScope } from './scope.js';
 import { LINEAGE_STATUS } from './lineage.js';
 import { retagNarrativeChatUid } from './narrative-chain.js';
 import {
@@ -58,7 +58,7 @@ function mergeAliases(meta, values) {
  * legacy-only candidates remain visible to the audit/recovery UI.
  */
 export async function ensureStableChatIdentity() {
-  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) return null;
+  if (!isPerChatScope()) return null;
   const context = getContext();
   const chatId = getCurrentChatId() ?? null;
   if (!context?.chatMetadata || chatId == null) return null;
@@ -145,7 +145,7 @@ export async function ensureStableChatIdentity() {
  * Read-only metadata audit for the active character/chat.
  */
 export function auditCurrentChatNamespaces() {
-  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+  if (!isPerChatScope()) {
     return { status: 'not-per-chat-scope', candidates: [], namespaces: [] };
   }
   const context = getContext();
@@ -245,7 +245,7 @@ export async function archiveCurrentNamespace(namespaceKey, reason = 'manual-orp
 }
 
 function chatMemoryManagerState() {
-  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+  if (!isPerChatScope()) {
     return { status: 'not-per-chat-scope', active: [], archives: [] };
   }
   const context = getContext();
@@ -270,7 +270,7 @@ export function listCurrentCharacterChatMemory() {
 
 /** Permanently nukes selected active derived namespaces; raw chats/vectors are untouched. */
 export function nukeCurrentCharacterChatMemory(keys = []) {
-  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+  if (!isPerChatScope()) {
     return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
   }
   const store = currentNamespaceStore(getContext());
@@ -281,7 +281,7 @@ export function nukeCurrentCharacterChatMemory(keys = []) {
 
 /** Permanently nukes every active chat namespace for the current character. */
 export function nukeAllCurrentCharacterChatMemory() {
-  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+  if (!isPerChatScope()) {
     return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
   }
   const store = currentNamespaceStore(getContext());
@@ -292,7 +292,7 @@ export function nukeAllCurrentCharacterChatMemory() {
 
 /** Permanently empties the rollback archive for the current character. */
 export function emptyCurrentCharacterRollbackArchive() {
-  if (extension_settings[MODULE_NAME]?.memory_scope !== MEMORY_SCOPE_CHAT) {
+  if (!isPerChatScope()) {
     return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
   }
   const store = currentNamespaceStore(getContext());

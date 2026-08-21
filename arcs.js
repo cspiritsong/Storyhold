@@ -34,15 +34,13 @@
  * injectArcs             - pushes active arcs into the prompt via setExtensionPrompt
  * loadArcSummaries       - returns the stored arc summary array for the current chat
  * clearArcSummaries      - empties all arc summaries for the current chat
- * loadPersistentArcs     - returns the character-level persistent arc array
- * savePersistentArcs     - writes a persistent arc array to character-level storage
- * mergePersistentArcs    - merges character-level persistent arcs into chatMetadata on chat open
- * loadGroupPersistentArcs  - returns the group-level persistent arc array
- * saveGroupPersistentArcs  - writes a persistent arc array to group-level storage
- * mergeGroupPersistentArcs - merges group-level persistent arcs into chatMetadata on chat open
+ * loadPersistentArcs     - returns chat-local pinned arc entries
+ * savePersistentArcs     - writes pinned arc entries to the current chat
+ * loadGroupPersistentArcs  - returns chat-local pinned group arc entries
+ * saveGroupPersistentArcs  - writes pinned group arc entries to the current chat
  * pruneOrphanedGroupArcs  - removes group arc stores for groups that no longer exist
- * promoteArc             - marks a chat arc as persistent and saves it to character or group level
- * demoteArc              - removes the persistent flag from an arc and cleans character or group level
+ * promoteArc             - marks a chat arc as pinned within the current chat
+ * demoteArc              - removes the pinned flag from a current-chat arc
  * resolveArc             - manually marks an arc as resolved (moves to resolved panel)
  * resolveArcWithSummary  - resolves an arc and generates an arc summary for canon
  * reopenArc              - removes the resolved flag from a persistent arc and reactivates it
@@ -266,12 +264,10 @@ export async function clearArcSummaries() {
   }
 }
 
-// ---- Persistent arcs (cross-chat) ----------------------------------------
+// ---- Pinned arcs (current-chat only) -----------------------------------
 
 /**
- * Returns the persistent arc array for the given character.
- * Persistent arcs are stored at the character level so they survive
- * across chats and are merged into new chats on load.
+ * Returns the pinned arc array for the current chat and character projection.
  * @param {string} characterName
  * @returns {Array<{content: string, ts: number, persistent: true}>}
  */
@@ -281,20 +277,20 @@ export function loadPersistentArcs(characterName) {
 }
 
 /**
- * Overwrites the persistent arc array for the given character and persists it.
+ * Overwrites the pinned arc array for the current chat and character projection.
  * @param {string} characterName
  * @param {Array<{content: string, ts: number, persistent: true}>} arcs
  */
 export function savePersistentArcs(characterName, arcs) {
   if (!characterName) return;
-  getCharacterContainer(characterName).persistent_arcs = arcs;
+  const container = getCharacterContainer(characterName);
+  if (!container) return;
+  container.persistent_arcs = arcs;
   saveSettingsDebounced();
 }
 
 /**
- * Returns the persistent arc array for the given group.
- * Group persistent arcs are stored at the group level so they survive
- * across chats and are merged into new group chats on load.
+ * Returns the pinned arc array for the current chat and group projection.
  * @param {string} groupId
  * @returns {Array<{content: string, ts: number, persistent: true}>}
  */
@@ -310,7 +306,9 @@ export function loadGroupPersistentArcs(groupId) {
  */
 export function saveGroupPersistentArcs(groupId, arcs) {
   if (!groupId) return;
-  getGroupContainer(groupId).persistent_arcs = arcs;
+  const container = getGroupContainer(groupId);
+  if (!container) return;
+  container.persistent_arcs = arcs;
   saveSettingsDebounced();
 }
 
@@ -333,73 +331,6 @@ export function pruneOrphanedGroupArcs() {
   if (changed) saveSettingsDebounced();
 }
 
-/**
- * Merges group-level persistent arcs into the current chat's arc list.
- * Called once on chat load so that injection and extraction see persistent
- * arcs as part of the normal arc list without any special-casing elsewhere.
- * Arcs already present in the chat (persistent or otherwise) are skipped.
- * @param {string} groupId
- */
-export async function mergeGroupPersistentArcs(groupId) {
-  if (!groupId) return;
-  const persistent = loadGroupPersistentArcs(groupId);
-  if (persistent.length === 0) return;
-
-  const existing = loadArcs();
-  const toAdd = [];
-  for (const p of persistent) {
-    let found = false;
-    // Check against all arcs including resolved - a resolved arc should not
-    // resurface as active, and a duplicate of an active arc should not be added.
-    for (const e of existing) {
-      if (await arcIsDuplicate(p.content, e.content)) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) toAdd.push(p);
-  }
-  if (toAdd.length === 0) return;
-
-  // Preserve the resolved flag from the persistent store so arcs that were
-  // resolved in a previous chat arrive already marked as closed.
-  const merged = [...existing, ...toAdd.map((a) => ({ ...a, persistent: true }))];
-  await saveArcs(merged);
-}
-
-/**
- * Merges character-level persistent arcs into the current chat's arc list.
- * Called once on chat load so that injection and extraction see persistent
- * arcs as part of the normal arc list without any special-casing elsewhere.
- * Arcs already present in the chat (persistent or otherwise) are skipped.
- * @param {string} characterName
- */
-export async function mergePersistentArcs(characterName) {
-  if (!characterName) return;
-  const persistent = loadPersistentArcs(characterName);
-  if (persistent.length === 0) return;
-
-  const existing = loadArcs();
-  const toAdd = [];
-  for (const p of persistent) {
-    let found = false;
-    // Check against all arcs including resolved - a resolved arc should not
-    // resurface as active, and a duplicate of an active arc should not be added.
-    for (const e of existing) {
-      if (await arcIsDuplicate(p.content, e.content)) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) toAdd.push(p);
-  }
-  if (toAdd.length === 0) return;
-
-  // Preserve the resolved flag from the persistent store so arcs that were
-  // resolved in a previous chat arrive already marked as closed.
-  const merged = [...existing, ...toAdd.map((a) => ({ ...a, persistent: true }))];
-  await saveArcs(merged);
-}
 
 /**
  * Marks an arc as persistent: saves it to character-level or group-level

@@ -39,11 +39,9 @@ import {
 import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/popup.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 import {
-  seedCurrentChatFromCharacter,
-  seedCurrentChatGroupFromGroup,
+  MEMORY_SCOPE_CHAT,
   pinChatScope,
   unpinChatScope,
-  isPerChatScope,
 } from './scope.js';
 import {
   estimateTokens,
@@ -170,9 +168,9 @@ import {
 export const defaultSettings = {
   enabled: true,
   settings_mode: 'simple',
-  // Memory scope: 'character' (shared across chats, upstream behaviour) or
-  // 'chat' (long-term tiers isolated per chat - fork feature).
-  memory_scope: 'character',
+  // Memory is always isolated per chat. The character card is reference material,
+  // not a mutable cross-chat memory store.
+  memory_scope: MEMORY_SCOPE_CHAT,
   extraction_frequency: 'medium',
 
   // Single-extension product path. When enabled, the event shell uses the
@@ -380,7 +378,7 @@ export const defaultSettings = {
   // in the system prompt or other card fields without needing this toggle.
   macros_enabled: false,
 
-  // Per-character memory storage (populated at runtime by longterm.js)
+  // Compatibility storage map for per-chat namespaces (populated by scope.js).
   characters: {},
 };
 
@@ -688,6 +686,10 @@ export function loadSettings() {
       current[key] = value;
     }
   }
+  // The runtime is intentionally chat-only. Migrate older selectable-scope
+  // settings to the fixed chat boundary without deleting dormant legacy data.
+  const scopeChanged = current.memory_scope !== MEMORY_SCOPE_CHAT;
+  current.memory_scope = MEMORY_SCOPE_CHAT;
   // Migration: preserve the old effective allocation as the initial cap, but
   // never allow a cap that cannot satisfy the enabled tier floors.
   const migratedTotal = hadTotalInjectBudget
@@ -699,7 +701,7 @@ export function loadSettings() {
   );
   const totalChanged = current.total_inject_budget !== normalizedTotal;
   current.total_inject_budget = normalizedTotal;
-  if (totalChanged) saveSettingsDebounced();
+  if (totalChanged || scopeChanged) saveSettingsDebounced();
 
   // Migration: replace old bracket-wrapped template defaults with plain-text equivalents.
   // Only affects users who never customized these fields (exact match on the old default).
@@ -911,7 +913,7 @@ export function bindSettingsUI(ctrl) {
     const $rows = $('#sm_character_memory_rows').empty();
     const $archives = $('#sm_character_memory_archives').empty();
     if (!state || state.status !== 'ok') {
-      $status.text('Character memory manager is available only when Memory scope is Per chat (isolated).');
+      $status.text('Chat memory manager is available for the current chat.');
       $('#sm_nuke_selected_chat_memory, #sm_nuke_all_chat_memory, #sm_empty_rollback_archive').prop('disabled', true);
       $('#sm_unlink_force_link').hide();
       return;
@@ -1250,41 +1252,6 @@ export function bindSettingsUI(ctrl) {
         // Restore injections from stored data so the user picks up where they left off.
         ctrl.onChatChanged();
       }
-    });
-
-  // ---- Memory scope (fork: per-chat isolation) ---------------------------
-  $('#sm_memory_scope')
-    .val(s.memory_scope ?? 'character')
-    .on('change', function () {
-      const next = $(this).val();
-      const prev = extension_settings[MODULE_NAME].memory_scope ?? 'character';
-      if (next === prev) return;
-      extension_settings[MODULE_NAME].memory_scope = next;
-      if (next === 'chat') {
-        // Keep the ongoing chat's accumulated memory; new chats start clean.
-        const characterName = ctrl.getSelectedCharacterName();
-        if (characterName) {
-          seedCurrentChatFromCharacter(characterName);
-        }
-        const context = getContext();
-        if (context?.groupId) {
-          seedCurrentChatGroupFromGroup(context.groupId);
-        }
-        toastr.info(
-          'Per-chat memory enabled. The current chat was seeded from the character store; new chats start clean.',
-          'Smart Memory',
-          { timeOut: 5000, positionClass: 'toast-bottom-right' },
-        );
-      } else {
-        toastr.info(
-          'Memory is shared per character again. Per-chat data is kept but no longer used.',
-          'Smart Memory',
-          { timeOut: 5000, positionClass: 'toast-bottom-right' },
-        );
-      }
-      saveSettingsDebounced();
-      // Reload injections and tier lists so they reflect the new scope.
-      ctrl.onChatChanged();
     });
 
   // ---- Settings mode toggle -------------------------------------------
@@ -3512,12 +3479,12 @@ export function bindSettingsUI(ctrl) {
     setStatusMessage('Cancelling...');
   });
 
-  // ---- Clear Chat Context ---------------------------------------------
+  // ---- Clear Chat Memory -----------------------------------------------
   $('#sm_clear_chat_context').on('click', async function () {
     if (isCatchUpRunning()) return;
     if (
       !(await callGenericPopup(
-        'Clear all Smart Memory context for this chat?\n\nPerspectives & Secrets entries are also cleared.\nLong-term memories, relationship history, state cards, canon, and pinned arcs are not affected.',
+        'Clear all Smart Memory for this chat?\n\nThis removes every derived memory belonging to this chat, including long-term chat memory, relationships, Perspectives & Secrets, state cards, canon, summaries, scenes, arcs, profiles, and the memory cursor.\n\nWILL SURVIVE: the raw chat transcript, the character card, and other chats. This cannot be undone.',
         POPUP_TYPE.CONFIRM,
       ))
     )
@@ -3527,24 +3494,35 @@ export function bindSettingsUI(ctrl) {
     const context = getContext();
     if (!context.chatMetadata) context.chatMetadata = {};
     if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
-    // Wipe short-term summary state.
+    if (characterName) {
+      clearCharacterMemories(characterName);
+      clearRelationshipHistory(characterName);
+      clearEpistemicKnowledge(characterName);
+      clearCanon(characterName);
+      saveSettingsDebounced();
+    }
+    if (extension_settings[MODULE_NAME].single_extension_mode) {
+      await resetProductMemory(context.chatMetadata);
+    }
+    // Wipe chat-local summary state and all other chat-local tiers.
     delete context.chatMetadata[META_KEY].summary;
     delete context.chatMetadata[META_KEY].summaryEnd;
     delete context.chatMetadata[META_KEY].summaryUpdated;
 
-    // Clear the other chat-scoped tiers.
     await clearSessionMemories();
     await clearSessionEntityRegistry();
     await clearSceneHistory();
     await clearArcs();
     await clearArcSummaries();
-    await clearProfiles();
-    // Epistemic knowledge is extension_settings-scoped (persists across chats)
-    // and is intentionally NOT cleared here - same reasoning as state ledger.
+    await clearProfiles(characterName);
+    await clearStateLedger();
+    $('#sm_recap_overlay').remove();
     await context.saveMetadata();
 
-    // Clearing chatMetadata means loadAndInjectSummary will clear the slot.
+    // Clear all injection slots and cached unified content.
+    clearUnifiedSlot();
     loadAndInjectSummary();
+    await injectMemories(characterName);
     injectSessionMemories();
     injectSceneHistory();
     injectArcs();
@@ -3553,6 +3531,8 @@ export function bindSettingsUI(ctrl) {
     injectEpistemicKnowledge(characterName, characterName);
 
     updateShortTermUI(null);
+    updateLongTermUI(characterName);
+    updateRelationshipHistoryUI(characterName);
     updateEpistemicUI(characterName);
     updateSessionUI();
     updateScenesUI();
@@ -3562,101 +3542,7 @@ export function bindSettingsUI(ctrl) {
     updateTokenDisplay();
     ctrl.sceneMessageBuffer = [];
     ctrl.sceneBufferLastIndex = -1;
-    setStatusMessage('Chat context cleared.');
-  });
-
-  // ---- Fresh Start ----------------------------------------------------
-  $('#sm_fresh_start_button').on('click', async function () {
-    if (isCatchUpRunning()) return;
-    const characterName = ctrl.getSelectedCharacterName();
-    const nameLabel = characterName ? `"${characterName}"` : 'this character';
-    // Scope-aware, staged confirmation: name the blast radius up front, then
-    // spell out what is deleted and what survives.
-    const perChat = isPerChatScope();
-    const scopeLine = perChat
-      ? `This will wipe ONLY THIS CHAT with ${nameLabel}.\nAll other chats with this character - and the character-level store - are untouched.`
-      : `This will wipe ALL Smart Memory data for ${nameLabel} across EVERY chat - the full character-level store.`;
-    const deletedLine =
-      'WILL BE DELETED: long-term memories, relationship history, canon, epistemic knowledge, entity registry, rolling summary, session memories, scene history, story arcs, and profiles.';
-    const keptLine = perChat
-      ? 'WILL SURVIVE: the chat transcript, the character card, all other chats with this character, and the character-level store.'
-      : 'WILL SURVIVE: only the chat transcript and the character card.';
-    if (
-      !(await callGenericPopup(
-        `FRESH START - NUCLEAR OPTION\n\n${scopeLine}\n\n${deletedLine}\n\n${keptLine}\n\nThis cannot be undone. Continue?`,
-        POPUP_TYPE.CONFIRM,
-      ))
-    )
-      return;
-
-    // Clear long-term memories, relationship history, epistemic knowledge, and canon for the character.
-    if (characterName) {
-      clearCharacterMemories(characterName);
-      clearRelationshipHistory(characterName);
-      clearEpistemicKnowledge(characterName);
-      clearCanon(characterName);
-      saveSettingsDebounced();
-    }
-
-    // Clear all chat-scoped tiers.
-    const context = getContext();
-    if (!context.chatMetadata) context.chatMetadata = {};
-    if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
-    if (extension_settings[MODULE_NAME].single_extension_mode) {
-      await resetProductMemory(context.chatMetadata);
-    }
-    delete context.chatMetadata[META_KEY].summary;
-    delete context.chatMetadata[META_KEY].summaryEnd;
-    delete context.chatMetadata[META_KEY].summaryUpdated;
-    delete context.chatMetadata[META_KEY].lastExtractCutoff;
-
-    await clearSessionMemories();
-    await clearSessionEntityRegistry();
-    await clearSceneHistory();
-    await clearArcs();
-    await clearArcSummaries();
-    await clearProfiles(characterName);
-    await clearStateLedger();
-    // Dismiss any open recap modal.
-    $('#sm_recap_overlay').remove();
-
-    await context.saveMetadata();
-
-    // Clear all injection slots.
-    clearUnifiedSlot();
-    loadAndInjectSummary();
-    await injectMemories(characterName);
-    injectSessionMemories();
-    injectSceneHistory();
-    injectArcs();
-    injectProfiles(characterName);
-    injectStateLedger();
-
-    updateShortTermUI(null);
-    updateLongTermUI(characterName);
-    updateRelationshipHistoryUI(characterName);
-    updateEpistemicUI(characterName);
-    updateFreshStartUI(isFreshStart());
-    updateSessionUI();
-    updateScenesUI();
-    updateArcsUI();
-    updateCanonUI(characterName);
-    updateProfilesUI(null);
-    updateTokenDisplay();
-    ctrl.sceneMessageBuffer = [];
-    ctrl.sceneBufferLastIndex = -1;
-    setStatusMessage(perChat ? 'Fresh start complete (this chat).' : 'Fresh start complete.');
-    if (perChat) {
-      toastr.success(`This chat's memories cleared for ${nameLabel}.`, 'Smart Memory', {
-        timeOut: 4000,
-        positionClass: 'toast-bottom-right',
-      });
-    } else {
-      toastr.success(`All memories cleared for ${nameLabel}.`, 'Smart Memory', {
-        timeOut: 4000,
-        positionClass: 'toast-bottom-right',
-      });
-    }
+    setStatusMessage('Chat memory cleared.');
   });
 
   // ---- Embedding deduplication ----------------------------------------

@@ -180,7 +180,9 @@ export function loadEpistemicKnowledge(characterName) {
  */
 export function saveEpistemicKnowledge(characterName, entries) {
   if (!characterName || !Array.isArray(entries)) return;
-  getCharacterContainer(characterName).epistemic_knowledge = entries;
+  const container = getCharacterContainer(characterName);
+  if (!container) return;
+  container.epistemic_knowledge = entries;
   saveSettingsDebounced();
 }
 
@@ -194,7 +196,9 @@ export function clearEpistemicKnowledge(characterName) {
   if (!characterName) return;
   const s = extension_settings[MODULE_NAME];
   if (!s.characters?.[characterName]) return;
-  getCharacterContainer(characterName).epistemic_knowledge = [];
+  const container = getCharacterContainer(characterName);
+  if (!container) return;
+  container.epistemic_knowledge = [];
   saveSettingsDebounced();
 }
 

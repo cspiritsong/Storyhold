@@ -1,7 +1,7 @@
 /**
  * Smart Memory - SillyTavern Extension (fork: badiyee85/Smart-Memory)
  *
- * Memory scope - live SillyTavern wrappers for per-chat isolation.
+ * Memory scope - one chat-local boundary for all mutable Smart-Memory data.
  *
  * All long-term tier accessors (longterm.js, canon.js, arcs.js, epistemic.js,
  * graph-migration.js) route through getCharacterContainer() / getGroupContainer()
@@ -14,34 +14,26 @@
 import { getCurrentChatId } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, SCHEMA_VERSION } from './constants.js';
-import { smLog } from './logging.js';
 import {
-  MEMORY_SCOPE_CHARACTER,
   MEMORY_SCOPE_CHAT,
-  CHARACTER_TIER_KEYS,
-  GROUP_TIER_KEYS,
   getScopedContainer,
   deleteScopedContainer,
-  seedScopedContainer,
   resolveChatScopeId,
 } from './scope-core.js';
 
 export {
-  MEMORY_SCOPE_CHARACTER,
   MEMORY_SCOPE_CHAT,
   pinChatScope,
   unpinChatScope,
 } from './scope-core.js';
 
 /**
- * Returns the active memory scope: 'character' (shared across chats) or
- * 'chat' (isolated per chat). Unknown values fall back to 'character'.
+ * Smart-Memory has one mutable memory boundary: the current chat.
+ * Character cards are reference material, not a shared memory store.
  * @returns {string}
  */
 export function getMemoryScope() {
-  return extension_settings[MODULE_NAME]?.memory_scope === MEMORY_SCOPE_CHAT
-    ? MEMORY_SCOPE_CHAT
-    : MEMORY_SCOPE_CHARACTER;
+  return MEMORY_SCOPE_CHAT;
 }
 
 /**
@@ -54,8 +46,8 @@ export function isPerChatScope() {
 
 /**
  * Returns the current chat id as a string, or null when no chat id is
- * available (e.g. no chat loaded). A null id falls back to the character
- * container, which is safe and matches upstream behaviour.
+ * available (e.g. no chat loaded). A missing chat id fails closed so no
+ * mutable memory can fall back to a character-level container.
  * @returns {string|null}
  */
 export function getChatScopeId() {
@@ -85,11 +77,13 @@ function ensureStore() {
  */
 export function getCharacterContainer(characterName) {
   const s = ensureStore();
+  const chatId = getChatScopeId();
+  if (chatId == null) return null;
   return getScopedContainer(
     s.characters,
     characterName,
-    getChatScopeId(),
-    getMemoryScope(),
+    chatId,
+    MEMORY_SCOPE_CHAT,
     SCHEMA_VERSION,
   );
 }
@@ -101,7 +95,9 @@ export function getCharacterContainer(characterName) {
  */
 export function deleteCharacterContainer(characterName) {
   const s = ensureStore();
-  deleteScopedContainer(s.characters, characterName, getChatScopeId(), getMemoryScope());
+  const chatId = getChatScopeId();
+  if (chatId == null) return;
+  deleteScopedContainer(s.characters, characterName, chatId, MEMORY_SCOPE_CHAT);
 }
 
 /**
@@ -115,11 +111,13 @@ export function getGroupContainer(groupId) {
   if (!extension_settings[MODULE_NAME].group_arcs) {
     extension_settings[MODULE_NAME].group_arcs = {};
   }
+  const chatId = getChatScopeId();
+  if (chatId == null) return null;
   return getScopedContainer(
     extension_settings[MODULE_NAME].group_arcs,
     groupId,
-    getChatScopeId(),
-    getMemoryScope(),
+    chatId,
+    MEMORY_SCOPE_CHAT,
     SCHEMA_VERSION,
   );
 }
@@ -131,57 +129,12 @@ export function getGroupContainer(groupId) {
 export function deleteGroupContainer(groupId) {
   ensureStore();
   if (!extension_settings[MODULE_NAME].group_arcs) return;
+  const chatId = getChatScopeId();
+  if (chatId == null) return;
   deleteScopedContainer(
     extension_settings[MODULE_NAME].group_arcs,
     groupId,
-    getChatScopeId(),
-    getMemoryScope(),
+    chatId,
+    MEMORY_SCOPE_CHAT,
   );
-}
-
-/**
- * Seeds the current chat's scoped container from the character-level store.
- * Called when memory scope switches from 'character' to 'chat' so the ongoing
- * chat keeps its accumulated long-term memory. New chats still start clean.
- *
- * @param {string} characterName
- * @returns {boolean} True when tier data was copied.
- */
-export function seedCurrentChatFromCharacter(characterName) {
-  if (!isPerChatScope() || !characterName) return false;
-  const s = ensureStore();
-  const copied = seedScopedContainer(
-    s.characters,
-    characterName,
-    getChatScopeId(),
-    SCHEMA_VERSION,
-    CHARACTER_TIER_KEYS,
-  );
-  if (copied) {
-    smLog(
-      `[SmartMemory] Per-chat scope: seeded current chat from character store for "${characterName}".`,
-    );
-  }
-  return copied;
-}
-
-/**
- * Seeds the current chat's scoped container from the group-level store.
- * @param {string} groupId
- * @returns {boolean} True when tier data was copied.
- */
-export function seedCurrentChatGroupFromGroup(groupId) {
-  if (!isPerChatScope() || !groupId) return false;
-  if (!extension_settings[MODULE_NAME].group_arcs) return false;
-  const copied = seedScopedContainer(
-    extension_settings[MODULE_NAME].group_arcs,
-    groupId,
-    getChatScopeId(),
-    SCHEMA_VERSION,
-    GROUP_TIER_KEYS,
-  );
-  if (copied) {
-    smLog(`[SmartMemory] Per-chat scope: seeded current chat from group store for "${groupId}".`);
-  }
-  return copied;
 }

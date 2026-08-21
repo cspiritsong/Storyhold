@@ -23,7 +23,7 @@
  *
  * Multi-tier memory and narrative context system:
  *   Short-term    Token-threshold structured summary (progressive compaction).
- *   Long-term     Per-character persistent facts across all sessions.
+ *   Long-term     Durable facts and state within the current chat.
  *   Session       Detailed within-session facts (scene details, revelations).
  *   Scene history Mini-summaries of completed scenes for scene-transition context.
  *   Story arcs    Open plot threads - promises made, tensions, mysteries.
@@ -100,8 +100,6 @@ import {
   injectArcs,
   loadArcs,
   loadArcSummaries,
-  mergePersistentArcs,
-  mergeGroupPersistentArcs,
   loadGroupPersistentArcs,
   saveGroupPersistentArcs,
   pruneOrphanedGroupArcs,
@@ -123,7 +121,6 @@ import { jaccardSimilarity } from './similarity.js';
 import { planDuplicateRemoval } from './dedup-audit.js';
 import { generateCanon, injectCanon } from './canon.js';
 import {
-  ensureCharacterMigrated,
   ensureChatMigrated,
   loadCharacterEntityRegistry,
   saveCharacterEntityRegistry,
@@ -1396,8 +1393,6 @@ async function onChatChangedImpl() {
     const summary = loadAndInjectSummary();
     updateShortTermUI(summary);
     injectSceneHistory();
-    // Merge group-level persistent arcs into this chat before injecting.
-    await mergeGroupPersistentArcs(getContext().groupId);
     injectArcs();
     updateScenesUI();
     updateArcsUI();
@@ -1405,10 +1400,7 @@ async function onChatChangedImpl() {
     // Show the group character selector and pre-populate panels and token
     // display for whichever member is selected (first member by default).
     updateGroupCharSelector();
-    // Migrate the selected character's data container before any reads so that
-    // confidence/decay fields and other v2+ additions are present. Other members
-    // are migrated lazily on their first onGroupMemberDrafted.
-    if (selectedGroupCharacter) ensureCharacterMigrated(selectedGroupCharacter);
+    // All mutable memory is resolved from the current chat namespace.
     await injectMemories(selectedGroupCharacter);
     injectRelationshipHistory(selectedGroupCharacter);
     loadAndInjectEpistemicKnowledge(selectedGroupCharacter, selectedGroupCharacter);
@@ -1474,11 +1466,7 @@ async function onChatChangedImpl() {
 
   const characterName = getCurrentCharacterName();
 
-  // Migrate character data now that we know which character is active.
-  // Fast no-op when already at the current schema version.
-  ensureCharacterMigrated(characterName);
-
-  // Seed the active character's canonical name into the long-term entity registry
+  // Seed the active character's canonical name into this chat's entity registry
   // if not already present, so the main character appears in the entity panel and
   // benefits from entity overlap scoring from the first message.
   if (characterName) {
@@ -1505,8 +1493,6 @@ async function onChatChangedImpl() {
 
   await injectSessionMemories();
   injectSceneHistory();
-  // Merge character-level persistent arcs into this chat before injecting.
-  await mergePersistentArcs(characterName);
   injectArcs();
   injectProfiles(characterName);
   loadAndInjectRepair();
@@ -1652,12 +1638,8 @@ async function onGroupMemberDrafted(chId) {
     return;
   }
 
-  // Migrate per-character data on first access in this session. Fast no-op
-  // once already at the current schema version.
-  ensureCharacterMigrated(characterName);
-
-  // Seed the character entity so it appears in the entity panel and benefits
-  // from overlap scoring from the first message.
+  // Seed the character entity in this chat so it benefits from overlap scoring
+  // from the first message.
   const ltReg = loadCharacterEntityRegistry(characterName);
   const before = ltReg.length;
   seedCharacterEntity(characterName, ltReg);

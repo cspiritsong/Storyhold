@@ -1,9 +1,9 @@
 # Smart Memory
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/senjinthedragon/Smart-Memory/blob/main/LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/cspiritsong/Smart-Memory/blob/main/LICENSE)
 [![Author: Senjin the Dragon](https://img.shields.io/badge/Author-Senjin_the_Dragon-gold.svg)](https://github.com/senjinthedragon)
 
-Give your AI a memory that lasts. Smart Memory is a SillyTavern extension that quietly works in the background, keeping your AI oriented in long stories, aware of what happened this session, and grounded in facts it has learned across every previous chat with a character - even after weeks away.
+Give your AI a memory that lasts. Smart Memory is a SillyTavern extension that quietly works in the background, keeping your AI oriented in long stories, aware of what happened this session, and grounded in facts it has learned within each chat.
 
 It runs automatically. You don't have to do anything special. Just chat, and it takes care of the rest.
 
@@ -45,7 +45,7 @@ If this extension adds something to your stories, please consider:
 
 - In SillyTavern, open the **Extensions** menu (the stack of cubes icon)
 - Click **Install extension**
-- Paste: `https://github.com/senjinthedragon/Smart-Memory`
+- Paste: `https://github.com/cspiritsong/Smart-Memory`
 - Click **Install just for me** (or for all users if you're on a shared server)
 
 Restart SillyTavern. **Smart Memory** will appear in your Extensions panel.
@@ -80,9 +80,9 @@ When a tier is actively trimming content to fit its budget, its segment on the b
 
 **Auto-tune budgets** adjusts tier budgets automatically based on observed demand. After each injection pass it measures how many tokens each tier actually needed, then sets the budget to that amount plus 15% headroom - enough to stay comfortable without wasting context on unused space. Budgets are never reduced below their defaults, only grown. In group chats it tracks the highest demand seen across all characters in the session, so budgets are sized for the most memory-heavy character rather than whichever one injected last. Enabling auto-tune applies immediately using whatever data has already been collected; after that it re-tunes after every injection pass.
 
-### Long-term Memory - Persistent Facts
+### Long-term Chat Memory - Durable Facts
 
-Facts, relationship history, preferences, and significant events are extracted from your chats and saved for each character. These memories survive across all sessions - when you open a new chat with a character, everything they have learned is already there waiting.
+Facts, relationship history, preferences, and significant events are extracted from the current chat and saved in that chat's isolated memory namespace. These memories survive reloads and future turns in the same chat, but a new chat with the same character starts with its own memory.
 
 Over time, memories are automatically consolidated so the same information does not pile up in slightly different forms. Smart Memory is good at recognising when two differently-worded entries are saying the same thing, so you end up with a clean, rich picture of the character rather than a growing cluttered list.
 
@@ -112,17 +112,15 @@ Smart Memory watches for scene transitions - time skips, location changes, those
 
 Unresolved narrative threads - promises made, character goals, mysteries introduced, tensions left hanging - are tracked and kept in context. When the story resolves one, it gets marked closed and a short narrative summary is generated for the record. This keeps the AI oriented toward where the story is going, not just reacting to the last message.
 
-Story arcs normally start fresh with each new chat. If you are running a continuing story across multiple chats (new chats as chapters rather than fresh starts), you can **pin an arc** with the thumbtack button next to it. Pinned arcs are stored at the character level and appear automatically in every new chat with that character. Unpinning returns it to chat-local scope.
+Story arcs normally start fresh with each chat. Pinning an arc keeps it prominent within the current chat; it does not make the arc a cross-chat character memory. Group chats use the same chat-local boundary.
 
-Group chats support pinned arcs too. Pinned arcs in a group are stored against the group itself rather than any individual character, and appear automatically whenever that group starts a new chat.
-
-When a pinned arc gets resolved, it moves to a separate **Resolved Threads** section below the active list rather than being deleted. Resolved arcs are not injected into context but stay visible as a record of where the story has been. A **re-open** button reactivates the thread if the story revisits it; a **remove** button discards it entirely. The resolved state carries into future chats so closed threads arrive already marked as resolved. The Resolved Threads section is collapsed by default and hidden when empty.
+When a pinned arc gets resolved, it moves to a separate **Resolved Threads** section below the active list rather than being deleted. Resolved arcs are not injected into context but stay visible as a record of where the story has been. A **re-open** button reactivates the thread if the story revisits it; a **remove** button discards it entirely. The resolved state remains within this chat. The Resolved Threads section is collapsed by default and hidden when empty.
 
 ### Canon
 
 Once you have at least one resolved arc summary, you can generate a **canon document** - a stable prose narrative synthesized from those arc summaries and high-importance long-term facts. Think of it as a "story bible" for the character: not a list of bullet points, but a composed history written by the model from everything it has learned.
 
-Canon gets its own dedicated slot, separate from the rolling short-term summary. Both can be active at the same time: the summary covers recent events, canon covers the broader history. Canon is stored at the character level and carries forward to new chats with the same character. It is cleared by **Fresh Start** and by the **Clear** button in the Long-term Memory section.
+Canon gets its own dedicated slot, separate from the rolling short-term summary. Both can be active at the same time: the summary covers recent events, canon covers the broader history. Canon is stored in the current chat's memory namespace and does not carry into another chat. It is cleared by **Clear Chat Memory** and by the **Clear** button in the Long-term Chat Memory section.
 
 ### Character and World Profiles
 
@@ -140,13 +138,13 @@ In group chats, each character has their own independent profile. Switching the 
 
 Alongside individual memories, Smart Memory tracks the current emotional state of every named relationship as a set of descriptors - words like `warm`, `cautious`, `fragile`, `mistrustful`. Each descriptor carries its own magnitude (`low`, `medium`, `high`), displayed as `word(magnitude)` - e.g. `trusting(high), cautious(medium)`. After each extraction pass the model reviews the scene and emits any shifts; new descriptors are merged in and existing ones updated rather than replaced, so the state accumulates across sessions without losing earlier signals. A maximum of six descriptors per pair is kept; the lowest-magnitude entry is dropped when the cap is exceeded.
 
-The **Relationship History** section in the settings panel shows all tracked pairs for the current character. You can add pairs manually (useful for seeding a relationship described in the character card), edit any pair to correct or refine the descriptors, and delete pairs that are no longer relevant. Relationship History is cleared alongside long-term memories when you use **Clear Memories** or **Fresh Start**.
+The **Relationship History** section in the settings panel shows all tracked pairs for the current chat. You can add pairs manually (useful for seeding a relationship described in the character card), edit any pair to correct or refine the descriptors, and delete pairs that are no longer relevant. Relationship History is cleared alongside chat memory when you use **Clear Chat Memory**.
 
 Only pairs whose names appear in the recent message window are injected into context, so the block stays small even for characters with many relationships.
 
 ### Perspectives & Secrets
 
-At each scene break, Smart Memory extracts a per-character knowledge map: what each named character knows, suspects, falsely believes, is unaware of, and is actively hiding from someone else. The responding character's knowledge block is then injected privately into their prompt, so the AI can maintain perspective-accurate behaviour - knowing what to reveal, what to deflect, and what they genuinely do not know.
+At each scene break, Smart Memory extracts a perspective-scoped knowledge map within the current chat: what each named character knows, suspects, falsely believes, is unaware of, and is actively hiding from someone else. The responding character's knowledge block is then injected privately into their prompt, so the AI can maintain perspective-accurate behaviour - knowing what to reveal, what to deflect, and what they genuinely do not know.
 
 The five tags map to distinct epistemic states:
 
@@ -299,66 +297,50 @@ You are the judge. The hint on each tier tells you what to expect; the raw outpu
 
 ## Manual Operations
 
-Already have chats that predate Smart Memory? **Memorize Chat** reads through an existing chat and builds the full set of memories, scene history, arcs, and summary from it. Run it on any older chat to bring that character's history into the system.
+Already have a chat that predates Smart Memory? **Memorize Chat** reads through that chat and builds its own memories, scene history, arcs, and summary. Run it separately in each chat you want to process; memories do not accumulate across chats.
 
 ### Memorize Chat
 
-Reads the full chat history and builds memories from it - long-term facts, session details, scene history, story arcs, summary, and profiles. Use this to bring Smart Memory up to speed on an existing chat, or to build up a character's long-term memories from older sessions.
+Reads the full current chat and builds memories from it - long-term facts, session details, scene history, story arcs, summary, and profiles. All resulting data belongs to the current chat namespace. Other chats with the same character do not read it.
 
-In group chats, Memorize Chat processes all active group members - not just the one currently selected. Each character gets their own pass through the messages, their own memories, and their own profiles at the end.
+In group chats, Memorize Chat processes all active group members from the current chat. Each character gets their own projection within that chat.
 
 A **Cancel** button appears during processing. Cancelling stops cleanly between chunks - anything processed so far is saved.
 
-If memories already exist for one or more characters, a confirmation prompt appears before processing begins. Running Memorize Chat repeatedly on the same chat can introduce near-duplicate entries. Use **Forget This Chat** first if you want a clean re-run.
+If memories already exist for this chat, a confirmation prompt appears before processing begins. Use **Clear Chat Memory** first if you want a clean re-run.
 
 Only accepted messages are processed - swiped alternatives are ignored.
 
-To build long-term memories from multiple older chats, open each one and run Memorize Chat. Memories accumulate and deduplicate automatically. Skip any chats you would rather not include.
+To build memory for multiple older chats, open each one and run Memorize Chat separately. Each chat remains isolated.
 
-### Forget This Chat
+### Clear Chat Memory
 
-Clears all chat-scoped context - summary, session memories, scene history, story arcs, profiles, and the session entity list. The following are not cleared and carry forward unchanged: long-term memories, relationship history, state cards, canon, pinned arcs, and the persistent entity registry. Useful before a Memorize Chat run to re-derive everything cleanly from scratch.
+Clears every derived Smart-Memory record for the current chat: structured memories, narrative layers, relationships, Perspectives & Secrets, state cards, canon, summaries, scenes, arcs, profiles, and the processing cursor. The raw chat transcript, character card, and other chats survive. This cannot be undone.
 
-### Fresh Start
+There is deliberately no character-wide memory wipe because Smart Memory does not use a mutable cross-chat character-memory store.
 
-Clears everything for a clean slate - long-term memories, canon, and entity registry for the current character, plus all chat-scoped tiers (summary, session memories, scene history, arcs, profiles). The AI will begin building fresh memories from the next message onward. Asks for confirmation before proceeding - this cannot be undone.
-
-To prevent a specific chat from contributing to long-term memory at all, use **Read-only mode** instead.
+To prevent this chat from contributing memory at all, use **Read-only mode** instead.
 
 ### Read-only Mode
 
-The **Read-only mode - protect character memories** toggle sits just below the chat action buttons. When it is on, the character arrives with all their memories and behaves completely normally - but nothing from this chat gets written back to their permanent history. No new long-term memories, no new arcs, no canon or profile updates.
+The **Read-only mode - protect this chat's memory** toggle sits just below the chat action buttons. When it is on, the character card remains available as reference, but nothing from this chat is written into Smart Memory.
 
-Use it to safely explore a risky scene before deciding whether to commit it to the character's history. Or for a completely consequence-free session where nothing changes permanently. When you turn it off, their memories are exactly as you left them before the session.
+Use it to safely explore a risky scene before deciding whether to keep it in this chat's memory. When you turn it off, you can commit or discard the read-only window.
 
 When you turn read-only off, a dialog asks what to do with the session:
 
-- **Commit** - keeps everything. Session memories are preserved and Smart Memory runs full extraction on the window - long-term memories, arcs, and profiles are built as if read-only had never been active. The messages stay visible.
-- **Discard** - throws everything away. Session memories are purged and the messages from the read-only window are hidden from the AI so they can never influence future extraction passes.
+- **Commit** - keeps the window and runs extraction into this chat's memory.
+- **Discard** - purges derived session data and hides the messages from future extraction.
 
 You can toggle read-only on and off multiple times in the same chat; each window is handled independently.
 
-**Using read-only with checkpoints and branches:** SillyTavern's checkpoint and branch features save the chat up to a specific point as a new file. Smart Memory's long-term memories are shared across all chats with the same character - they do not roll back if you switch to an older checkpoint or branch. If you plan to explore alternative story paths this way, enable read-only mode first. Smart Memory will warn you with a notification if you create a checkpoint or branch without it active.
+**Using read-only with checkpoints and branches:** every chat and branch has its own memory namespace. A branch inherits only a verified transcript prefix; divergent-tail memory is not carried across. If you plan to explore an alternative path, enable read-only mode first.
 
-### Per-chat Memory Isolation (fork feature)
+### Chat-only Memory Boundary
 
-By default, long-term memory is stored **per character**: every chat with the same character reads from - and writes into - one shared store. If you use one character across several unrelated stories (a narrator bot, a reused persona, alternate timelines), memories bleed between chats.
+Smart Memory has one mutable memory boundary: the current chat. The character card is reference material, not a shared memory store. There is no scope selector and no automatic memory sharing between chats.
 
-This fork adds a **Memory scope** selector at the top of the extension settings:
-
-- **Per character (shared across chats)** - upstream behaviour, the default. Nothing changes.
-- **Per chat (isolated)** - each chat gets its own long-term store. A new chat with the same character starts with a clean slate and never sees another chat's memories, relationship history, canon, persistent arcs, Perspectives & Secrets knowledge, or entity registry.
-
-Details:
-
-- Switching to **Per chat** seeds the _current_ chat from the character store, so an ongoing story keeps its accumulated memory. New chats still start clean.
-- Switching back to **Per character** is non-destructive: character-level data was never touched, and each chat's isolated store is kept (dormant) in case you switch again.
-- **Forget This Chat** in per-chat mode clears only the current chat's isolated store - other chats and the character-level store are untouched.
-- Long-term data lives under `characters[characterName].chats[chatId]` in extension settings; each chat container is schema-versioned like every other container.
-
-This solves the shared-memory limitation described above: with per-chat isolation, checkpoints and branches that create new chat files get their own memory space, so a rolled-back timeline cannot leak knowledge from a future one.
-
-**In-file branches (regenerates/swipes) are detected and pruned automatically.** Every message carries SillyTavern's stable `mesId` serial number; Smart Memory tracks how far it has processed with a `lastExtractMesId` watermark. When a regenerate or edit truncates the chat and replaces the tail with new messages (which receive _new_ mesIds), the old watermark disappears from the chat — Smart Memory detects this, rolls the watermark back to the branch point, and prunes every long-term memory, session memory, and state-ledger card that was sourced from the discarded timeline. Memories whose replacement was pruned are un-retired automatically. A toast reports what was removed. Chats without mesIds (imported logs) fall back to the legacy index-based behavior unchanged.
+Every chat gets a stable identity and its own structured records, narrative chain, retrieval scope, and processing cursor. Renames preserve the same chat identity when the transcript matches. Branches inherit only verified prefix projections; unverified branches remain quarantined.
 
 ### Per-tier Extract Buttons
 
@@ -376,7 +358,7 @@ For the full chat backlog, use **Memorize Chat** instead.
 ### Other Per-tier Buttons
 
 - **Summarize Now** - forces a short-term summary right now, ignoring the threshold
-- **Generate Canon** - synthesizes a prose narrative from resolved arc summaries and high-importance facts. Requires at least one resolved arc summary. On Profile B this runs automatically after each arc closes. Canon is stored at the character level and survives across chats - cleared by Fresh Start and the Long-term Memory Clear button. The canon textarea is also editable directly
+- **Generate Canon** - synthesizes a prose narrative from resolved arc summaries and high-importance facts. Requires at least one resolved arc summary. On Profile B this runs automatically after each arc closes. Canon is stored in the current chat's memory namespace and is cleared by **Clear Chat Memory** and the Long-term Chat Memory **Clear** button. The canon textarea is also editable directly
 - **Generate Recap Now** - generates and shows a recap popup on demand
 - **Check Last Response** - runs the continuity check against the last AI response
 - **Regenerate Profiles Now** - regenerates character and world profiles immediately
@@ -389,7 +371,7 @@ Every entry in the long-term memory, session memory, and story arc lists has act
 - **Pencil (edit)** - replaces the entry with an inline text editor. Edit the content and click **Save**, or **Cancel** to discard changes. Not shown on retired memories.
 - **Trash** - removes the entry immediately without generating a summary. For story arcs this permanently discards the thread.
 - **Checkmark (story arcs only)** - resolves the arc: generates an arc summary, moves it to the Resolved Threads panel, and on Profile B triggers automatic canon regeneration. Use this when a thread has genuinely concluded in the story. The summary is built from recent scene context, so it works best when clicked shortly after the thread resolves in the roleplay - resolving old threads retroactively may produce vague summaries. Use the trash button instead if you just want to remove an arc without summarising it.
-- **Pin (active story arcs only)** - marks the arc as persistent so it carries into future chats. The pin icon turns gold and the arc gets a gold left border when pinned. Click again to unpin. In group chats, the pin stores the arc against the group rather than an individual character.
+- **Pin (active story arcs only)** - keeps the arc prominent within this chat. The pin icon turns gold and the arc gets a gold left border when pinned. Click again to unpin. It does not carry the arc into another chat.
 - **Re-open (resolved arcs only)** - moves the arc back to the active list. If an equivalent thread is already active the resolved copy is discarded instead.
 - **Remove (resolved arcs only)** - discards the resolved arc from the panel and the persistent store.
 - **Jump to source** - scrolls the chat to the message window the memory was extracted from. Shown on session memories whenever provenance is available, and on long-term memories when the memory was extracted from the current chat.
@@ -478,9 +460,9 @@ ollama pull nomic-embed-text
 
 | Setting                    | Default                                               | Description                                                                                                                                                                                        |
 | -------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Enable long-term memory    | On                                                    | Extract and inject persistent character facts                                                                                                                                                      |
+| Enable long-term memory    | On                                                    | Extract and inject durable facts from the current chat                                                                                                                                             |
 | Extract every N messages   | 3                                                     | How often automatic extraction runs                                                                                                                                                                |
-| Max memories per character | 25                                                    | Hard cap on total stored memories. Storage is also balanced per type - no single type (fact, relationship, preference, event) can exceed `max / 4` entries so one category cannot crowd out others |
+| Max memories per chat    | 25                                                    | Hard cap on total stored memories in this chat. Storage is also balanced per type - no single type (fact, relationship, preference, event) can exceed `max / 4` entries so one category cannot crowd out others |
 | Injection token budget     | 500                                                   | When memories would exceed this limit, the least important ones are trimmed first - based on importance, how permanent they are, how recently they were recalled, and confidence                   |
 | Injection template         | `Memories from previous conversations:\n{{memories}}` | Wrapper text                                                                                                                                                                                       |
 | Injection position         | After Main Prompt                                     | Where in the prompt memories appear                                                                                                                                                                |
@@ -554,7 +536,7 @@ The Consolidation section is only visible in advanced mode. In simple mode it al
 | Injection template | `Character history:\n{{canon}}` | The wrapper text around the canon document                                         |
 | Injection position | After Main Prompt               | Where in the prompt canon appears                                                  |
 
-The **Generate Canon** button synthesizes a prose narrative from resolved arc summaries and high-importance long-term facts, stores it at the character level, and immediately adds it to context. At least one resolved arc summary is required. On Profile B this regenerates automatically after each arc closes. Canon is stored at the character level and survives across chats - it is cleared by Fresh Start and the Long-term Memory Clear button. The canon textarea in the Canon section is also editable directly if you want to adjust it by hand.
+The **Generate Canon** button synthesizes a prose narrative from resolved arc summaries and high-importance long-term facts, stores it in the current chat's memory namespace, and immediately adds it to context. At least one resolved arc summary is required. On Profile B this regenerates automatically after each arc closes. Canon does not survive into another chat and is cleared by **Clear Chat Memory** and the Long-term Chat Memory **Clear** button. The canon textarea in the Canon section is also editable directly if you want to adjust it by hand.
 
 ### Character and World Profiles
 
@@ -582,7 +564,7 @@ A live token count shows how much context the current profiles are using. A **Re
 
 | Setting                               | Default        | Description                                                                                                                |
 | ------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Enable Perspectives & Secrets         | On (Profile B) | Extract and inject per-character knowledge maps at scene breaks. Off by default on Profile A; enable with the override    |
+| Enable Perspectives & Secrets         | On (Profile B) | Extract and inject perspective-scoped knowledge maps within the current chat. Off by default on Profile A; enable with the override    |
 | Enable on Profile A                   | Off            | Override to run epistemic extraction on Profile A hardware. Requires a reasoning-capable local model                      |
 | Inject "does not know" entries        | On             | Include what each character is unaware of in their knowledge block (for dramatic irony)                                    |
 | Frame secondhand long-term memories   | On             | Prefix long-term memories with `[secondhand]` when the responding character was not present for the scene they came from   |

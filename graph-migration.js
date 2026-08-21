@@ -116,7 +116,9 @@ export function loadCharacterEntityRegistry(characterName) {
  */
 export function saveCharacterEntityRegistry(characterName, entities) {
   if (!characterName || !Array.isArray(entities)) return;
-  getCharacterContainer(characterName).entities = entities;
+  const container = getCharacterContainer(characterName);
+  if (!container) return;
+  container.entities = entities;
 }
 
 // ---- Entity registry: session-scoped (chatMetadata) -------------------------

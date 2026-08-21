@@ -28,12 +28,12 @@ test('extension payload is self-contained and manifest-installable', async () =>
   assert.equal(payload.external_memory_extension_imports.length, 0);
 });
 
-test('product runtime uses the canonical product reset for Fresh Start', async () => {
+test('chat memory clear uses the canonical product reset', async () => {
   const source = await readFile(resolve(root, 'settings.js'), 'utf8');
 
   assert.match(source, /import \{ resetProductMemory \} from ['"]\.\/product-runtime\.js['"]/);
   assert.match(source, /if \(extension_settings\[MODULE_NAME\]\.single_extension_mode\) \{\s+await resetProductMemory\(context\.chatMetadata\);/);
-  assert.match(source, /\/\/ Clear all injection slots\.\s+clearUnifiedSlot\(\);/);
+  assert.match(source, /\/\/ Clear all injection slots and cached unified content\.\s+clearUnifiedSlot\(\);/);
 });
 
 test('product runtime has one extension-owned narrative owner and no Summaryception prompt writer', async () => {

@@ -18,12 +18,12 @@
  */
 
 /**
- * Layer 3 canon summary: stable per-character narrative document.
+ * Layer 3 canon summary: stable chat-local narrative document.
  *
  * Canon is a manually-triggered prose narrative compiled from resolved arc
- * summaries and high-importance long-term memories. It covers who the character
+ * summaries and high-importance chat-local memories. It covers who the character
  * is, what has happened, and the current state of key relationships. Stored in
- * extension_settings so it persists across sessions. Injected via its own
+ * the current chat's scoped container. Injected via its own
  * dedicated slot (smart_memory_canon) independently of the compaction summary,
  * so both coexist and neither overwrites the other.
  *
@@ -75,7 +75,9 @@ export function loadCanon(characterName) {
  */
 export function saveCanon(characterName, text) {
   if (!characterName || !text) return;
-  getCharacterContainer(characterName).canon = { text, ts: Date.now() };
+  const container = getCharacterContainer(characterName);
+  if (!container) return;
+  container.canon = { text, ts: Date.now() };
   saveSettingsDebounced();
 }
 

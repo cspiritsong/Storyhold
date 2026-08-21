@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (fork: badiyee85/Smart-Memory)
+## [1.10.0] - 2026-08-21
 
-- **Per-chat memory scope (`memory_scope = 'chat'`).** Long-term tiers (memories, relationship history, canon, persistent arcs, epistemic knowledge, entity registry) can be isolated per chat instead of shared across all chats with the same character. Enabled via the Memory scope selector in settings; default remains per-character. Switching to per-chat seeds the current chat from the character store so an ongoing chat keeps its memory; new chats start clean. Non-destructive: character-level data is left untouched and can be returned to at any time. Storage nests per-chat containers under `characters[characterName].chats[chatId]`, schema-versioned like every other container. Group persistent arcs are scoped the same way under `group_arcs[groupId].chats[chatId]`. Pure scope-resolution logic lives in `scope-core.js` and is covered by `tests/scope.test.js`.
+### Changed
+
+- **Chat-only memory boundary.** All mutable Smart-Memory data is isolated to the current chat. The character card remains reference material; memories are never automatically shared across chats.
+- **Clear Chat Memory replaces the ambiguous reset actions.** It clears the current chat's derived memory, processing cursor, narrative chain, structured records, and chat-local tiers while preserving the raw transcript, character card, and other chats.
+- Removed the selectable per-character scope, character-store seeding, Fresh Start action, and automatic cross-chat arc merges.
+- Added fail-closed behavior when no stable chat identity is available.
+- Existing legacy character-level data is preserved as dormant compatibility data and is not read or written by the chat-only runtime.
 
 ## [1.8.1] - 2026-07-02
 
