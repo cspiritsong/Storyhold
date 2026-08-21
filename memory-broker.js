@@ -8,7 +8,8 @@
  */
 
 import { estimateTokens } from './constants.js';
-import { filterRetrievalRecords, retrieveWithLadder } from './retrieval.js';
+import { assembleNarrative } from './narrative-chain.js';
+import { filterRetrievalRecords, retrieveDeterministic, retrieveWithLadder } from './retrieval.js';
 
 export const BROKER_SLOT_SECTIONS = Object.freeze([
   // Summaryception remains the narrative owner; this slot is consumed into the
@@ -43,6 +44,22 @@ export function buildSectionsFromSlots(slotValues = {}) {
   }
   return sections;
 }
+
+/** Builds broker sections from the embedded Smart-Memory typed narrative state. */
+export function buildSectionsFromTypedState({ narrativeState = null } = {}) {
+  const sections = Object.fromEntries(BROKER_SECTION_ORDER.map((name) => [name, []]));
+  const narrative = narrativeState ? assembleNarrative(narrativeState) : '';
+  if (narrative) {
+    sections.narrative.push({
+      id: 'smart_memory_narrative_chain',
+      kind: 'narrative_delta',
+      content: narrative,
+      scope: { chat_uid: 'smart-memory-narrative' },
+    });
+  }
+  return sections;
+}
+
 
 export const BROKER_INJECTION_KEY = 'smart_memory_unified';
 export const BROKER_SECTION_ORDER = Object.freeze([
@@ -386,6 +403,7 @@ export function buildMemoryEnvelopeSync({
   respondingCharacter = null,
   povMode = 'allow-secondhand',
   lineage = null,
+  query = '',
   records = [],
   sections = {},
   totalBudget = 1200,
@@ -393,14 +411,31 @@ export function buildMemoryEnvelopeSync({
   if (lineage?.quarantined) return emptyResult('lineage-quarantined');
   const trace = { conflicts: [], retrieval: null, selected_ids: [], dropped_ids: [] };
   const baseItems = sectionItems(sections);
-  const eligible = filterRetrievalRecords(records, {
-    chatUid,
-    branchUid,
-    respondingCharacter,
-    povMode,
-    lineage,
-  });
-  for (const record of eligible) baseItems.push({ record, source: 'record' });
+  const hasQuery = (typeof query === 'string' ? query : query?.text ?? '').trim().length > 0;
+  if (hasQuery) {
+    const retrieval = retrieveDeterministic({
+      records,
+      query,
+      chatUid,
+      branchUid,
+      respondingCharacter,
+      povMode,
+      lineage,
+    });
+    trace.retrieval = retrieval;
+    for (const record of retrieval.candidates) {
+      baseItems.push({ record: { ...record, section: record.section ?? 'evidence' }, source: 'retrieval' });
+    }
+  } else {
+    const eligible = filterRetrievalRecords(records, {
+      chatUid,
+      branchUid,
+      respondingCharacter,
+      povMode,
+      lineage,
+    });
+    for (const record of eligible) baseItems.push({ record, source: 'record' });
+  }
   return finalizeEnvelope({ baseItems, totalBudget, trace });
 }
 

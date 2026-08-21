@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMemoryEnvelope, buildSectionsFromSlots, createMemoryBroker } from '../memory-broker.js';
+import {
+  buildMemoryEnvelope,
+  buildMemoryEnvelopeSync,
+  buildSectionsFromSlots,
+  buildSectionsFromTypedState,
+  createMemoryBroker,
+} from '../memory-broker.js';
 
 const record = (overrides = {}) => ({
   id: overrides.id ?? 'record',
@@ -99,6 +105,31 @@ test('legacy slot mapping includes current-state channels without duplicating tr
   assert.deepEqual(sections.facts.map((item) => item.id), ['smart_memory_long']);
   assert.deepEqual(sections.state.map((item) => item.id), ['smart_memory_state_ledger']);
   assert.deepEqual(sections.epistemic.map((item) => item.id), ['smart_memory_epistemic']);
+});
+test('typed-store broker path reads embedded narrative and only matching structured records', () => {
+  const structuredRecords = [
+    record({ id: 'key-state', kind: 'state', content: 'Mira carries the silver key.' }),
+    record({ id: 'unrelated-state', kind: 'state', content: 'The weather is rainy.' }),
+  ];
+  const sections = buildSectionsFromTypedState({
+    narrativeState: {
+      layers: [[{ id: 'narrative-chain-0', text: 'The party enters the temple.' }]],
+    },
+    structuredRecords,
+  });
+  const result = buildMemoryEnvelopeSync({
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
+    query: { text: 'silver key' },
+    sections,
+    records: structuredRecords,
+    totalBudget: 200,
+  });
+
+  assert.match(result.text, /The party enters the temple/);
+  assert.match(result.text, /silver key/);
+  assert.doesNotMatch(result.text, /rainy/);
+  assert.doesNotMatch(result.text, /summaryception/i);
 });
 test('broker can use a deterministic retrieval result without calling a vector provider', async () => {
   let vectorCalls = 0;

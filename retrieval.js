@@ -243,6 +243,40 @@ function scopedExternalCandidates(records, stage, options) {
   );
 }
 
+/** Runs exact/structured/lexical retrieval without any async provider. */
+export function retrieveDeterministic({
+  records = [],
+  query = '',
+  chatUid,
+  branchUid = null,
+  respondingCharacter = null,
+  povMode = 'allow-secondhand',
+  lineage = null,
+  allowLegacy = true,
+  maxResults = 8,
+} = {}) {
+  const normalizedQuery = queryObject(query);
+  const filterOptions = {
+    chatUid,
+    branchUid,
+    respondingCharacter,
+    povMode,
+    lineage,
+    allowLegacy,
+  };
+  const candidates = deterministicCandidates(records, normalizedQuery, filterOptions).slice(0, maxResults);
+  return {
+    candidates,
+    stage: candidates[0]?.retrieval?.stage ?? null,
+    diagnostics: {
+      vector_called: false,
+      agentic_called: false,
+      vector_error: null,
+      agentic_error: null,
+    },
+  };
+}
+
 /**
  * Runs the deterministic-first retrieval ladder.
  *

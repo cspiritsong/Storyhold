@@ -32,7 +32,7 @@
  *                           so updateTokenDisplay can still render tier colours
  */
 
-import { extension_settings } from '../../../extensions.js';
+import { extension_settings, getContext } from '../../../extensions.js';
 import {
   extension_prompts,
   setExtensionPrompt,
@@ -61,6 +61,7 @@ import {
   BROKER_SLOT_SECTIONS,
   buildMemoryEnvelopeSync,
   buildSectionsFromSlots,
+  buildSectionsFromTypedState,
 } from './memory-broker.js';
 
 /** Legacy tier order retained for the token display. The broker owns the
@@ -160,9 +161,59 @@ export function injectUnified() {
     return;
   }
 
-  // Read fresh slots and retain the last known value for tiers that were not
-  // refreshed during this cycle. Triggered memories are deliberately excluded
-  // by buildSectionsFromSlots because the long-term block already contains them.
+  const settings = extension_settings[MODULE_NAME];
+  if (settings.single_extension_mode) {
+    const context = getContext();
+    const meta = context.chatMetadata?.[MODULE_NAME === 'smart_memory' ? 'smartMemory' : MODULE_NAME] ?? {};
+    const lineage = getCurrentLineage();
+    const structuredRecords = Array.isArray(meta.structured_records)
+      ? meta.structured_records
+      : [];
+    const query = (context.chat ?? [])
+      .slice(-2)
+      .map((message) => message?.mes ?? '')
+      .filter(Boolean)
+      .join('\n');
+    const result = buildMemoryEnvelopeSync({
+      chatUid: meta.chat_uid ?? lineage?.chatUid ?? null,
+      branchUid: lineage?.epoch_id ?? lineage?.epochId ?? meta.lineage?.epoch_id ?? meta.chat_uid,
+      respondingCharacter: context.name2 ?? context.characterName ?? null,
+      query,
+      records: structuredRecords,
+      sections: buildSectionsFromTypedState({ narrativeState: meta.narrative ?? null }),
+      lineage,
+      totalBudget: settings.total_inject_budget ?? 8000,
+    });
+
+    lastTierBreakdown = result.text
+      ? [{
+          key: PROMPT_KEY_UNIFIED,
+          label: 'Product broker',
+          color: '#4a6fa5',
+          tokens: result.tokens,
+        }]
+      : [];
+    for (const key of INDIVIDUAL_KEYS) {
+      setExtensionPrompt(key, '', extension_prompt_types.NONE, 0);
+    }
+    setMacroContent(MACRO_NAMES.unified, result.text);
+    if (isMacroActive(MACRO_NAMES.unified)) {
+      setExtensionPrompt(PROMPT_KEY_UNIFIED, '', extension_prompt_types.NONE, 0);
+      return;
+    }
+    setExtensionPrompt(
+      PROMPT_KEY_UNIFIED,
+      result.text,
+      settings.unified_position ?? extension_prompt_types.IN_PROMPT,
+      settings.unified_depth ?? 0,
+      false,
+      settings.unified_role ?? extension_prompt_roles.SYSTEM,
+    );
+    return;
+  }
+
+  // Legacy/debug path: read fresh slots and retain the last known value for tiers
+  // that were not refreshed during this cycle. Product mode never reaches this.
   const slotValues = {};
   for (const { key } of BROKER_SLOT_SECTIONS) {
     const fresh = extension_prompts[key]?.value ?? '';
@@ -173,7 +224,6 @@ export function injectUnified() {
   }
 
   const lineage = getCurrentLineage();
-  const settings = extension_settings[MODULE_NAME];
   const result = buildMemoryEnvelopeSync({
     chatUid: lineage?.chatUid ?? 'legacy-slot',
     branchUid: lineage?.epochId ?? null,
@@ -222,5 +272,5 @@ export function injectUnified() {
  */
 export function maybeInjectUnified() {
   const settings = extension_settings[MODULE_NAME];
-  if (settings.unified_injection) injectUnified();
+  if (settings.unified_injection || settings.single_extension_mode) injectUnified();
 }

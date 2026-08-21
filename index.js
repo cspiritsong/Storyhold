@@ -475,6 +475,7 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
       await context.saveMetadata();
     });
   }
+  if (!chatChanged()) maybeInjectUnified();
   return result;
 }
 
@@ -1337,6 +1338,7 @@ async function onChatChangedImpl() {
 
   if (settings.single_extension_mode) {
     clearAllInjections();
+    maybeInjectUnified();
     markChatLoadComplete();
     await updateLastActive();
     return;
@@ -1600,9 +1602,9 @@ async function onGroupMemberDrafted(chId) {
   if (!characterName) return;
 
   if (settings.single_extension_mode) {
-    // E3 will populate the single broker envelope for this responder. Do not
-    // restore legacy per-tier slots here.
+    // E3 populates the single broker envelope for this responder.
     clearAllInjections();
+    maybeInjectUnified();
     return;
   }
 
