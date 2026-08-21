@@ -53,6 +53,14 @@ test('About version lookup uses the Storyhold install directory', async () => {
   assert.doesNotMatch(source, /\/scripts\/extensions\/third-party\/Smart-Memory\/manifest\.json/);
 });
 
+test('token bar reads the current API-specific context limit', async () => {
+  const source = await readFile(resolve(root, 'ui.js'), 'utf8');
+
+  assert.match(source, /getMaxContextTokens/);
+  assert.match(source, /const maxContext = getMaxContextTokens\(\) \|\| getContext\(\)\.maxContext \|\| 0;/);
+  assert.doesNotMatch(source, /const maxContext = getContext\(\)\.maxContext \|\| 0;/);
+});
+
 test('README explains derivative origin, credits, and independent changes', async () => {
   const readme = await readFile(resolve(root, 'README.md'), 'utf8');
 

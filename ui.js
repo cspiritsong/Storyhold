@@ -48,7 +48,7 @@
  * updateEpistemicUI       - re-renders the Perspectives & Secrets entry list with add/edit/delete controls
  */
 
-import { extension_prompts, saveSettingsDebounced } from '../../../../script.js';
+import { extension_prompts, getMaxContextTokens, saveSettingsDebounced } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 import {
   estimateTokens,
@@ -280,7 +280,7 @@ export function updateTokenDisplay() {
   ).filter((t) => t.tokens > 0);
 
   const total = tiers.reduce((sum, t) => sum + t.tokens, 0);
-  const maxContext = getContext().maxContext || 0;
+  const maxContext = getMaxContextTokens() || getContext().maxContext || 0;
 
   // Each segment's width is its share of total SM tokens. The title tooltip
   // carries the detail breakdown that the old legend used to show inline.
@@ -322,8 +322,8 @@ export function updateTokenDisplay() {
   if (isChatLoadComplete() && hasAnyTrimmedTier() && !hasTrimToastFired()) {
     markTrimToastFired();
     toastr.warning(
-      'One or more memory tiers are trimming content to stay within budget. Check the token bar in Smart Memory settings.',
-      'Smart Memory',
+      'One or more memory tiers are trimming content to stay within budget. Check the token bar in Storyhold settings.',
+      'Storyhold',
       { timeOut: 8000, extendedTimeOut: 4000, closeButton: true },
     );
   }

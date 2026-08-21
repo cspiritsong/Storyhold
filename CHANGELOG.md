@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.4] - 2026-08-21
+
+### Fixed
+
+- **Chat Completions context reporting.** Storyhold's token bar now follows SillyTavern's API-specific context limit, so Gemini/OpenAI-compatible contexts no longer inherit the unrelated generic 8,192-token display.
+- Documented the difference between provider context, Storyhold generation budget, and Storyhold memory-injection budget.
+
+## [1.10.3] - 2026-08-21
+
+### Fixed
+
+- **API-aware context meter.** Storyhold now uses SillyTavern's current API-specific context limit, including Chat Completions/Gemini, instead of always displaying the generic text-generation limit.
+- Updated the trim warning to use the Storyhold name.
+
 ## [1.10.2] - 2026-08-21
 
 ### Fixed

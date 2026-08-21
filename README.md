@@ -81,6 +81,8 @@ When a tier is actively trimming content to fit its budget, its segment on the b
 
 **Auto-tune budgets** adjusts tier budgets automatically based on observed demand. After each injection pass it measures how many tokens each tier actually needed, then sets the budget to that amount plus 15% headroom - enough to stay comfortable without wasting context on unused space. Budgets are never reduced below their defaults, only grown. In group chats it tracks the highest demand seen across all characters in the session, so budgets are sized for the most memory-heavy character rather than whichever one injected last. Enabling auto-tune applies immediately using whatever data has already been collected; after that it re-tunes after every injection pass.
 
+**Do not confuse the token controls.** The number after the slash in the token bar is the context size supplied by SillyTavern's active API. Storyhold reads the API-specific value, including Chat Completions/Gemini, rather than choosing that limit itself. Change it in SillyTavern's **Context (tokens)** or **Unlocked Context Size** control when your provider supports a larger window. Storyhold's **Generation budget** controls output from the memory LLM per extraction call. **Maximum total memory budget** controls how much Storyhold memory enters the prompt. Neither Storyhold budget changes the provider's actual context limit.
+
 ### Long-term Chat Memory - Durable Facts
 
 Facts, relationship history, preferences, and significant events are extracted from the current chat and saved in that chat's isolated memory namespace. These memories survive reloads and future turns in the same chat, but a new chat with the same character starts with its own memory.
