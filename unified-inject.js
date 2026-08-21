@@ -48,19 +48,24 @@ import {
   PROMPT_KEY_ARCS,
   PROMPT_KEY_PROFILES,
   PROMPT_KEY_CANON,
+  PROMPT_KEY_TRIGGERED,
+  PROMPT_KEY_RELATIONSHIPS,
+  PROMPT_KEY_EPISTEMIC,
+  PROMPT_KEY_STATE_LEDGER,
   PROMPT_KEY_UNIFIED,
   estimateTokens,
 } from './constants.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
-import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { getCurrentLineage, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  BROKER_SLOT_SECTIONS,
+  buildMemoryEnvelopeSync,
+  buildSectionsFromSlots,
+} from './memory-broker.js';
 
-/**
- * Canonical tier ordering for the unified block.
- *
- * Most-stable content comes first; most-immediate content comes last so the
- * model sees active goals and session details closest to its response
- * (recency bias in transformer attention).
- */
+/** Legacy tier order retained for the token display. The broker owns the
+ * actual section ordering and also includes relationship, epistemic, and state
+ * slots that the old unified path omitted. */
 const TIER_ORDER = [
   { key: PROMPT_KEY_CANON, label: 'Canon', color: '#a05870' },
   { key: PROMPT_KEY_PROFILES, label: 'Profiles', color: '#5a9ea0' },
@@ -69,10 +74,19 @@ const TIER_ORDER = [
   { key: PROMPT_KEY_SCENES, label: 'Scenes', color: '#a07840' },
   { key: PROMPT_KEY_SESSION, label: 'Session', color: '#8e5a8e' },
   { key: PROMPT_KEY_ARCS, label: 'Arcs', color: '#7a6ea5' },
+  { key: PROMPT_KEY_RELATIONSHIPS, label: 'Relationships', color: '#9a7040' },
+  { key: PROMPT_KEY_EPISTEMIC, label: 'Knowledge / POV', color: '#8060a0' },
+  { key: PROMPT_KEY_STATE_LEDGER, label: 'Current state', color: '#408a78' },
 ];
 
-/** All individual keys that unified mode absorbs. */
-const INDIVIDUAL_KEYS = TIER_ORDER.map((t) => t.key);
+/** All individual keys, including slots outside the legacy tier list. */
+const INDIVIDUAL_KEYS = [
+  ...new Set([
+    ...TIER_ORDER.map((tier) => tier.key),
+    ...BROKER_SLOT_SECTIONS.map(({ key }) => key),
+    PROMPT_KEY_TRIGGERED,
+  ]),
+];
 
 /**
  * Per-tier token breakdown from the last injectUnified call.
@@ -146,45 +160,54 @@ export function injectUnified() {
     return;
   }
 
-  // For each tier: use the fresh slot value if present, otherwise fall back
-  // to the cache. Update the cache whenever fresh content is available.
-  const populated = TIER_ORDER.map((tier) => {
-    const fresh = extension_prompts[tier.key]?.value ?? '';
-    if (fresh.length > 0) contentCache[tier.key] = fresh;
-    const content = fresh.length > 0 ? fresh : (contentCache[tier.key] ?? '');
-    return { ...tier, content };
-  }).filter((t) => t.content.length > 0);
+  // Read fresh slots and retain the last known value for tiers that were not
+  // refreshed during this cycle. Triggered memories are deliberately excluded
+  // by buildSectionsFromSlots because the long-term block already contains them.
+  const slotValues = {};
+  for (const { key } of BROKER_SLOT_SECTIONS) {
+    const fresh = extension_prompts[key]?.value ?? '';
+    const externalSlot = key === 'summaryception';
+    if (fresh.length > 0 && !externalSlot) contentCache[key] = fresh;
+    slotValues[key] =
+      fresh.length > 0 ? fresh : externalSlot ? '' : (contentCache[key] ?? '');
+  }
 
-  lastTierBreakdown = populated.map((t) => ({
-    key: t.key,
-    label: t.label,
-    color: t.color,
-    tokens: estimateTokens(t.content),
+  const lineage = getCurrentLineage();
+  const settings = extension_settings[MODULE_NAME];
+  const result = buildMemoryEnvelopeSync({
+    chatUid: lineage?.chatUid ?? 'legacy-slot',
+    branchUid: lineage?.epochId ?? null,
+    lineage,
+    sections: buildSectionsFromSlots(slotValues),
+    totalBudget: settings.total_inject_budget ?? 8000,
+  });
+
+  lastTierBreakdown = TIER_ORDER.filter(({ key }) => slotValues[key]).map((tier) => ({
+    ...tier,
+    tokens: estimateTokens(slotValues[tier.key]),
   }));
 
-  // Clear every individual slot - the unified block replaces them all.
+  // The broker block replaces every individual memory slot. This is the single
+  // envelope invariant; non-memory extensions are not touched.
   for (const key of INDIVIDUAL_KEYS) {
     setExtensionPrompt(key, '', extension_prompt_types.NONE, 0);
   }
 
-  if (populated.length === 0) {
+  if (!result.text) {
     setMacroContent(MACRO_NAMES.unified, '');
     setExtensionPrompt(PROMPT_KEY_UNIFIED, '', extension_prompt_types.NONE, 0);
     return;
   }
 
-  const unified = populated.map((t) => t.content).join('\n\n');
-
-  setMacroContent(MACRO_NAMES.unified, unified);
+  setMacroContent(MACRO_NAMES.unified, result.text);
   if (isMacroActive(MACRO_NAMES.unified)) {
     setExtensionPrompt(PROMPT_KEY_UNIFIED, '', extension_prompt_types.NONE, 0);
     return;
   }
 
-  const settings = extension_settings[MODULE_NAME];
   setExtensionPrompt(
     PROMPT_KEY_UNIFIED,
-    unified,
+    result.text,
     settings.unified_position ?? extension_prompt_types.IN_PROMPT,
     settings.unified_depth ?? 0,
     false,

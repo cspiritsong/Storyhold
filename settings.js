@@ -355,8 +355,9 @@ export const defaultSettings = {
   // suppressed. Errors (console.error) are always shown regardless of this flag.
   verbose_logging: false,
 
-  // Experimental: merge all tier content into a single IN_PROMPT block instead
-  // of injecting each tier into its own named slot at different depths/positions.
+  // Experimental: route all active memory slots through one synchronous broker
+  // envelope instead of injecting each tier independently. The broker includes
+  // the Summaryception slot and clears every source slot after composition.
   unified_injection: false,
   unified_position: 2, // extension_prompt_types.IN_PROMPT (Before Main Prompt)
   unified_depth: 0,
