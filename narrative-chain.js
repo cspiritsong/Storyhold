@@ -46,18 +46,19 @@ function hash32(text, seed = 0x811c9dc5) {
 }
 
 function normalizeSettings(settings = {}) {
+  const source = settings ?? {};
   return {
     snippetsPerLayer: positiveInteger(
-      settings.snippetsPerLayer,
+      source.snippetsPerLayer,
       'snippetsPerLayer',
       DEFAULT_SETTINGS.snippetsPerLayer,
     ),
     snippetsPerPromotion: positiveInteger(
-      settings.snippetsPerPromotion,
+      source.snippetsPerPromotion,
       'snippetsPerPromotion',
       DEFAULT_SETTINGS.snippetsPerPromotion,
     ),
-    maxLayers: positiveInteger(settings.maxLayers, 'maxLayers', DEFAULT_SETTINGS.maxLayers),
+    maxLayers: positiveInteger(source.maxLayers, 'maxLayers', DEFAULT_SETTINGS.maxLayers),
   };
 }
 

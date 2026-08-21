@@ -53,10 +53,32 @@ export function createMetadataIngestStore({
   };
 }
 
-/**
- * Builds a source window from a bounded chat slice. Real mesIds are preferred
- * for provenance; imported/legacy chats use the array-index fallback.
- */
+
+/** Creates a snapshotting store for one value under a chat metadata root. */
+export function createMetadataValueStore({
+  metadata,
+  metaKey = DEFAULT_META_KEY,
+  valueKey,
+  saveMetadata = async () => {},
+} = {}) {
+  assertMetadata(metadata);
+  if (typeof valueKey !== 'string' || valueKey.trim() === '') {
+    throw new TypeError('valueKey must be a non-empty string');
+  }
+  if (typeof saveMetadata !== 'function') throw new TypeError('saveMetadata must be a function');
+
+  const root = (metadata[metaKey] ??= {});
+  return {
+    async load() {
+      return clone(root[valueKey] ?? null);
+    },
+    async save(value) {
+      root[valueKey] = clone(value);
+      await saveMetadata();
+    },
+  };
+}
+
 export function buildWindowFromChat({
   chat,
   chatUid,

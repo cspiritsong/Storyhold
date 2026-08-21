@@ -174,6 +174,15 @@ export const defaultSettings = {
   memory_scope: 'character',
   extraction_frequency: 'medium',
 
+  // Single-extension product path. When enabled, the event shell uses the
+  // embedded narrative chain plus one combined structured projection.
+  single_extension_mode: true,
+  narrative_snippets_per_layer: 20,
+  narrative_snippets_per_promotion: 3,
+  narrative_max_layers: 5,
+  narrative_response_length: 500,
+  structured_response_length: 700,
+
   // LLM source for all memory operations (extraction, summarization, recap)
   source: memory_sources.main,
 

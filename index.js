@@ -63,7 +63,12 @@ import {
   PROMPT_KEY_EPISTEMIC,
   PROMPT_KEY_STATE_LEDGER,
 } from './constants.js';
-import { memory_sources, abortCurrentMemoryGeneration } from './generate.js';
+import {
+  memory_sources,
+  abortCurrentMemoryGeneration,
+  generateMemoryExtract,
+  generateMemorySummarize,
+} from './generate.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import {
@@ -162,6 +167,12 @@ import {
   unlinkCurrentManualMemory,
 } from './rename-ops.js';
 import { rebuildTimeline } from './timeline.js';
+import {
+  buildProductWindow,
+  createProductPipeline,
+  advanceProductCursor,
+  loadProductCursor,
+} from './product-runtime.js';
 import {
   setStatusMessage,
   updateShortTermUI,
@@ -372,7 +383,101 @@ function getSettings() {
   return extension_settings[MODULE_NAME];
 }
 
-/** Returns the active character name, or null if no character is loaded. */
+function buildProductNarrativePrompt(storyText, contextText) {
+  return [
+    'Role: precise narrative-state tracker.',
+    'Summarize only the new narrative delta needed to continue the prior context.',
+    'Preserve names, relationships, motivations, location, time, important objects, and unresolved tension.',
+    'Do not repeat information already present in the prior context. Return one compact line.',
+    '<prior_context>',
+    contextText || '(none yet)',
+    '</prior_context>',
+    '<new_passage>',
+    storyText || '',
+    '</new_passage>',
+  ].join('\n');
+}
+
+/**
+ * Runs the single-extension product pipeline for the current chat tip.
+ * Legacy compaction/canon/scene-prose writers are deliberately not called here.
+ */
+async function runSingleExtensionIngest(characterName, chatChanged) {
+  const context = getContext();
+  const settings = getSettings();
+  const meta = context.chatMetadata?.[META_KEY];
+  if (!meta?.chat_uid || !Array.isArray(context.chat)) return null;
+  const lineage = getCurrentLineage();
+  if (!lineage || lineage.quarantined || chatChanged()) return null;
+
+  const branchUid =
+    lineage.epoch_id ??
+    lineage.epochId ??
+    meta.lineage?.epoch_id ??
+    meta.chat_uid;
+  const cursor = loadProductCursor(context.chatMetadata);
+  const window = buildProductWindow({
+    chat: context.chat,
+    chatUid: meta.chat_uid,
+    branchUid,
+    cursor,
+    lineage,
+  });
+  if (!window) return null;
+
+  const narrativeSettings = {
+    snippetsPerLayer: settings.narrative_snippets_per_layer,
+    snippetsPerPromotion: settings.narrative_snippets_per_promotion,
+    maxLayers: settings.narrative_max_layers,
+  };
+  const pipeline = createProductPipeline({
+    metadata: context.chatMetadata,
+    settings: {
+      respondingCharacter: characterName,
+      narrativeSettings,
+    },
+    narrativeSettings,
+    shouldAbort: chatChanged,
+    saveMetadata: async () => {
+      if (chatChanged()) throw CHAT_SWITCHED;
+      await context.saveMetadata();
+    },
+    summarizeNarrative: async ({ storyText, contextText }) => {
+      if (chatChanged()) throw CHAT_SWITCHED;
+      const result = await generateMemorySummarize(
+        buildProductNarrativePrompt(storyText, contextText),
+        {
+          responseLength: settings.narrative_response_length ?? 500,
+          chatMessages: [],
+        },
+      );
+      if (chatChanged()) throw CHAT_SWITCHED;
+      return result;
+    },
+    extractStructured: async ({ prompt }) => {
+      if (chatChanged()) throw CHAT_SWITCHED;
+      const result = await generateMemoryExtract(prompt, {
+        responseLength: settings.structured_response_length ?? 700,
+      });
+      if (chatChanged()) throw CHAT_SWITCHED;
+      return result;
+    },
+  });
+
+  const result = await pipeline.ingest(window, {
+    shouldAbort: chatChanged,
+    narrativeSettings,
+  });
+  if (chatChanged()) return result;
+  if (result.status === 'completed') {
+    await advanceProductCursor(context.chatMetadata, window, async () => {
+      if (chatChanged()) throw CHAT_SWITCHED;
+      await context.saveMetadata();
+    });
+  }
+  return result;
+}
+
 function getCurrentCharacterName() {
   const context = getContext();
   return context.name2 || context.characterName || null;
@@ -533,6 +638,22 @@ async function onCharacterMessageRendered(messageId, type) {
       sceneBufferLastIndex = context.chat.length - 1;
     }
 
+    if (settings.single_extension_mode) {
+      updateLastActive().catch(console.error);
+      return;
+    }
+
+    updateLastActive().catch(console.error);
+    return;
+  }
+
+  if (settings.single_extension_mode) {
+    const capturedProductGen = chatLoadId;
+    const productChatChanged = () => chatLoadId !== capturedProductGen;
+    setTimeout(() => {
+      runSingleExtensionIngest(getCurrentCharacterName(), productChatChanged)
+        .catch((err) => console.error('[SmartMemory] Product ingest error:', err));
+    }, 0);
     updateLastActive().catch(console.error);
     return;
   }
@@ -1214,6 +1335,13 @@ async function onChatChangedImpl() {
   await detectAndPruneInFileBranch(branchCharName);
   await refreshCurrentTimeline();
 
+  if (settings.single_extension_mode) {
+    clearAllInjections();
+    markChatLoadComplete();
+    await updateLastActive();
+    return;
+  }
+
   // Group chats: clear stale slots first (they may hold content from the
   // previous session's last responder), then inject fresh. onGroupMemberDrafted
   // will overwrite the character-specific slots before each Generate().
@@ -1471,6 +1599,13 @@ async function onGroupMemberDrafted(chId) {
   const characterName = context.characters[chId]?.name;
   if (!characterName) return;
 
+  if (settings.single_extension_mode) {
+    // E3 will populate the single broker envelope for this responder. Do not
+    // restore legacy per-tier slots here.
+    clearAllInjections();
+    return;
+  }
+
   // Migrate per-character data on first access in this session. Fast no-op
   // once already at the current schema version.
   ensureCharacterMigrated(characterName);
@@ -1537,6 +1672,19 @@ async function onGroupWrapperFinished({ type } = {}) {
   if (isCurrentLineageQuarantined()) return;
   const context = getContext();
   if (!context.chat || context.chat.length === 0) return;
+
+  if (settings.single_extension_mode) {
+    const capturedProductGen = chatLoadId;
+    const productChatChanged = () => chatLoadId !== capturedProductGen;
+    setTimeout(() => {
+      runSingleExtensionIngest(
+        selectedGroupCharacter || getCurrentCharacterName(),
+        productChatChanged,
+      ).catch((err) => console.error('[SmartMemory] Product group ingest error:', err));
+    }, 0);
+    updateLastActive().catch(console.error);
+    return;
+  }
 
   // Capture the current chat generation so we can abort before any write if
   // the user switches chats while a model call is in progress.
