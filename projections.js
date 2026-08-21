@@ -8,7 +8,7 @@
 
 export const PROJECTION_OWNERS = Object.freeze({
   STRUCTURED: 'smart-memory',
-  NARRATIVE: 'summaryception',
+  NARRATIVE: 'smart-memory:narrative-chain',
   EVIDENCE: 'st-vector-storage',
   CANON: 'lorebook',
 });

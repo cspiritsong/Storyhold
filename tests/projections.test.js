@@ -67,10 +67,10 @@ test('normalizing a projector result fills window provenance without changing it
   const record = normalizeDerivedRecord(
     { id: 'narrative-a', kind: 'narrative_delta', content: 'The door opens.' },
     window,
-    { owner: 'summaryception' },
+    { owner: 'smart-memory:narrative-chain' },
   );
 
-  assert.equal(record.owner, 'summaryception');
+  assert.equal(record.owner, 'smart-memory:narrative-chain');
   assert.equal(record.kind, 'narrative_delta');
   assert.equal(record.content, 'The door opens.');
   assert.deepEqual(record.scope, { chat_uid: 'chat-uid-a', branch_uid: 'branch-uid-a' });

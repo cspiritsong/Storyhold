@@ -28,7 +28,7 @@ test('Summaryception adapter records a narrative delta with shared provenance', 
 
   assert.equal(records.length, 1);
   assert.equal(records[0].kind, 'narrative_delta');
-  assert.equal(records[0].owner, 'summaryception');
+  assert.equal(records[0].owner, 'smart-memory:narrative-chain');
   assert.equal(records[0].scope.chat_uid, 'chat-uid-a');
   assert.deepEqual(records[0].source_range, { kind: 'mesId', start: 101, end: 102 });
   assert.deepEqual(snippets, [
@@ -53,7 +53,7 @@ test('Summaryception adapter never reclassifies fact-looking text as structured 
   });
 
   assert.equal(records[0].kind, 'narrative_delta');
-  assert.equal(records[0].owner, 'summaryception');
+  assert.equal(records[0].owner, 'smart-memory:narrative-chain');
   assert.notEqual(records[0].kind, 'fact');
 });
 
