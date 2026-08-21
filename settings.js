@@ -145,6 +145,7 @@ import {
 import { buildRescanSummary, normalizeRescanPasses, RESCAN_DEFAULT_PASSES } from './rescan-policy.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
 import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
+import { resetProductMemory } from './product-runtime.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
 import { showMemoryGraph } from './graph.js';
 import {
@@ -3601,6 +3602,9 @@ export function bindSettingsUI(ctrl) {
     const context = getContext();
     if (!context.chatMetadata) context.chatMetadata = {};
     if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
+    if (extension_settings[MODULE_NAME].single_extension_mode) {
+      await resetProductMemory(context.chatMetadata);
+    }
     delete context.chatMetadata[META_KEY].summary;
     delete context.chatMetadata[META_KEY].summaryEnd;
     delete context.chatMetadata[META_KEY].summaryUpdated;
@@ -3619,6 +3623,7 @@ export function bindSettingsUI(ctrl) {
     await context.saveMetadata();
 
     // Clear all injection slots.
+    clearUnifiedSlot();
     loadAndInjectSummary();
     await injectMemories(characterName);
     injectSessionMemories();
