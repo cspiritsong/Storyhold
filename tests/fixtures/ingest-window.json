@@ -12,9 +12,10 @@
     "fingerprint": "sha256-window-a"
   },
   "ownership": {
+    "host": "smart-memory-extension",
     "structured": "smart-memory",
-    "narrative": "summaryception",
-    "evidence": "st-vector-storage",
+    "narrative": "smart-memory:narrative-chain",
+    "evidence": "smart-memory:st-vector-adapter",
     "canon": "lorebook"
   },
   "records": [

@@ -1,45 +1,67 @@
-# Smart-Memory + Summaryception Memory Contract
+# Smart-Memory Single-Extension Contract
 
-**Status:** Phase 0 contract and writer audit
+**Status:** E0 single-extension contract and writer kill-list
 **Owner:** Bobby/default
-**Source plan:** `/home/badi/.hermes/plans/2026-08-21_083521-smart-memory-architecture.md`
+**Source plan:** `/home/badi/.hermes/plans/2026-08-21_092551-smart-memory-extension-only.md`
 
 ## Goal
 
-Keep maximum useful recall in durable storage while sending one accurate, scoped,
-non-duplicated, token-bounded memory envelope to the roleplay model.
+Keep maximum useful long-form roleplay recall in one installable SillyTavern extension
+while sending one accurate, scoped, non-duplicated, token-bounded memory envelope to the
+roleplay model.
 
 The raw chat JSONL is the evidence layer. **Derived records never outrank the raw
-transcript that produced them.** A summary, state card, vector result, or profile is a
-projection and must remain traceable to its source messages.
+transcript that produced them.** A narrative layer, state card, vector result, or profile
+is a projection and must remain traceable to its source messages.
 
 ## Implementation boundary
 
-This redesign is **solely a SillyTavern extension**. All components must remain inside
-extension code and SillyTavern-supported browser/chat storage: chat metadata, extension
-settings for small configuration, browser storage where appropriate, and optional native
-Vector Storage APIs. There is no sidecar service, separate database process, or core fork
-in the base architecture. Auxiliary model calls are initiated and bounded by the
-extension; they are not a reason to introduce a new runtime service.
+This redesign is **solely a SillyTavern extension**. Smart-Memory is the only installed
+memory extension and the only product runtime. All ingest, narrative layers, structured
+projections, retrieval, reconciliation, ghosting, and prompt brokering live inside the
+Smart-Memory extension and SillyTavern-supported storage: `chatMetadata`, small
+`extension_settings` configuration, browser storage where appropriate, and optional native
+Vector Storage APIs.
+
+There is no sidecar service, separate database process, second required extension, or
+SillyTavern core fork. Auxiliary model calls are initiated, serialized, bounded, and
+fail-soft by the extension itself.
 
 ## Ownership
-| Owner | Owns | Prompt role |
+
+| Component | Owns | Product role |
 |---|---|---|
-| Smart-Memory | Structured facts, relationships, active arcs, epistemic/POV state, current entity state | Current structured state and selected facts |
-| Summaryception | The single recursive chronological narrative chain | Compressed story history |
-| Native SillyTavern Vector Storage | Optional semantic evidence retrieval | Specific historical evidence only |
+| Smart-Memory host | The single extension runtime and event shell | Only installed memory product |
+| Embedded narrative chain | Summaryception's absorbed recursive-layer algorithm under `chatMetadata.smartMemory.narrative` | Chronological narrative continuity |
+| Smart-Memory structured projections | Facts, relationships, active arcs, epistemic/POV, current entity state | Current structured meaning |
+| Native SillyTavern Vector Storage adapter | Optional semantic evidence lookup | Historical evidence only |
 | Lorebook / World Info | Curated static world canon | Activated world rules/lore |
-| Raw chat JSONL | Complete chronological evidence | Visible history and recovery source |
-| Memory broker (Phase 2) | Scope, lineage, time, POV, deduplication, conflict resolution, budgets | The only combined memory injection |
+| Raw chat JSONL | Complete chronological evidence | Recovery and rebuild source |
+| Memory broker | Scope, lineage, time, POV, deduplication, conflict resolution, budgets | The only combined prompt injection |
 
-**Summaryception is the single narrative writer.** Smart-Memory `compaction.js` and
-`canon.js` are not allowed to create competing automatic narrative histories once the
-unified pipeline is enabled. Scene records may remain as structured boundary/index data,
-but a second prose scene-history block must not be injected.
+**Summaryception is an absorbed algorithm, not a required extension.** Its recursive
+layering, seed promotion, narrative-delta prompts, and optional ghosting behavior may be
+ported with AGPL attribution, but the separate Summaryception runtime, metadata key, and
+prompt slot are not product dependencies.
 
-**Compaction is retired as an automatic narrative writer** for the integrated path. Its
-old stored summaries remain migration evidence until explicitly rebuilt or retired; P1
-must not silently delete them.
+The integrated product has **one prompt key**: `PROMPT_KEY_UNIFIED` /
+`smart_memory_unified`. No `summaryception` prompt key is read or written on the product
+path.
+
+## Narrative chain
+
+The embedded narrative chain stores:
+
+- Layer 0 narrative deltas for bounded message windows;
+- deeper layers promoted from older snippets;
+- source message ranges and transcript fingerprints;
+- a mesId-aware watermark;
+- optional Smart-Memory-owned ghost flags that can be reversed;
+- idempotent promotion and rebuild behavior.
+
+The chain is the only automatic narrative writer. Smart-Memory compaction, automatic prose
+canon, and scene-history prose are retired from the product path. Scene detection may remain
+as a structured boundary signal; it must not create a second narrative injection block.
 
 ## Derived-record contract
 
@@ -70,7 +92,7 @@ An ingest window is identified by:
 stable chat_uid + branch_uid + source range + transcript fingerprint
 ```
 
-The ingest path must be:
+The product ingest path must be:
 
 1. idempotent: replaying a committed window does not duplicate records;
 2. resumable: a failed projection can retry without re-running successful projections;
@@ -78,73 +100,80 @@ The ingest path must be:
 4. branch-aware: only a verified common prefix may be inherited;
 5. quarantine-safe: an unverifiable branch produces no injectable derived records;
 6. fail-soft: an extractor failure does not wipe good records or mix chats;
-7. raw-preserving: the source transcript is never replaced by a derived summary.
+7. raw-preserving: the source transcript is never replaced by a derived summary;
+8. single-runtime: every projection is owned by this extension, not a companion extension.
 
-One ingest pass may fan out into multiple typed projections. It must not mean that
-five independent writers each read the same window and establish their own watermarks.
+One ingest pass may fan out into multiple typed projections. It must not mean that several
+independent runtimes each read the same window and establish separate watermarks.
 
-## Writer and injector audit — current `main`
+## Writer and injector kill-list
 
-| Component | Current behavior | Integrated disposition |
+| Current component | Existing behavior | Single-extension disposition |
 |---|---|---|
-| `index.js` | Orchestrates compaction, scene detection, session extraction, long-term extraction, arcs, state, profiles, epistemic work, and separate injections | P1 queue coordinator; remove independent writer sequencing |
-| `compaction.js` | Progressive short-term narrative summary and `PROMPT_KEY_SHORT` injection | Retire as automatic narrative writer; preserve old data for migration/evidence |
-| `canon.js` | Generates and injects a prose canon document | No automatic competing narrative writer; consume only through an explicit approved canon policy |
-| `scenes.js` | Detects scene breaks, records scene history, and injects scene history | Keep boundary detection and structured index; no second prose history injection |
-| `session.js` | Extracts chat-local details and injects a session tier | Keep as Smart-Memory structured projection; broker owns final injection |
-| `longterm.js` | Extracts facts/relationships, consolidates, and injects long-term/triggered tiers | Keep storage and reconciliation; broker owns final injection |
-| `arcs.js` | Extracts unresolved/resolved narrative threads and injects arcs | Keep active-thread projection; broker owns final injection |
-| `state-ledger.js` | Extracts current entity state and injects the state block | Keep latest-state projection; broker owns final injection |
-| `epistemic.js` | Extracts character knowledge, suspicions, false beliefs, and secrets | Keep POV projection; broker filters by responding character |
-| `profiles.js` | Generates compact character/world/relationship snapshots and injects profiles | Keep only as a compact projection; avoid duplicating State Ledger fields |
-| `unified-inject.js` | Concatenates cached tier slots in fixed order and clears individual slots | Evolve into/hand off to the Phase 2 broker; it is not yet conflict-aware |
-| `continuity.js` | Checks contradictions and may queue a one-shot repair note | Keep as validator/repair input, never as permanent truth |
-| Summaryception reference | Owns recursive layered narrative snippets and ghosting | Adapter target; no Smart-Memory fact extraction from its snippets |
-| Native ST Vector Storage | Separate optional retrieval/index subsystem | Evidence backend only; never Smart-Memory authoritative state |
+| `index.js` | Orchestrates many independent extractors and injectors | E2 event shell and one queue drain |
+| `compaction.js` | Progressive short-term prose summary and `PROMPT_KEY_SHORT` | Retire as writer; migrate old data only |
+| `canon.js` | Generates/injects prose canon | No automatic writer; preserve only under explicit future policy |
+| `scenes.js` | Detects breaks and injects prose scene history | Keep boundary/index logic; no prose history injection |
+| `session.js` | Extracts chat-local details and injects a session tier | Keep structured projection; broker owns injection |
+| `longterm.js` | Extracts facts/relationships and injects long-term tiers | Keep structured projection; broker owns injection |
+| `arcs.js` | Extracts unresolved/resolved threads and injects arcs | Keep active-thread projection; broker owns injection |
+| `state-ledger.js` | Extracts current entity state and injects state cards | Keep latest-state projection; broker owns injection |
+| `epistemic.js` | Extracts knowledge, suspicions, false beliefs, and secrets | Keep POV projection; broker filters it |
+| `profiles.js` | Generates compact snapshots and injects profiles | Keep only where it adds information beyond state cards |
+| `summaryception-adapter.js` | Stamps snippets from a separate Summaryception slot | Migration-only; not a product runtime |
+| `unified-inject.js` | Merges legacy slots | Delegate to the typed broker; never read a foreign slot |
+| `continuity.js` | Checks contradictions and queues one-shot repair | Keep as validator/temporary repair input |
 
-## Injection contract
+## Prompt contract
 
-Phase 1 may continue to expose legacy individual slots for compatibility, but the
-integrated mode must declare one active narrative writer and one final memory envelope.
-Phase 2 must make the following invariant testable:
+The final generation request has one Smart-Memory injection:
 
 ```text
-broker_on ⇒ exactly one memory envelope is injectable
+PROMPT_KEY_UNIFIED = one broker envelope
 ```
 
-The envelope must be assembled in this order unless a later qualification result changes
-it:
+The envelope is assembled in this order unless qualification evidence changes it:
 
-1. compact stable canon/identity;
-2. deep Summaryception narrative history;
-3. selected Smart-Memory facts and relationships;
-4. visible recent chat history;
-5. retrieved historical evidence, only when relevant;
-6. current State Ledger and active arcs near the active turn;
-7. responding-character epistemic constraints;
-8. one-shot continuity repair, if valid;
-9. final generation instructions.
+1. compact stable identity/canon;
+2. embedded recursive narrative history;
+3. selected structured facts and relationships;
+4. relevant historical evidence;
+5. current state and active arcs;
+6. responding-character epistemic constraints;
+7. one-shot continuity repair, if valid.
 
-No section may repeat content already present in the visible chat tail. A quarantined
-lineage yields an empty memory envelope until the branch is verified or explicitly
-rebuilt.
+The visible chat tail is not duplicated. Individual Smart-Memory slots are cleared before
+or immediately after broker composition. A quarantined lineage yields an empty envelope.
 
-## Acceptance tests for Phase 0
+## Isolation and lineage
 
+- Per-character/per-chat scope is the default.
+- A branch inherits only derived records and narrative layers wholly inside a verified common
+  transcript prefix.
+- Divergent-tail records never cross into the branch.
+- MesId-less or unverifiable branches remain quarantined until explicit rebuild or evidence.
+- Renames preserve stable `chat_uid` and narrative-layer provenance.
+- Rebuild reads raw JSONL and recreates derived state; it does not trust stale projections.
+
+## Acceptance tests for E0
+
+- The contract identifies Smart-Memory as the sole extension host.
+- Summaryception is described as an absorbed algorithm, not a required extension.
+- Narrative storage is `chatMetadata.smartMemory.narrative`.
+- There is one product prompt key and no foreign Summaryception slot dependency.
+- Compaction, automatic canon prose, and scene-history prose are not product writers.
 - A source window has one stable id and fingerprint.
-- Every derived record has the required provenance and time fields.
-- All records from a window carry the same chat and branch scope.
-- Ownership declares Summaryception as the single narrative writer.
-- Compaction and automatic canon are not active narrative writers in integrated mode.
-- A quarantined branch has zero injectable derived records.
-- Existing isolation, lineage, rename, rescan, deduplication, timeline, and budget tests
-  remain green.
+- Every derived record has required provenance and time fields.
+- An unverifiable branch has zero injectable derived records.
+- Existing isolation, lineage, rename, rescan, deduplication, timeline, and budget tests remain
+  green.
 
 ## Explicit non-goals
 
-- No new summarizer, tracker, or MemoryBooks/charSummaryception stack.
+- No second installed memory extension.
+- No sidecar, separate database process, or SillyTavern core fork.
 - No VectFox revival and no vector purge.
-- No live Mac SillyTavern changes during local implementation.
 - No automatic inheritance from an unverifiable branch.
-- No automatic lorebook mutation in Phase 0.
+- No automatic lorebook mutation in E0.
+- No live Mac SillyTavern changes during local implementation.
 - No claim of live qualification from local tests alone.

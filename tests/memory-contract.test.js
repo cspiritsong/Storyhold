@@ -64,13 +64,18 @@ test('ownership contract has exactly one narrative writer', () => {
   const contract = loadContract();
 
   assert.deepEqual(fixture.ownership, {
+    host: 'smart-memory-extension',
     structured: 'smart-memory',
-    narrative: 'summaryception',
-    evidence: 'st-vector-storage',
+    narrative: 'smart-memory:narrative-chain',
+    evidence: 'smart-memory:st-vector-adapter',
     canon: 'lorebook',
   });
-  assert.match(contract, /Summaryception[^\n]*single[^\n]*narrative/i);
-  assert.match(contract, /Compaction[^\n]*retired[^\n]*narrative/i);
+  assert.match(contract, /solely a SillyTavern extension/i);
+  assert.match(contract, /Summaryception[^\n]*absorbed algorithm/i);
+  assert.match(contract, /chatMetadata\.smartMemory\.narrative/);
+  assert.match(contract, /one[^\n]*prompt key/i);
+  assert.match(contract, /not product dependencies/i);
+  assert.doesNotMatch(contract, /Summaryception[^\n]*installed[^\n]*runtime/i);
 });
 
 test('quarantined lineage produces no injectable records', () => {
