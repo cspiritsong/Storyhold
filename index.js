@@ -437,12 +437,20 @@ async function runSingleExtensionIngest(characterName, chatChanged) {
     snippetsPerPromotion: settings.narrative_snippets_per_promotion,
     maxLayers: settings.narrative_max_layers,
   };
+  const enabledKinds = [
+    settings.longterm_enabled !== false ? 'fact' : null,
+    settings.relationships_enabled !== false ? 'relationship' : null,
+    settings.state_ledger_enabled === true ? 'state' : null,
+    settings.arcs_enabled !== false ? 'arc' : null,
+    settings.epistemic_enabled !== false ? 'epistemic' : null,
+  ].filter(Boolean);
   const pipeline = createProductPipeline({
     metadata: context.chatMetadata,
     settings: {
       respondingCharacter: characterName,
       narrativeSettings,
       timeline,
+      enabledKinds,
     },
     shouldAbort: chatChanged,
     saveMetadata: async () => {

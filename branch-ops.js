@@ -29,6 +29,7 @@
 import { getContext } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 import { META_KEY } from './constants.js';
+import { pruneIngestWindowsAtBranch } from './ingest-queue.js';
 import { smLog } from './logging.js';
 import { pruneNarrativeAtBranch } from './narrative-chain.js';
 import { pruneStructuredRecordsAtBranch } from './structured-records.js';
@@ -81,7 +82,14 @@ export async function detectAndPruneInFileBranch(characterName) {
   if (!detection.truncated) return null;
 
   const branchPoint = detection.branchPointMesId;
-  const counts = { longterm: 0, session: 0, ledger: 0, narrative: 0, structured: 0 };
+  const counts = {
+    longterm: 0,
+    session: 0,
+    ledger: 0,
+    narrative: 0,
+    structured: 0,
+    ingest_windows: 0,
+  };
 
   // Long-term memories for the active character (routed to the per-chat
   // container when memory scope is Per chat).
@@ -137,6 +145,16 @@ export async function detectAndPruneInFileBranch(characterName) {
     }
   }
 
+  if (meta.ingest_windows && typeof meta.ingest_windows === 'object' && !Array.isArray(meta.ingest_windows)) {
+    const result = pruneIngestWindowsAtBranch(meta.ingest_windows, {
+      branchPointMesId: branchPoint,
+    });
+    if (result.changed) {
+      meta.ingest_windows = result.windows;
+      counts.ingest_windows = result.removed.length;
+    }
+  }
+
   // Roll both watermarks back to the branch point so the next pass starts
   // from the first divergent message instead of replaying history.
   meta.lastExtractMesId = branchPoint;
@@ -154,11 +172,17 @@ export async function detectAndPruneInFileBranch(characterName) {
   context.saveMetadata();
   saveSettingsDebounced();
 
-  const total = counts.longterm + counts.session + counts.ledger + counts.narrative + counts.structured;
+  const total =
+    counts.longterm +
+    counts.session +
+    counts.ledger +
+    counts.narrative +
+    counts.structured +
+    counts.ingest_windows;
   if (typeof toastr !== 'undefined') {
     toastr.info(
       `In-chat branch detected - memory rolled back to message ${branchPoint} ` +
-        `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative, ${counts.structured} structured).`,
+        `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative, ${counts.structured} structured, ${counts.ingest_windows} queue).`,
       'Smart Memory',
       { timeOut: 7000, positionClass: 'toast-bottom-right' },
     );

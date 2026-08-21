@@ -51,6 +51,20 @@ function allProjectorsCompleted(state, names) {
   return names.every((name) => state.projections[name]?.status === 'completed');
 }
 
+export function pruneIngestWindowsAtBranch(windows = {}, { branchPointMesId } = {}) {
+  const kept = {};
+  const removed = [];
+  for (const [windowId, state] of Object.entries(windows ?? {})) {
+    const range = state?.source_range;
+    if (range?.kind === 'mesId' && Number.isInteger(range.end) && range.end > branchPointMesId) {
+      removed.push({ window_id: windowId, state: structuredClone(state) });
+    } else {
+      kept[windowId] = structuredClone(state);
+    }
+  }
+  return { windows: kept, removed, changed: removed.length > 0 };
+}
+
 /**
  * @param {{load: Function, save: Function, projectors?: Record<string, Function>, now?: Function}} options
  */

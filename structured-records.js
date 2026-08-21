@@ -146,6 +146,7 @@ export function buildStructuredExtractionPrompt({
   existingRecords = [],
   respondingCharacter = '',
   timeline = null,
+  enabledKinds = null,
 } = {}) {
   const existing = list(existingRecords)
     .slice(-40)
@@ -164,6 +165,12 @@ export function buildStructuredExtractionPrompt({
     'arcs: [{content, status, confidence}]',
     'epistemic: [{subject, target, type, content, witnessed_by, confidence}]',
     `Responding character: ${text(respondingCharacter) || '(unknown)'}`,
+    ...(Array.isArray(enabledKinds)
+      ? [
+          `Enabled structured categories: ${enabledKinds.join(', ') || '(none)'}`,
+          'Return empty arrays for disabled structured categories.',
+        ]
+      : []),
     ...(timeline
       ? [
           `Current story clock: ${buildTimelinePromptBlock(timeline).replace(/\n/g, ' ')}`,
@@ -183,14 +190,20 @@ export function buildStructuredExtractionPrompt({
 }
 
 /** Converts the combined payload into canonical derived records. */
-export function normalizeStructuredRecords(payload, window, { timeline = null } = {}) {
+export function normalizeStructuredRecords(
+  payload,
+  window,
+  { timeline = null, enabledKinds = null } = {},
+) {
   if (!window?.window_id || !window?.chat_uid || !window?.source_range) {
     throw new TypeError('a valid ingest window is required');
   }
   const parsed = payload ?? emptyResponse();
+  const allowedKinds = Array.isArray(enabledKinds) ? new Set(enabledKinds) : null;
   const records = [];
   const append = (items, kind, contentBuilder) => {
     list(items).forEach((item, index) => {
+      if (allowedKinds && !allowedKinds.has(kind)) return;
       const content = contentBuilder(item);
       if (!content) return;
       const base = commonFields({ ...item, content }, kind, index, window);

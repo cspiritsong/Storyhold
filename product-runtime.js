@@ -79,13 +79,13 @@ export function buildProductWindow({
   });
 }
 
-function recordsFromExtraction(extracted, window, timeline = null) {
+function recordsFromExtraction(extracted, window, timeline = null, enabledKinds = null) {
   const temporalFilter = (records) => {
-    if (!timeline) return records;
-    return records.filter(
-      (record) =>
-        record?.kind !== 'state' || isProjectionTemporallyCompatible(record.content, timeline),
-    );
+    return records.filter((record) => {
+      if (enabledKinds && !enabledKinds.includes(record?.kind)) return false;
+      if (!timeline || record?.kind !== 'state') return true;
+      return isProjectionTemporallyCompatible(record.content, timeline);
+    });
   };
   if (Array.isArray(extracted)) {
     const canonical = extracted.every(
@@ -104,14 +104,14 @@ function recordsFromExtraction(extracted, window, timeline = null) {
       const key = keyByKind[record?.kind];
       if (key) payload[key].push(record);
     }
-    return normalizeStructuredRecords(payload, window, { timeline });
+    return normalizeStructuredRecords(payload, window, { timeline, enabledKinds });
   }
   if (typeof extracted === 'string') {
-    return normalizeStructuredRecords(parseStructuredResponse(extracted), window, { timeline });
+    return normalizeStructuredRecords(parseStructuredResponse(extracted), window, { timeline, enabledKinds });
   }
   if (extracted && typeof extracted === 'object') {
-    if (Array.isArray(extracted.records)) return recordsFromExtraction(extracted.records, window, timeline);
-    return normalizeStructuredRecords(extracted, window, { timeline });
+    if (Array.isArray(extracted.records)) return recordsFromExtraction(extracted.records, window, timeline, enabledKinds);
+    return normalizeStructuredRecords(extracted, window, { timeline, enabledKinds });
   }
   return [];
 }
@@ -179,12 +179,23 @@ export function createProductPipeline({
           existingRecords: priorRecords,
           respondingCharacter: settings.respondingCharacter ?? '',
           timeline: settings.timeline ?? null,
+          enabledKinds: settings.enabledKinds ?? null,
         }),
       });
-      return recordsFromExtraction(extracted, window, settings.timeline ?? null);
+      return recordsFromExtraction(
+        extracted,
+        window,
+        settings.timeline ?? null,
+        settings.enabledKinds ?? null,
+      );
     },
     applyStructured: async (extracted, { window }) => {
-      const incoming = recordsFromExtraction(extracted, window, settings.timeline ?? null);
+      const incoming = recordsFromExtraction(
+        extracted,
+        window,
+        settings.timeline ?? null,
+        settings.enabledKinds ?? null,
+      );
       const existing = (await structuredStore.load()) ?? [];
       const merged = mergeStructuredRecords(existing, incoming);
       await structuredStore.save(merged);

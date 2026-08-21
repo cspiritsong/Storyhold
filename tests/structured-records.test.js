@@ -90,6 +90,18 @@ test('stale current-state clock projections are rejected while backstory remains
   assert.equal(result.some((record) => /Current story time is Day 12/i.test(record.content)), false);
 });
 
+test('disabled structured kinds are omitted at the normalization boundary', () => {
+  const records = normalizeStructuredRecords(payload, window, {
+    enabledKinds: ['fact', 'relationship'],
+  });
+
+  assert.deepEqual(
+    records.map((record) => record.kind).sort(),
+    ['fact', 'relationship'],
+  );
+});
+
+
 test('merge deduplicates incoming records and retires explicitly superseded state', () => {
   const existing = [{
     id: 'old-state',

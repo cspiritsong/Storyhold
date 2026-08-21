@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildIngestWindow } from '../projections.js';
-import { createIngestQueue } from '../ingest-queue.js';
+import { createIngestQueue, pruneIngestWindowsAtBranch } from '../ingest-queue.js';
 
 const makeWindow = (overrides = {}) =>
   buildIngestWindow({
@@ -113,6 +113,19 @@ test('a failed projection retries alone while completed projections are skipped'
   assert.equal(second.status, 'completed');
   assert.deepEqual(calls, { structured: 2, narrative: 1 });
   assert.deepEqual(second.record_ids.sort(), ['narrative-a', 'state-a']);
+});
+
+test('queue windows sourced from a discarded branch tail are pruned', () => {
+  const windows = {
+    prefix: { source_range: { kind: 'mesId', start: 1, end: 2 }, status: 'completed' },
+    tail: { source_range: { kind: 'mesId', start: 3, end: 4 }, status: 'completed' },
+    legacy: { status: 'completed' },
+  };
+  const result = pruneIngestWindowsAtBranch(windows, { branchPointMesId: 2 });
+
+  assert.deepEqual(Object.keys(result.windows), ['prefix', 'legacy']);
+  assert.deepEqual(result.removed.map((entry) => entry.window_id), ['tail']);
+  assert.deepEqual(Object.keys(windows), ['prefix', 'tail', 'legacy']);
 });
 
 test('quarantined lineage produces no records and does not call projectors', async () => {
