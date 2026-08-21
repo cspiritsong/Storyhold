@@ -1,0 +1,90 @@
+{
+  "contract_version": 1,
+  "chat_uid": "qualification-chat",
+  "branch_uid": "qualification-branch",
+  "query": {
+    "text": "silver key temple",
+    "intent": "current_state",
+    "entities": ["Mira"]
+  },
+  "sections": {
+    "narrative": [
+      {
+        "id": "history-day12",
+        "kind": "narrative_delta",
+        "content": "Backstory: on Day 12, Mira was wounded before the party reached the temple.",
+        "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+        "validity": { "status": "active" }
+      }
+    ],
+    "facts": [
+      {
+        "id": "fact-key",
+        "kind": "fact",
+        "content": "The silver key opens the temple door.",
+        "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+        "validity": { "status": "active" }
+      },
+      {
+        "id": "retired-fact",
+        "kind": "fact",
+        "content": "Mira carries a bronze key.",
+        "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+        "validity": { "status": "superseded" },
+        "superseded_by": "fact-key"
+      }
+    ],
+    "state": [
+      {
+        "id": "state-day15",
+        "kind": "state",
+        "content": "Current state: Day 15; Mira is healed and carries the silver key.",
+        "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+        "validity": { "status": "active" },
+        "confidence": 0.98
+      }
+    ],
+    "arcs": [
+      {
+        "id": "arc-door",
+        "kind": "arc",
+        "content": "Active thread: open the sealed temple door.",
+        "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+        "validity": { "status": "active" }
+      }
+    ],
+    "epistemic": [
+      {
+        "id": "pov-mira",
+        "kind": "epistemic",
+        "content": "Mira knows the priest lied, but is hiding that knowledge from Tomas.",
+        "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+        "validity": { "status": "active" }
+      }
+    ]
+  },
+  "records": [
+    {
+      "id": "evidence-promise",
+      "kind": "fact",
+      "content": "Mira promised to help Badi return the silver key after the temple door is opened.",
+      "scope": { "chat_uid": "qualification-chat", "branch_uid": "qualification-branch" },
+      "validity": { "status": "active" },
+      "witnessed_by": ["Mira", "Badi"]
+    },
+    {
+      "id": "foreign-branch",
+      "kind": "state",
+      "content": "Wrong branch: Mira is still wounded.",
+      "scope": { "chat_uid": "qualification-chat", "branch_uid": "other-branch" },
+      "validity": { "status": "active" }
+    }
+  ],
+  "expectations": {
+    "max_tokens": 220,
+    "must_include": ["state-day15", "fact-key", "arc-door"],
+    "must_exclude": ["retired-fact", "foreign-branch", "bronze key"],
+    "section_order": ["NARRATIVE", "FACTS", "CURRENT STATE", "ACTIVE THREADS", "KNOWLEDGE / POV"],
+    "injected_slots": ["smart_memory_unified"]
+  }
+}
