@@ -65,9 +65,10 @@ function resetBranchContainer(characterName, branchChatId, inheritedMemories) {
  * Verifies and adopts a branch's shared prefix without switching the active
  * SillyTavern chat. Returns null when the parent cannot be safely inspected.
  */
-export async function verifyAndInheritCurrentBranch() {
+export async function verifyAndInheritCurrentBranch(isCurrent = () => true) {
   const context = getContext();
   const branchChatId = getCurrentChatId() ?? null;
+  const branchMetadata = context.chatMetadata;
   const parentChatId = context.chatMetadata?.main_chat ?? null;
   if (!branchChatId || !parentChatId || context.groupId) {
     return null;
@@ -76,44 +77,67 @@ export async function verifyAndInheritCurrentBranch() {
   if (!context.chatMetadata) context.chatMetadata = {};
 
   const parent = await loadParentChat(parentChatId);
-  if (!parent || getCurrentChatId() !== branchChatId) return null;
+  if (
+    !parent ||
+    getCurrentChatId() !== branchChatId ||
+    context.chatMetadata !== branchMetadata ||
+    (typeof isCurrent === 'function' && !isCurrent())
+  ) return null;
 
+  const parentSmartMemory = parent.chatMetadata?.[META_KEY] ?? {};
+  const branchSmartMemory = context.chatMetadata?.[META_KEY] ?? {};
+  const branchChatUid = context.chatMetadata?.[META_KEY]?.chat_uid ?? null;
+  const parentChatUid = parentSmartMemory.chat_uid ?? null;
+  if (!branchChatUid || !parentChatUid || branchChatUid === parentChatUid) return null;
+  const inheritedAliases = [
+    ...(Array.isArray(parentSmartMemory.chat_aliases) ? parentSmartMemory.chat_aliases : []),
+    ...(Array.isArray(parentSmartMemory.lineage?.aliases) ? parentSmartMemory.lineage.aliases : []),
+    ...(Array.isArray(branchSmartMemory.chat_aliases) ? branchSmartMemory.chat_aliases : []),
+  ];
   const epochId = generateMemoryId();
   const lineage = buildVerifiedPrefixLineage({
     chatId: branchChatId,
-    chatUid: context.chatMetadata?.[META_KEY]?.chat_uid ?? null,
+    chatUid: branchChatUid,
     parentChatId,
     parentChat: parent.chat,
     branchChat: context.chat,
     epochId,
+    rootChatUid: parentSmartMemory.root_chat_uid ?? parentSmartMemory.chat_uid ?? null,
+    aliases: inheritedAliases,
   });
   if (lineage.status !== 'verified-prefix') return null;
 
   const branchPrefixMesId = context.chat[lineage.prefix_end]?.mesId;
-  const parentSmartMemory = parent.chatMetadata?.[META_KEY] ?? {};
+  const parentPrefixMesId = parent.chat[lineage.prefix_end]?.mesId;
   const inheritedSmartMemory = inheritSmartMemoryMetadata(parentSmartMemory, {
     parentChatId,
+    parentChatUid,
     branchChatId,
-    branchChatUid: context.chatMetadata?.[META_KEY]?.chat_uid ?? branchChatId,
+    branchChatUid,
     parentPrefixEnd: lineage.prefix_end,
     branchPrefixLength: lineage.prefix_length,
     branchPrefixMesId: typeof branchPrefixMesId === 'number' ? branchPrefixMesId : null,
+    parentPrefixMesId: typeof parentPrefixMesId === 'number' ? parentPrefixMesId : null,
     epochId,
     schemaVersion: SCHEMA_VERSION,
+    branchPrefixFingerprint: lineage.prefix_fingerprint,
+    branchChatAliases: branchSmartMemory.chat_aliases ?? [],
   });
 
   const characterName = context.name2 || context.characterName;
   const parentContainer =
-    extension_settings[MODULE_NAME]?.characters?.[characterName]?.chats?.[parentChatId] ?? {};
+    extension_settings[MODULE_NAME]?.characters?.[characterName]?.chats?.[parentChatUid] ?? {};
   const inheritedMemories = inheritDerivedRecords(parentContainer.memories, {
     parentChatId,
+    parentChatUid,
     branchChatId,
+    branchChatUid,
     parentPrefixEnd: lineage.prefix_end,
     epochId,
   });
   const inheritedLongtermCount = resetBranchContainer(
     characterName,
-    branchChatId,
+    branchChatUid,
     inheritedMemories,
   );
 
@@ -138,7 +162,7 @@ export async function verifyAndInheritCurrentBranch() {
 
   return classifyChatLineage({
     chatId: branchChatId,
-    chatUid: context.chatMetadata?.[META_KEY]?.chat_uid ?? null,
+    chatUid: branchChatUid,
     legacyChatIds: context.chatMetadata?.[META_KEY]?.chat_aliases ?? [],
     parentChatId,
     chat: context.chat,

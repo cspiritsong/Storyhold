@@ -75,3 +75,25 @@ test('threshold constants stay conservative for safe auto-removal', () => {
   assert.ok(DEDUP_SEMANTIC_THRESHOLD >= 0.85);
   assert.ok(DEDUP_JACCARD_THRESHOLD >= 0.8);
 });
+
+test('duplicate review snapshots reject changed active inputs', async () => {
+  const { createDuplicateReview, duplicateReviewMatches } = await import('../dedup-audit.js');
+  const items = [
+    { id: 'a', type: 'fact', content: 'original' },
+    { id: 'b', type: 'fact', content: 'duplicate' },
+  ];
+  const review = createDuplicateReview(items, { remove_ids: ['b'], keep_ids: ['a'] });
+
+  assert.equal(duplicateReviewMatches(items, review), true);
+  assert.equal(
+    duplicateReviewMatches(
+      [{ ...items[0] }, { ...items[1], content: 'changed after confirmation' }],
+      review,
+    ),
+    false,
+  );
+  assert.equal(
+    duplicateReviewMatches([...items, { id: 'c', type: 'fact', content: 'new' }], review),
+    false,
+  );
+});

@@ -48,8 +48,14 @@
  * updateEpistemicUI       - re-renders the Perspectives & Secrets entry list with add/edit/delete controls
  */
 
-import { extension_prompts, getMaxContextTokens, saveSettingsDebounced } from '../../../../script.js';
+import { extension_prompts, getMaxContextTokens, saveSettingsDebounced, getCurrentChatId } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
+import {
+  summarizeProductState,
+  partitionEpistemicRecords,
+  filterEpistemicRecordsForSubject,
+  scopeProductStatus,
+} from './product-status.js';
 import {
   estimateTokens,
   MODULE_NAME,
@@ -74,6 +80,7 @@ import {
   loadRelationshipHistory,
   saveRelationshipHistory,
   injectRelationshipHistory,
+  isFreshStart,
 } from './longterm.js';
 import { loadSessionMemories, saveSessionMemories, injectSessionMemories } from './session.js';
 import { loadSceneHistory } from './scenes.js';
@@ -104,6 +111,14 @@ import {
   mergeEntitiesById,
 } from './graph-migration.js';
 import { getUnifiedTierBreakdown } from './unified-inject.js';
+import {
+  currentLineageRecordStamp,
+  getCurrentLineage,
+  isCurrentLineageQuarantined,
+} from './lineage-runtime.js';
+import { filterNarrativeStateForIdentity } from './narrative-chain.js';
+import { filterProductRecords } from './runtime-policy.js';
+import { filterRetrievalRecords } from './retrieval.js';
 import { hasEmbeddingFailed } from './embeddings.js';
 import {
   getTierTrimStats,
@@ -133,6 +148,25 @@ import {
 
 function getSettings() {
   return extension_settings[MODULE_NAME];
+}
+
+function captureLegacyUiOperation() {
+  const context = getContext();
+  const metadata = context.chatMetadata;
+  const chatId = getCurrentChatId();
+  const chatUid = metadata?.[META_KEY]?.chat_uid ?? null;
+  const lineage = getCurrentLineage();
+  const stillCurrent = () =>
+    getCurrentChatId() === chatId &&
+    getContext().chatMetadata === metadata &&
+    getContext().chatMetadata?.[META_KEY]?.chat_uid === chatUid &&
+    getCurrentLineage() === lineage &&
+    getSettings()?.enabled !== false &&
+    !isFreshStart() &&
+    !isCurrentLineageQuarantined() &&
+    !productModeActive();
+  if (!metadata || !stillCurrent()) return null;
+  return { stillCurrent };
 }
 
 /** Returns the active character name, or null if no character is loaded. */
@@ -227,6 +261,22 @@ export function getGroupMembers() {
  * @returns {{ longterm: number, canon: number, profiles: number, total: number }}
  */
 export function estimateCharPersonalTokens(charName) {
+  if (productModeActive()) {
+    const settings = getSettings();
+    const records = scopedProductRecords(
+      getContext().chatMetadata?.[META_KEY]?.structured_records ?? [],
+      settings,
+      charName,
+    ).filter((record) => record?.kind === 'fact');
+    const longtermTokens =
+      records.length > 0 ? estimateTokens(records.map((record) => `- ${record.content}`).join('\n')) : 0;
+    return {
+      longterm: longtermTokens,
+      canon: 0,
+      profiles: 0,
+      total: longtermTokens,
+    };
+  }
   const memories = loadCharacterMemories(charName).filter((m) => !m.superseded_by);
   const longtermTokens =
     memories.length > 0 ? estimateTokens(memories.map((m) => `- ${m.content}`).join('\n')) : 0;
@@ -271,7 +321,7 @@ export function updateTokenDisplay() {
   // by the last injectUnified call so tier colours are still visible.
   const settings = getSettings();
   const tiers = (
-    settings.unified_injection
+    settings.unified_injection || settings.single_extension_mode
       ? getUnifiedTierBreakdown()
       : TOKEN_TIERS.map((t) => ({
           ...t,
@@ -396,9 +446,468 @@ export function updateTokenDisplay() {
   }
 }
 
+function productModeActive() {
+  return getSettings()?.single_extension_mode === true;
+}
+
+/** Clears product-owned UI so one chat can never remain visible over another. */
+export function clearProductViews() {
+  const panel = document.getElementById('sm_product_status_panel');
+  if (panel) panel.style.display = 'none';
+  const listIds = [
+    'sm_memories_list',
+    'sm_relationships_list',
+    'sm_session_list',
+    'sm_scenes_list',
+    'sm_arcs_list',
+    'sm_resolved_arcs_list',
+    'sm_epistemic_list',
+    'sm_profiles_display',
+    'sm_entity_panel',
+    'sm_product_status_counts',
+    'sm_product_status_records',
+  ];
+  for (const id of listIds) {
+    const element = document.getElementById(id);
+    if (element) while (element.firstChild) element.removeChild(element.firstChild);
+  }
+  for (const selector of ['#sm_relationship_add_form', '#sm_epistemic_add_form']) {
+    const form = document.querySelector(selector);
+    if (!form) continue;
+    form.style.display = 'none';
+    $(form).removeData('editing');
+    form.removeAttribute('data-editing');
+    for (const field of form.querySelectorAll('input, textarea')) field.value = '';
+  }
+  for (const form of document.querySelectorAll('#smart_memory_settings .sm_add_memory_form')) form.remove();
+  const status = document.getElementById('sm_product_status_message');
+  if (status) status.textContent = 'Loading chat memory...';
+  const summary = document.getElementById('sm_current_summary');
+  if (summary) {
+    summary.value = '';
+    summary.readOnly = false;
+  }
+  const canon = document.getElementById('sm_canon_display');
+  if (canon) {
+    canon.value = '';
+    canon.readOnly = false;
+  }
+  const canonStatus = document.getElementById('sm_canon_status');
+  if (canonStatus) canonStatus.textContent = '';
+}
+
+function currentProductResponder() {
+  const context = getContext();
+  if (context.groupId) return $('#sm_group_char_select').val() || null;
+  return context.name2 || context.characterName || null;
+}
+
+function currentProductBranchUid(root, lineage) {
+  return lineage?.epoch_id ?? lineage?.epochId ?? root?.lineage?.epoch_id ?? root?.chat_uid ?? null;
+}
+
+function scopedProductRecords(records, settings, responder, { includeInactive = false } = {}) {
+  const root = getContext().chatMetadata?.[META_KEY] ?? {};
+  const chatUid = typeof root.chat_uid === 'string' ? root.chat_uid.trim() : '';
+  const lineage = getCurrentLineage();
+  if (!chatUid || !lineage || lineage.quarantined) return [];
+  const branchUid = currentProductBranchUid(root, lineage);
+  const scoped = filterRetrievalRecords(records, {
+    chatUid,
+    branchUid,
+    respondingCharacter: responder,
+    povMode: settings.epistemic_secondhand_framing === false ? 'strict' : 'allow-secondhand',
+    lineage,
+    allowLegacy: false,
+    includeInactive,
+  });
+  return filterProductRecords(scoped, settings, responder);
+}
+
+function productRecordsForKind(kind, options = {}) {
+  const settings = getSettings();
+  if (!productModeActive() || settings?.enabled === false || isFreshStart() || isCurrentLineageQuarantined()) return [];
+  const records = getContext().chatMetadata?.[META_KEY]?.structured_records;
+  if (!Array.isArray(records)) return [];
+  return scopedProductRecords(records, settings, currentProductResponder(), options).filter(
+    (record) => record?.kind === kind,
+  );
+}
+
+function renderProductRecordList($list, records, emptyText, { includeInactive = false } = {}) {
+  $list.empty();
+  $list.next('.sm_add_memory_form').remove();
+  if (!records || records.length === 0) {
+    $list.append($('<div class="sm_no_char sm-product-empty">').text(emptyText));
+    return;
+  }
+
+  const active = includeInactive
+    ? records
+    : records.filter(
+        (record) =>
+          !record?.superseded_by && !['invalid', 'superseded'].includes(record?.validity?.status),
+      );
+  const retired = includeInactive ? 0 : records.length - active.length;
+  for (const record of active) {
+    const $row = $('<div class="sm_memory_item sm-product-view-item">');
+    const kind = record.type || record.kind;
+    $row.append($('<span class="sm_memory_type">').text(kind));
+    if (record._broker_uncertain || record.validity?.status === 'uncertain') {
+      $row.append($('<span class="sm_memory_retired_badge">').text('uncertain'));
+    }
+    $row.append($('<span class="sm_memory_text">').text(productRecordDisplayText(record)));
+    if (record.source_range) {
+      const range = record.source_range;
+      const source = `${range.kind ?? 'source'} ${range.start}–${range.end}`;
+      $row.append($('<span class="sm-muted sm-product-source">').text(source));
+    }
+    $list.append($row);
+  }
+  if (retired > 0) {
+    $list.append(
+      $('<div class="sm-muted sm-product-retired-note">').text(
+        `${retired} superseded or invalid product record${retired === 1 ? '' : 's'} retained in storage.`,
+      ),
+    );
+  }
+}
+
+function productNarrativeSnippets() {
+  if (isFreshStart() || getSettings()?.enabled === false || isCurrentLineageQuarantined()) return [];
+  const root = getContext().chatMetadata?.[META_KEY] ?? {};
+  const lineage = getCurrentLineage();
+  const narrative = root.narrative;
+  const expectedBranch = currentProductBranchUid(root, lineage);
+  const scopedNarrative = filterNarrativeStateForIdentity(narrative, {
+    chatUid: root.chat_uid,
+    chatId: lineage?.chatId ?? null,
+    branchUid: expectedBranch,
+    requireChat: true,
+    requireBranch: true,
+  });
+  if (!scopedNarrative) return [];
+  const layers = Array.isArray(scopedNarrative.layers) ? scopedNarrative.layers : [];
+  return layers.flatMap((layer, layerIndex) =>
+    (Array.isArray(layer) ? layer : [])
+      .filter((snippet) => snippet?.text)
+      .map((snippet) => ({
+        ...snippet,
+        type: `layer ${layerIndex}`,
+        content: snippet.text,
+      })),
+  );
+}
+
+function productRecordDisplayText(record) {
+  if (record?.kind === 'epistemic' && record?.subject) {
+    const type = record.type || 'epistemic';
+    const target = record.target ? ` from ${record.target}` : '';
+    return `${record.subject} / ${type}${target}: ${record.content ?? ''}`;
+  }
+  return String(record?.content ?? '');
+}
+
+function appendProductRecordPreview(list, records) {
+  for (const record of records) {
+    const item = document.createElement('div');
+    item.className = 'sm-product-record-item';
+    item.textContent = productRecordDisplayText(record);
+    list.append(item);
+  }
+}
+
+function buildProductRecordDetails(records, label) {
+  const details = document.createElement('details');
+  details.className = 'sm-product-record-group';
+  const summary = document.createElement('summary');
+  summary.textContent = label;
+  details.append(summary);
+  const list = document.createElement('div');
+  list.className = 'sm-product-record-preview';
+  appendProductRecordPreview(list, records);
+  details.append(list);
+  return details;
+}
+
+function buildProductSpoilerDetails(records, label) {
+  const details = document.createElement('details');
+  details.className = 'sm_epistemic_spoiler sm-product-record-group';
+  const summary = document.createElement('summary');
+  summary.className = 'sm_epistemic_spoiler_summary';
+  summary.textContent = `${label} (click to reveal)`;
+  summary.addEventListener('click', (event) => {
+    if (details.open) return;
+    event.preventDefault();
+    if (
+      confirm(
+        'This will reveal hidden character secrets - false beliefs and things the character is concealing.\n\nOpen spoiler?',
+      )
+    ) {
+      if (list.childElementCount === 0) appendProductRecordPreview(list, records);
+      details.open = true;
+    }
+  });
+  details.append(summary);
+  const list = document.createElement('div');
+  list.className = 'sm-product-record-preview';
+  details.append(list);
+  return details;
+}
+
+function renderProductEpistemicList($list, characterName) {
+  const records = filterEpistemicRecordsForSubject(productRecordsForKind('epistemic'), characterName);
+  const active = records.filter(
+    (record) => !record?.superseded_by && !['invalid', 'superseded'].includes(record?.validity?.status),
+  );
+  const partition = partitionEpistemicRecords(active);
+  renderProductRecordList(
+    $list,
+    partition.visible,
+    'No non-secret product perspective records yet.',
+  );
+  if (partition.spoiler.length > 0) {
+    $list.append(buildProductSpoilerDetails(partition.spoiler, 'Spoiler — false beliefs and hidden secrets'));
+  }
+}
+
+function renderProductEntityPanel($panel) {
+  if (isFreshStart() || getSettings()?.enabled === false || isCurrentLineageQuarantined()) {
+    $panel.empty();
+    $panel.append($('<div class="sm_no_char sm-product-empty">').text('Product entities are hidden while Storyhold is disabled, read-only, or chat lineage is unverified.'));
+    return;
+  }
+  const settings = getSettings();
+  const storedRecords = getContext().chatMetadata?.[META_KEY]?.structured_records;
+  const records = scopedProductRecords(storedRecords, settings, currentProductResponder());
+  const entities = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    if (record?.kind === 'epistemic') continue;
+    const names = [
+      ...(Array.isArray(record?.entity_names) ? record.entity_names : []),
+      record?.entity,
+      record?.subject,
+      record?.target,
+    ].filter(Boolean);
+    for (const name of names) {
+      const key = String(name).trim().toLowerCase();
+      if (!key) continue;
+      const current = entities.get(key) ?? {
+        name: String(name).trim(),
+        type: record.entity_type || 'unknown',
+        records: 0,
+      };
+      current.records++;
+      if (current.type === 'unknown' && record.entity_type) current.type = record.entity_type;
+      entities.set(key, current);
+    }
+  }
+  $panel.empty();
+  if (entities.size === 0) {
+    $panel.append($('<div class="sm_no_char sm-product-empty">').text('No product entities recorded yet.'));
+    return;
+  }
+  for (const entity of entities.values()) {
+    const $row = $('<div class="sm_entity_row sm-product-view-item">');
+    $row.append($('<strong>').text(entity.name));
+    $row.append($('<span class="sm-muted">').text(` ${entity.type} · ${entity.records} record${entity.records === 1 ? '' : 's'}`));
+    $panel.append($row);
+  }
+}
+
 /** Updates the status bar text shown at the top of the settings panel. */
 export function setStatusMessage(msg) {
   $('#sm_status').text(msg);
+}
+
+const PRODUCT_STATUS_GROUPS = Object.freeze([
+  { kind: 'fact', label: 'Long-term facts' },
+  { kind: 'relationship', label: 'Relationship history' },
+  { kind: 'session', label: 'Session evidence' },
+  { kind: 'state', label: 'Current state' },
+  { kind: 'arc', label: 'Active story arcs' },
+  { kind: 'epistemic', label: 'Perspectives & Secrets' },
+]);
+
+/**
+ * Renders the canonical product-store status and a small read-only record preview.
+ * Product mode deliberately does not refill legacy prompt slots; this view makes
+ * the product-owned narrative and structured stores visible to the user instead.
+ * @param {object|null} progress - Optional live progress event from product catch-up.
+ */
+export function updateProductStatusUI(progress = null) {
+  const panel = document.getElementById('sm_product_status_panel');
+  if (!panel) return;
+  const settings = getSettings();
+  if (!settings?.single_extension_mode || settings.enabled === false || isFreshStart()) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+  if (isCurrentLineageQuarantined()) {
+    clearProductViews();
+    panel.style.display = '';
+    const messageEl = document.getElementById('sm_product_status_message');
+    if (messageEl) messageEl.textContent = 'Product memory hidden until this chat\'s lineage is verified.';
+    return;
+  }
+
+  const context = getContext();
+  const root = context.chatMetadata?.[META_KEY] ?? {};
+  if (typeof root.chat_uid !== 'string' || root.chat_uid.trim() === '') {
+    clearProductViews();
+    panel.style.display = '';
+    const messageEl = document.getElementById('sm_product_status_message');
+    if (messageEl) messageEl.textContent = 'Product memory hidden until this chat has a stable identity.';
+    return;
+  }
+  const responder = currentProductResponder();
+  const lineage = getCurrentLineage();
+  const branchUid = currentProductBranchUid(root, lineage);
+  const scopedRecords = scopedProductRecords(root.structured_records, settings, responder);
+  const scopedNarrative = filterNarrativeStateForIdentity(root.narrative, {
+    chatUid: root.chat_uid,
+    chatId: lineage?.chatId ?? null,
+    branchUid,
+    requireChat: true,
+    requireBranch: true,
+  });
+  const scopedStatus = scopeProductStatus(root, {
+    chatUid: root.chat_uid,
+    branchUid,
+  });
+  const summary = summarizeProductState({
+    ...(context.chatMetadata ?? {}),
+    [META_KEY]: {
+      ...root,
+      ...scopedStatus,
+      narrative: scopedNarrative,
+      structured_records: scopedRecords,
+    },
+  });
+  const messageEl = document.getElementById('sm_product_status_message');
+  const countsEl = document.getElementById('sm_product_status_counts');
+  const recordsEl = document.getElementById('sm_product_status_records');
+  const records = scopedRecords;
+
+  if (messageEl) {
+    const message = progress?.message || summary.lastStatus?.message;
+    if (message) {
+      messageEl.textContent = message;
+    } else if (!summary.hasData) {
+      messageEl.textContent = 'No product memory processed for this chat yet.';
+    } else {
+      messageEl.textContent =
+        `Stored ${summary.activeRecords} active structured record${summary.activeRecords === 1 ? '' : 's'} ` +
+        `across ${summary.completedWindows} completed window${summary.completedWindows === 1 ? '' : 's'}.`;
+    }
+  }
+
+  const summaryText = summary.narrativeText || '';
+  const summaryField = document.getElementById('sm_current_summary');
+  if (summaryField) {
+    summaryField.value = summaryText;
+    summaryField.readOnly = true;
+  }
+
+  if (countsEl) {
+    while (countsEl.firstChild) countsEl.removeChild(countsEl.firstChild);
+    const rows = [
+      [
+        'Narrative chain / short-term continuity',
+        `${summary.narrativeLayers} layer${summary.narrativeLayers === 1 ? '' : 's'}, ${summary.narrativeSnippets} snippet${summary.narrativeSnippets === 1 ? '' : 's'}`,
+      ],
+      [
+        'Product ingest',
+        `${summary.completedWindows}/${summary.windowsTotal} window${summary.windowsTotal === 1 ? '' : 's'} complete`,
+      ],
+      [
+        'Projection failures',
+        String(summary.failedProjections),
+      ],
+      ...PRODUCT_STATUS_GROUPS.map(({ kind, label }) => [
+        label,
+        `${summary.activeRecordCounts[kind]} active / ${summary.recordCounts[kind]} stored`,
+      ]),
+    ];
+    for (const [label, value] of rows) {
+      const row = document.createElement('div');
+      row.className = 'sm-product-status-row';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'sm-product-status-label';
+      labelEl.textContent = label;
+      const valueEl = document.createElement('span');
+      valueEl.className = 'sm-product-status-value';
+      valueEl.textContent = value;
+      row.append(labelEl, valueEl);
+      countsEl.append(row);
+    }
+  }
+
+  if (recordsEl) {
+    while (recordsEl.firstChild) recordsEl.removeChild(recordsEl.firstChild);
+    for (const { kind, label } of PRODUCT_STATUS_GROUPS) {
+      const stored = records.filter((record) => record?.kind === kind);
+      const scoped =
+        kind === 'epistemic'
+          ? filterEpistemicRecordsForSubject(stored, responder)
+          : stored;
+      const active = stored.filter(
+        (record) => !record?.superseded_by && !['invalid', 'superseded'].includes(record?.validity?.status),
+      );
+      const activeScoped = scoped.filter(
+        (record) => !record?.superseded_by && !['invalid', 'superseded'].includes(record?.validity?.status),
+      );
+      if (scoped.length === 0) continue;
+      if (kind === 'epistemic') {
+        const partition = partitionEpistemicRecords(activeScoped);
+        if (partition.visible.length > 0) {
+          recordsEl.append(
+            buildProductRecordDetails(
+              partition.visible.slice(-5),
+              `${label} (${partition.visible.length} visible)`,
+            ),
+          );
+        }
+        if (partition.spoiler.length > 0) {
+          recordsEl.append(
+            buildProductSpoilerDetails(
+              partition.spoiler.slice(-5),
+              `Spoiler — false beliefs and hidden secrets (${partition.spoiler.length})`,
+            ),
+          );
+        }
+        continue;
+      }
+      const details = document.createElement('details');
+      details.className = 'sm-product-record-group';
+      const heading = document.createElement('summary');
+      heading.textContent = `${label} (${active.length} active, ${stored.length} stored)`;
+      details.append(heading);
+      const list = document.createElement('div');
+      list.className = 'sm-product-record-preview';
+      for (const record of active.slice(-5)) {
+        const item = document.createElement('div');
+        item.className = 'sm-product-record-item';
+        item.textContent = String(record?.content ?? '');
+        list.append(item);
+      }
+      if (active.length > 5) {
+        const more = document.createElement('div');
+        more.className = 'sm-muted';
+        more.textContent = `Showing the latest 5 of ${active.length} active records.`;
+        list.append(more);
+      }
+      details.append(list);
+      recordsEl.append(details);
+    }
+    if (!summary.hasData) {
+      const empty = document.createElement('div');
+      empty.className = 'sm-muted';
+      empty.textContent = 'The product pipeline has not written any records yet.';
+      recordsEl.append(empty);
+    }
+  }
 }
 
 /**
@@ -524,7 +1033,11 @@ export function initTooltips() {
 
 /** Syncs the short-term summary textarea with the current summary text. */
 export function updateShortTermUI(summary) {
-  $('#sm_current_summary').val(summary || '');
+  if (productModeActive()) {
+    updateProductStatusUI();
+    return;
+  }
+  $('#sm_current_summary').prop('readonly', false).val(summary || '');
 }
 
 /**
@@ -533,8 +1046,13 @@ export function updateShortTermUI(summary) {
  * @param {string|null} characterName
  */
 export function updateCanonUI(characterName) {
+  if (productModeActive()) {
+    $('#sm_canon_display').prop('readonly', true).val('');
+    $('#sm_canon_status').text('Canon is not a product projection; narrative continuity is shown above.');
+    return;
+  }
   const canon = characterName ? loadCanon(characterName) : null;
-  $('#sm_canon_display').val(canon?.text || '');
+  $('#sm_canon_display').prop('readonly', false).val(canon?.text || '');
   if (canon) {
     const arcCount = loadArcSummaries().length;
     $('#sm_canon_status').text(
@@ -547,6 +1065,15 @@ export function updateCanonUI(characterName) {
 
 /** Re-renders the long-term memories list and entity panel for the given character. */
 export function updateLongTermUI(characterName) {
+  if (productModeActive()) {
+    renderProductRecordList(
+      $('#sm_memories_list'),
+      productRecordsForKind('fact'),
+      'No long-term product facts yet.',
+    );
+    renderProductEntityPanel($('#sm_entity_panel'));
+    return;
+  }
   const memories = characterName ? loadCharacterMemories(characterName) : [];
   renderMemoriesList(memories, characterName);
   updateEntityPanel(characterName);
@@ -559,6 +1086,15 @@ export function updateLongTermUI(characterName) {
  * @param {string|null} characterName
  */
 export function updateRelationshipHistoryUI(characterName) {
+  if (productModeActive()) {
+    renderProductRecordList(
+      $('#sm_relationships_list'),
+      productRecordsForKind('relationship'),
+      'No product relationship records yet.',
+    );
+    $('#sm_relationship_add_form').hide();
+    return;
+  }
   const $list = $('#sm_relationships_list');
   $list.empty();
 
@@ -602,8 +1138,11 @@ export function updateRelationshipHistoryUI(characterName) {
     )
       .append('<i class="fa-solid fa-trash-can"></i>')
       .on('click', async () => {
+        const operation = captureLegacyUiOperation();
+        if (!operation) return;
         const h = loadRelationshipHistory(characterName);
         delete h[key];
+        if (!operation.stillCurrent()) return;
         saveRelationshipHistory(characterName, h);
         saveSettingsDebounced();
         injectRelationshipHistory(characterName);
@@ -693,6 +1232,14 @@ export function updateFreshStartUI(freshStart) {
  * Shows a placeholder when no session memories exist yet.
  */
 export function updateSessionUI() {
+  if (productModeActive()) {
+    renderProductRecordList(
+      $('#sm_session_list'),
+      productRecordsForKind('session'),
+      'No product session evidence yet.',
+    );
+    return;
+  }
   const memories = loadSessionMemories();
   const $list = $('#sm_session_list');
   $list.empty();
@@ -822,13 +1369,23 @@ export function updateSessionUI() {
     $item.append($save, $cancel);
 
     $save.on('click', async () => {
+      if (isFreshStart() || getSettings()?.enabled === false || isCurrentLineageQuarantined() || productModeActive()) {
+        toastr.warning('Session memories are read-only while Storyhold is disabled, Fresh Start is on, or lineage is unverified.', 'Storyhold');
+        return;
+      }
+      const operation = captureLegacyUiOperation();
+      if (!operation) return;
+      const chatId = getCurrentChatId();
       const newContent = $textarea.val().trim();
       if (!newContent) return;
       const memories = loadSessionMemories();
       if (!memories[idx]) return;
+      if (!operation.stillCurrent()) return;
       memories[idx].content = newContent;
-      await saveSessionMemories(memories);
-      await injectSessionMemories();
+      await saveSessionMemories(memories, operation.stillCurrent);
+      if (!operation.stillCurrent() || getCurrentChatId() !== chatId) return;
+      await injectSessionMemories(false, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       updateSessionUI();
     });
 
@@ -837,12 +1394,17 @@ export function updateSessionUI() {
 
   $list.find('.sm_delete_session_memory').on('click', async function () {
     const idx = parseInt($(this).data('index'), 10);
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const context = getContext();
     const meta = context.chatMetadata?.[META_KEY];
     if (!meta?.sessionMemories) return;
+    if (!operation.stillCurrent()) return;
     meta.sessionMemories.splice(idx, 1);
-    await context.saveMetadata();
-    injectSessionMemories();
+    await saveSessionMemories(meta.sessionMemories, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
+    await injectSessionMemories(false, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     updateSessionUI();
   });
 
@@ -858,6 +1420,13 @@ export function updateSessionUI() {
   $list.after($addForm);
 
   $addForm.find('.sm_add_memory_btn').on('click', async () => {
+    if (isFreshStart() || getSettings()?.enabled === false || isCurrentLineageQuarantined() || productModeActive()) {
+      toastr.warning('Session memories are read-only while Storyhold is disabled, Fresh Start is on, or lineage is unverified.', 'Storyhold');
+      return;
+    }
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
+    const chatId = getCurrentChatId();
     const type = $addForm.find('.sm-type-picker').data('value');
     const content = $addForm.find('.sm_add_memory_input').val().trim();
     if (!content) return;
@@ -874,15 +1443,40 @@ export function updateSessionUI() {
       intimacy_relevance: 1,
       retrieval_count: 0,
       last_confirmed_ts: Date.now(),
+      ...currentLineageRecordStamp(),
     });
-    await saveSessionMemories(memories);
-    await injectSessionMemories();
+    if (!operation.stillCurrent()) return;
+    await saveSessionMemories(memories, operation.stillCurrent);
+    if (!operation.stillCurrent() || getCurrentChatId() !== chatId) return;
+    await injectSessionMemories(false, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     updateSessionUI();
   });
 }
 
 /** Re-renders the scene history list. */
 export function updateScenesUI() {
+  if (productModeActive()) {
+    const $list = $('#sm_scenes_list');
+    $list.empty();
+    $list.next('.sm_add_memory_form').remove();
+    const snippets = productNarrativeSnippets();
+    if (snippets.length === 0) {
+      $list.append(
+        $('<div class="sm_no_char sm-product-empty">').text(
+          'Scene prose is folded into the product narrative chain; no narrative snippets yet.',
+        ),
+      );
+      return;
+    }
+    for (const snippet of snippets) {
+      const $row = $('<div class="sm_scene_item sm-product-view-item">');
+      $row.append($('<b>').text(`${snippet.type}: `));
+      $row.append($('<span>').text(String(snippet.content ?? '')));
+      $list.append($row);
+    }
+    return;
+  }
   const history = loadSceneHistory();
   const $list = $('#sm_scenes_list');
   $list.empty();
@@ -901,6 +1495,22 @@ export function updateScenesUI() {
 
 /** Re-renders the story arcs list with per-arc edit, resolve, and add buttons. */
 export function updateArcsUI() {
+  if (productModeActive()) {
+    const records = productRecordsForKind('arc', { includeInactive: true });
+    const active = (records ?? []).filter(
+      (record) => !record?.superseded_by && !['invalid', 'superseded'].includes(record?.validity?.status),
+    );
+    const resolved = (records ?? []).filter((record) => !active.includes(record));
+    renderProductRecordList($('#sm_arcs_list'), active, 'No product story arcs yet.');
+    renderProductRecordList(
+      $('#sm_resolved_arcs_list'),
+      resolved,
+      'No resolved product story arcs yet.',
+      { includeInactive: true },
+    );
+    $('#sm_resolved_arcs_section').toggle(resolved.length > 0);
+    return;
+  }
   const arcs = loadArcs();
   const $list = $('#sm_arcs_list');
   const $resolvedList = $('#sm_resolved_arcs_list');
@@ -960,17 +1570,23 @@ export function updateArcsUI() {
   $resolvedSection.toggle(resolvedArcs.length > 0);
 
   $resolvedList.find('.sm_reopen_arc').on('click', async function () {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const idx = parseInt($(this).data('index'), 10);
-    await reopenArc(idx, charName, groupId);
+    await reopenArc(idx, charName, groupId, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     injectArcs();
     updateArcsUI();
   });
 
   $resolvedList.find('.sm_remove_resolved_arc').on('click', async function () {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const idx = parseInt($(this).data('index'), 10);
     const arc = loadArcs()[idx];
     if (!arc) return;
-    await deleteArc(idx, charName);
+    await deleteArc(idx, charName, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     if (groupId) {
       const gP = loadGroupPersistentArcs(groupId);
       saveGroupPersistentArcs(
@@ -989,14 +1605,17 @@ export function updateArcsUI() {
   });
 
   $list.find('.sm_pin_arc').on('click', async function () {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const idx = parseInt($(this).data('index'), 10);
     const arc = loadArcs()[idx];
     if (!arc) return;
     if (arc.persistent) {
-      await demoteArc(idx, charName, groupId);
+      await demoteArc(idx, charName, groupId, operation.stillCurrent);
     } else {
-      await promoteArc(idx, charName, groupId);
+      await promoteArc(idx, charName, groupId, operation.stillCurrent);
     }
+    if (!operation.stillCurrent()) return;
     injectArcs();
     updateArcsUI();
   });
@@ -1020,14 +1639,17 @@ export function updateArcsUI() {
     $item.append($save, $cancel);
 
     $save.on('click', async () => {
+      const operation = captureLegacyUiOperation();
+      if (!operation) return;
       const newContent = $textarea.val().trim();
       if (!newContent) return;
       const arcs = loadArcs();
       if (!arcs[idx]) return;
       const oldContent = arcs[idx].content;
       const isPersistent = !!arcs[idx].persistent;
-      arcs[idx].content = newContent;
-      await saveArcs(arcs);
+      arcs[idx] = { ...arcs[idx], content: newContent, ...currentLineageRecordStamp() };
+      await saveArcs(arcs, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       // Mirror content edits into the persistent store so the updated text
       // carries into future chats instead of the old version resurfacing.
       if (isPersistent) {
@@ -1055,8 +1677,16 @@ export function updateArcsUI() {
   });
 
   $list.find('.sm_resolve_arc').on('click', async function () {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const idx = parseInt($(this).data('index'), 10);
-    const summaryGenerated = await resolveArcWithSummary(idx, charName, groupId);
+    const summaryGenerated = await resolveArcWithSummary(
+      idx,
+      charName,
+      groupId,
+      operation.stillCurrent,
+    );
+    if (!operation.stillCurrent()) return;
     if (summaryGenerated) {
       $(document).trigger('smart_memory:arc_resolved_with_summary', [charName, groupId]);
     }
@@ -1065,8 +1695,11 @@ export function updateArcsUI() {
   });
 
   $list.find('.sm_delete_arc').on('click', async function () {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const idx = parseInt($(this).data('index'), 10);
-    await deleteArc(idx, charName);
+    await deleteArc(idx, charName, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     injectArcs();
     updateArcsUI();
   });
@@ -1082,11 +1715,14 @@ export function updateArcsUI() {
   $list.after($addForm);
 
   $addForm.find('.sm_add_memory_btn').on('click', async () => {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const content = $addForm.find('.sm_add_memory_input').val().trim();
     if (!content) return;
     const arcs = loadArcs();
-    arcs.push({ content, ts: Date.now() });
-    await saveArcs(arcs);
+    arcs.push({ content, ts: Date.now(), ...currentLineageRecordStamp() });
+    await saveArcs(arcs, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     injectArcs();
     updateArcsUI();
   });
@@ -1100,6 +1736,15 @@ export function updateArcsUI() {
 export function updateProfilesUI(profiles) {
   const $display = $('#sm_profiles_display');
   $display.empty();
+
+  if (productModeActive()) {
+    renderProductRecordList(
+      $display,
+      productRecordsForKind('state'),
+      'No product current-state records yet.',
+    );
+    return;
+  }
 
   if (!profiles) {
     $display.append('<span class="sm-muted">No profiles generated yet.</span>');
@@ -1137,6 +1782,11 @@ export function updateProfilesUI(profiles) {
 export function updateEntityPanel(characterName) {
   const $panel = $('#sm_entity_panel');
   $panel.empty();
+
+  if (productModeActive()) {
+    renderProductEntityPanel($panel);
+    return;
+  }
 
   const ltEntities = characterName ? loadCharacterEntityRegistry(characterName) : [];
   const sessionEntities = loadSessionEntityRegistry();
@@ -1184,15 +1834,20 @@ export function updateEntityPanel(characterName) {
   const ENTITY_TYPES = ['character', 'place', 'object', 'faction', 'concept', 'unknown'];
 
   // Helper: persist type or merge changes across both registries, then re-render.
-  const persistAndRefresh = async () => {
+  const persistAndRefresh = async (operation) => {
+    if (!operation?.stillCurrent()) return false;
     if (characterName) {
       const lt = loadCharacterEntityRegistry(characterName);
+      if (!operation.stillCurrent()) return false;
       saveCharacterEntityRegistry(characterName, lt);
       saveSettingsDebounced();
     }
+    if (!operation.stillCurrent()) return false;
     const session = loadSessionEntityRegistry();
-    await saveSessionEntityRegistry(session);
+    await saveSessionEntityRegistry(session, operation.stillCurrent);
+    if (!operation.stillCurrent()) return false;
     updateEntityPanel(characterName);
+    return true;
   };
 
   for (const entity of entities) {
@@ -1234,13 +1889,19 @@ export function updateEntityPanel(characterName) {
         $opt.on('click', async (ev) => {
           ev.stopPropagation();
           $picker.remove();
+          const operation = captureLegacyUiOperation();
+          if (!operation) return;
           const ltReg = characterName ? loadCharacterEntityRegistry(characterName) : [];
           const sessReg = loadSessionEntityRegistry();
+          if (!operation.stillCurrent()) return;
           setEntityType(entity.id, t, ltReg);
           setEntityType(entity.id, t, sessReg);
           // Migrate state card to the new key so it stays coupled to the entity.
-          if (t !== entity.type) await migrateStateLedgerKey(entity.name, entity.type, t);
-          await persistAndRefresh();
+          if (t !== entity.type) {
+            await migrateStateLedgerKey(entity.name, entity.type, t, operation.stillCurrent);
+            if (!operation.stillCurrent()) return;
+          }
+          await persistAndRefresh(operation);
         });
         $picker.append($opt);
       }
@@ -1276,7 +1937,9 @@ export function updateEntityPanel(characterName) {
           ev.stopPropagation();
           $picker.remove();
 
-          const srcCard = getStateCard(entity.name, entity.type);
+            const operation = captureLegacyUiOperation();
+            if (!operation) return;
+            const srcCard = getStateCard(entity.name, entity.type);
           const dstCard = getStateCard(target.name, target.type);
 
           // If both entities have state cards and the ledger is enabled, ask which to keep.
@@ -1309,23 +1972,33 @@ export function updateEntityPanel(characterName) {
 
             const doMerge = async (keepSrc) => {
               closeModal();
+              const operation = captureLegacyUiOperation();
+              if (!operation) return;
               const ltReg = characterName ? loadCharacterEntityRegistry(characterName) : [];
               const ltMems = characterName ? loadCharacterMemories(characterName) : [];
               const sessReg = loadSessionEntityRegistry();
               const sessMems = loadSessionMemories();
+              if (!operation.stillCurrent()) return;
               mergeEntitiesById(entity.id, target.id, ltReg, ltMems, sessReg, sessMems);
               if (characterName) {
+                if (!operation.stillCurrent()) return;
                 saveCharacterEntityRegistry(characterName, ltReg);
                 saveCharacterMemories(characterName, ltMems);
               }
-              await saveSessionEntityRegistry(sessReg);
-              await saveSessionMemories(sessMems);
+              if (!operation.stillCurrent()) return;
+              await saveSessionEntityRegistry(sessReg, operation.stillCurrent);
+              if (!operation.stillCurrent()) return;
+              await saveSessionMemories(sessMems, operation.stillCurrent);
+              if (!operation.stillCurrent()) return;
               // Discard the loser card, copy the winner card to the surviving key.
-              await deleteStateCard(entity.name, entity.type);
-              await deleteStateCard(target.name, target.type);
+              await deleteStateCard(entity.name, entity.type, operation.stillCurrent);
+              if (!operation.stillCurrent()) return;
+              await deleteStateCard(target.name, target.type, operation.stillCurrent);
+              if (!operation.stillCurrent()) return;
               const winnerFields = keepSrc ? srcCard : dstCard;
-              await setStateCard(target.name, target.type, winnerFields);
-              await persistAndRefresh();
+              await setStateCard(target.name, target.type, winnerFields, operation.stillCurrent);
+              if (!operation.stillCurrent()) return;
+              await persistAndRefresh(operation);
             };
 
             $modal.find('.sm_state_keep_src').on('click', () => doMerge(true));
@@ -1340,19 +2013,26 @@ export function updateEntityPanel(characterName) {
           const ltMems = characterName ? loadCharacterMemories(characterName) : [];
           const sessReg = loadSessionEntityRegistry();
           const sessMems = loadSessionMemories();
+          if (!operation.stillCurrent()) return;
           mergeEntitiesById(entity.id, target.id, ltReg, ltMems, sessReg, sessMems);
           if (characterName) {
+            if (!operation.stillCurrent()) return;
             saveCharacterEntityRegistry(characterName, ltReg);
             saveCharacterMemories(characterName, ltMems);
           }
-          await saveSessionEntityRegistry(sessReg);
-          await saveSessionMemories(sessMems);
+          if (!operation.stillCurrent()) return;
+          await saveSessionEntityRegistry(sessReg, operation.stillCurrent);
+          if (!operation.stillCurrent()) return;
+          await saveSessionMemories(sessMems, operation.stillCurrent);
+          if (!operation.stillCurrent()) return;
           // If only the source had a card, copy it to the surviving (target) key.
           if (srcCard) {
-            await deleteStateCard(entity.name, entity.type);
-            await setStateCard(target.name, target.type, srcCard);
+            await deleteStateCard(entity.name, entity.type, operation.stillCurrent);
+            if (!operation.stillCurrent()) return;
+            await setStateCard(target.name, target.type, srcCard, operation.stillCurrent);
+            if (!operation.stillCurrent()) return;
           }
-          await persistAndRefresh();
+          await persistAndRefresh(operation);
         });
         $picker.append($opt);
       }
@@ -1377,21 +2057,31 @@ export function updateEntityPanel(characterName) {
       $panel.find('.sm_entity_type_picker').remove();
 
       const doDelete = async () => {
+        const operation = captureLegacyUiOperation();
+        if (!operation) return;
         const ltReg = characterName ? loadCharacterEntityRegistry(characterName) : [];
         const ltMems = characterName ? loadCharacterMemories(characterName) : [];
         const sessReg = loadSessionEntityRegistry();
         const sessMems = loadSessionMemories();
+        if (!operation.stillCurrent()) return;
         deleteEntityById(entity.id, ltReg, ltMems);
         deleteEntityById(entity.id, sessReg, sessMems);
         if (characterName) {
+          if (!operation.stillCurrent()) return;
           saveCharacterEntityRegistry(characterName, ltReg);
           saveCharacterMemories(characterName, ltMems);
         }
-        await saveSessionEntityRegistry(sessReg);
-        await saveSessionMemories(sessMems);
+        if (!operation.stillCurrent()) return;
+        await saveSessionEntityRegistry(sessReg, operation.stillCurrent);
+        if (!operation.stillCurrent()) return;
+        await saveSessionMemories(sessMems, operation.stillCurrent);
+        if (!operation.stillCurrent()) return;
         // Clean up any associated state card.
-        if (STATE_CARD_TYPES.has(entity.type)) await deleteStateCard(entity.name, entity.type);
-        await persistAndRefresh();
+        if (STATE_CARD_TYPES.has(entity.type)) {
+          await deleteStateCard(entity.name, entity.type, operation.stillCurrent);
+          if (!operation.stillCurrent()) return;
+        }
+        await persistAndRefresh(operation);
       };
 
       // Warn before discarding a populated state card - only when the ledger is enabled.
@@ -1489,12 +2179,15 @@ export function updateEntityPanel(characterName) {
 
       $saveBtn.on('click', async (e) => {
         e.stopPropagation();
+        const operation = captureLegacyUiOperation();
+        if (!operation) return;
         const newFields = {};
         for (const f of fields) {
           const v = ($inputs[f].val() ?? '').trim();
           if (v) newFields[f] = v;
         }
-        await setStateCard(entity.name, entity.type, newFields);
+        await setStateCard(entity.name, entity.type, newFields, operation.stillCurrent);
+        if (!operation.stillCurrent()) return;
         injectStateLedger();
         updateEntityPanel(characterName);
         updateTokenDisplay();
@@ -1507,7 +2200,10 @@ export function updateEntityPanel(characterName) {
 
       $clearBtn.on('click', async (e) => {
         e.stopPropagation();
-        await deleteStateCard(entity.name, entity.type);
+        const operation = captureLegacyUiOperation();
+        if (!operation) return;
+        await deleteStateCard(entity.name, entity.type, operation.stillCurrent);
+        if (!operation.stillCurrent()) return;
         injectStateLedger();
         updateEntityPanel(characterName);
         updateTokenDisplay();
@@ -1734,16 +2430,21 @@ export function renderMemoriesList(memories, characterName) {
     );
     $item.append($save, $cancel);
 
-    $save.on('click', () => {
+    $save.on('click', async () => {
+      const operation = captureLegacyUiOperation();
+      if (!operation) return;
       const newContent = $textarea.val().trim();
       if (!newContent) return;
       const memories = loadCharacterMemories(characterName);
       const target = memories.find((m) => m.id === memId);
       if (!target) return;
+      if (!operation.stillCurrent()) return;
       target.content = newContent;
       saveCharacterMemories(characterName, memories);
+      if (!operation.stillCurrent()) return;
       saveSettingsDebounced();
-      injectMemories(characterName).catch(console.error);
+      await injectMemories(characterName, false, operation.stillCurrent).catch(console.error);
+      if (!operation.stillCurrent()) return;
       renderMemoriesList(loadCharacterMemories(characterName), characterName);
     });
 
@@ -1753,12 +2454,16 @@ export function renderMemoriesList(memories, characterName) {
   });
 
   $list.find('.sm_delete_memory').on('click', function () {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const memId = $(this).data('memory-id');
     const current = loadCharacterMemories(characterName);
     const idx = current.findIndex((m) => m.id === memId);
     if (idx === -1) return;
+    if (!operation.stillCurrent()) return;
     current.splice(idx, 1);
     saveCharacterMemories(characterName, current);
+    if (!operation.stillCurrent()) return;
     saveSettingsDebounced();
     renderMemoriesList(current, characterName);
   });
@@ -1774,7 +2479,9 @@ export function renderMemoriesList(memories, characterName) {
   $addForm.prepend(buildTypePicker(MEMORY_TYPES));
   $list.after($addForm);
 
-  $addForm.find('.sm_add_memory_btn').on('click', () => {
+  $addForm.find('.sm_add_memory_btn').on('click', async () => {
+    const operation = captureLegacyUiOperation();
+    if (!operation) return;
     const type = $addForm.find('.sm-type-picker').data('value');
     const content = $addForm.find('.sm_add_memory_input').val().trim();
     if (!content) return;
@@ -1791,10 +2498,14 @@ export function renderMemoriesList(memories, characterName) {
       intimacy_relevance: type === 'preference' ? 3 : 1,
       retrieval_count: 0,
       last_confirmed_ts: Date.now(),
+      ...currentLineageRecordStamp(),
     });
+    if (!operation.stillCurrent()) return;
     saveCharacterMemories(characterName, memories);
+    if (!operation.stillCurrent()) return;
     saveSettingsDebounced();
-    injectMemories(characterName).catch(console.error);
+    await injectMemories(characterName, false, operation.stillCurrent).catch(console.error);
+    if (!operation.stillCurrent()) return;
     renderMemoriesList(loadCharacterMemories(characterName), characterName);
   });
 }
@@ -1818,6 +2529,11 @@ const EPISTEMIC_TYPE_LABELS = {
  * @param {string|null} characterName - Card character name (storage key).
  */
 export function updateEpistemicUI(characterName) {
+  if (productModeActive()) {
+    renderProductEpistemicList($('#sm_epistemic_list'), characterName);
+    $('#sm_epistemic_add_form').hide();
+    return;
+  }
   const $list = $('#sm_epistemic_list');
   $list.empty();
 
@@ -1865,7 +2581,10 @@ export function updateEpistemicUI(characterName) {
     )
       .append('<i class="fa-solid fa-trash-can"></i>')
       .on('click', () => {
+        const operation = captureLegacyUiOperation();
+        if (!operation) return;
         const current = loadEpistemicKnowledge(characterName);
+        if (!operation.stillCurrent()) return;
         saveEpistemicKnowledge(
           characterName,
           current.filter((e) => e.id !== entry.id),

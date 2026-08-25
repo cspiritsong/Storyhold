@@ -29,6 +29,79 @@
   margin-bottom: 8px;
 }
 
+/* ── Canonical product-store status ----------------------------------------- */
+
+#smart_memory_settings .sm-product-status-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+#smart_memory_settings .sm-product-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+  font-size: 0.86em;
+}
+
+#smart_memory_settings .sm-product-status-label {
+  color: var(--SmartThemeBodyColor, #ccc);
+}
+
+#smart_memory_settings .sm-product-status-value {
+  color: var(--SmartReplyColor, #aaa);
+  text-align: right;
+  white-space: nowrap;
+}
+
+#smart_memory_settings .sm-product-status-records {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+#smart_memory_settings .sm-product-record-group {
+  font-size: 0.86em;
+}
+
+#smart_memory_settings .sm-product-record-group > summary {
+  cursor: pointer;
+  color: var(--SmartReplyColor, #aaa);
+}
+
+#smart_memory_settings .sm-product-record-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 0 14px;
+}
+
+#smart_memory_settings .sm-product-record-item {
+  padding: 3px 5px;
+  border-left: 2px solid var(--SmartThemeBorderColor, #555);
+  color: var(--SmartThemeBodyColor, #ccc);
+  overflow-wrap: anywhere;
+}
+
+#smart_memory_settings .sm-product-view-item {
+  align-items: flex-start;
+}
+
+#smart_memory_settings .sm-product-source {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 0.8em;
+}
+
+#smart_memory_settings .sm-product-retired-note {
+  margin-top: 4px;
+  font-size: 0.82em;
+}
+
 /* ── Button rows ─────────────────────────────────────────────────────────── */
 
 /* Flex row where every direct .menu_button child stretches to an equal share

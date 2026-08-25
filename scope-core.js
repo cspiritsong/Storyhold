@@ -64,9 +64,11 @@ export function containerHasData(container, keys = CHARACTER_TIER_KEYS) {
  * @param {string|null} chatId - Current chat id (from getCurrentChatId()).
  * @param {string} scope - MEMORY_SCOPE_CHARACTER or MEMORY_SCOPE_CHAT.
  * @param {number} [schemaVersion] - Schema version to stamp on newly created chat containers.
+ * @param {{chat_uid?: string, chat_id?: string}} [identity] - Stable UID and
+ *   current mutable filename to stamp on newly created containers.
  * @returns {Object|null} The container, or null when name is falsy.
  */
-export function getScopedContainer(store, name, chatId, scope, schemaVersion) {
+export function getScopedContainer(store, name, chatId, scope, schemaVersion, identity = {}) {
   if (!name) return null;
   if (!store[name]) store[name] = {};
   const base = store[name];
@@ -75,6 +77,14 @@ export function getScopedContainer(store, name, chatId, scope, schemaVersion) {
   if (!base.chats[chatId]) {
     base.chats[chatId] = {};
     if (schemaVersion != null) base.chats[chatId].schema_version = schemaVersion;
+    const stableUid = identity?.chat_uid ?? identity?.chatUid ?? null;
+    const currentChatId = identity?.chat_id ?? identity?.chatId ?? null;
+    if (stableUid != null && String(stableUid).trim() !== '') {
+      base.chats[chatId].chat_uid = String(stableUid);
+    }
+    if (currentChatId != null && String(currentChatId).trim() !== '') {
+      base.chats[chatId].chat_id = String(currentChatId);
+    }
   }
   return base.chats[chatId];
 }
@@ -110,24 +120,40 @@ export function deleteScopedContainer(store, name, chatId, scope) {
 // resolves at write time and would silently land in the wrong chat. Jobs pin
 // the chat id they started on for their whole duration.
 let pinnedChatId = null;
-let pinDepth = 0;
+const activePins = new Set();
+let pinGeneration = 0;
 
 /**
  * Pins the chat scope to a specific chat id for the duration of a job.
- * Nested pins keep the outer (job-origin) chat id.
+ * Nested pins keep the outer (job-origin) chat id. The returned opaque token
+ * owns exactly one pin and must be passed to unpinChatScope().
  * @param {string|number|null} chatId
+ * @returns {object} opaque pin ownership token
  */
 export function pinChatScope(chatId) {
-  if (pinDepth === 0) pinnedChatId = chatId == null ? null : String(chatId);
-  pinDepth++;
+  const token = Object.freeze({ generation: pinGeneration, id: Symbol('chat-scope-pin') });
+  if (activePins.size === 0) pinnedChatId = chatId == null ? null : String(chatId);
+  activePins.add(token);
+  return token;
 }
 
 /**
- * Releases one pin level. The pin is cleared only when the outermost job ends.
+ * Releases only the pin owned by the supplied token. Stale, missing, or
+ * already-released tokens are ignored so old cleanup cannot release a newer job.
+ * @param {object|null} token
+ * @returns {boolean} whether an active pin was released
  */
-export function unpinChatScope() {
-  pinDepth = Math.max(0, pinDepth - 1);
-  if (pinDepth === 0) pinnedChatId = null;
+export function unpinChatScope(token = null) {
+  if (!token || token.generation !== pinGeneration || !activePins.delete(token)) return false;
+  if (activePins.size === 0) pinnedChatId = null;
+  return true;
+}
+
+/** Invalidates all job-origin pins during a chat transition. */
+export function invalidateChatScopePin() {
+  activePins.clear();
+  pinnedChatId = null;
+  pinGeneration++;
 }
 
 /**
@@ -137,8 +163,9 @@ export function unpinChatScope() {
  * @returns {string|null}
  */
 export function resolveChatScopeId(liveChatId) {
-  if (pinnedChatId != null) return pinnedChatId;
-  return liveChatId == null ? null : String(liveChatId);
+  const live = liveChatId == null ? null : String(liveChatId);
+  if (pinnedChatId != null) return live === pinnedChatId ? pinnedChatId : null;
+  return live;
 }
 
 /**

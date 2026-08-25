@@ -57,7 +57,13 @@ import { smLog } from './logging.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  currentLineageEpochStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 import { isProjectionTemporallyCompatible } from './timeline.js';
 
 // Default staleness threshold: 30 minutes. Profiles generated within this
@@ -82,14 +88,16 @@ export function loadProfiles(characterName) {
  * @param {{character_state: string, world_state: string, relationship_matrix: string, generated_at: number}} profiles
  * @param {string} characterName
  */
-async function saveProfiles(profiles, characterName) {
-  if (!characterName) return;
+async function saveProfiles(profiles, characterName, abortCheck = null) {
+  if (!characterName || abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
   if (!context.chatMetadata[META_KEY].profiles) context.chatMetadata[META_KEY].profiles = {};
   context.chatMetadata[META_KEY].profiles[characterName] = profiles;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**
@@ -124,10 +132,16 @@ export async function generateProfiles(characterName, abortCheck = null) {
   if (isCurrentLineageQuarantined() || !settings.profiles_enabled || !characterName) return null;
 
   // Only pass active (non-retired) memories to the profile prompt.
-  const longtermMemories = filterCurrentChatRecords(loadCharacterMemories(characterName)).filter(
+  const longtermMemories = filterCurrentChatRecords(loadCharacterMemories(characterName), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  }).filter(
     (m) => !m.superseded_by,
   );
-  const sessionMemories = filterCurrentChatRecords(loadSessionMemories()).filter(
+  const sessionMemories = filterCurrentChatRecords(loadSessionMemories(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  }).filter(
     (m) => !m.superseded_by,
   );
 
@@ -173,9 +187,11 @@ export async function generateProfiles(characterName, abortCheck = null) {
       generated_at: Date.now(),
       source_chat_id: getCurrentChatId() ?? null,
       source_message_range: [0, Math.max(0, (getContext().chat?.length ?? 1) - 1)],
+      ...(currentLineageEpochStamp() ?? {}),
+      ...currentLineageRecordStamp(),
     };
     if (abortCheck?.()) return null;
-    await saveProfiles(profiles, characterName);
+    await saveProfiles(profiles, characterName, abortCheck);
     return profiles;
   } catch (err) {
     console.error('[SmartMemory] Profile generation failed:', err);
@@ -225,7 +241,7 @@ function formatProfiles(profiles, budget) {
 export function injectProfiles(characterName) {
   const settings = extension_settings[MODULE_NAME];
 
-  if (isCurrentLineageQuarantined() || !settings.profiles_enabled) {
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !settings.profiles_enabled) {
     setMacroContent(MACRO_NAMES.profiles, '');
     setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_PROFILES);
@@ -233,7 +249,13 @@ export function injectProfiles(characterName) {
   }
 
   const storedProfiles = loadProfiles(characterName);
-  if (!storedProfiles || filterCurrentChatRecords([storedProfiles]).length === 0) {
+  if (
+    !storedProfiles ||
+    filterCurrentChatRecords([storedProfiles], {
+      requireExplicitChat: true,
+      requireStableChatUid: true,
+    }).length === 0
+  ) {
     setMacroContent(MACRO_NAMES.profiles, '');
     setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_PROFILES);
@@ -291,7 +313,8 @@ export function injectProfiles(characterName) {
  * If omitted, all profiles for the chat are removed.
  * @param {string} [characterName]
  */
-export async function clearProfiles(characterName) {
+export async function clearProfiles(characterName, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (context.chatMetadata?.[META_KEY]?.profiles) {
     if (characterName) {
@@ -299,8 +322,10 @@ export async function clearProfiles(characterName) {
     } else {
       delete context.chatMetadata[META_KEY].profiles;
     }
+    if (abortCheck?.()) return false;
     await context.saveMetadata();
   }
   setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
   invalidateUnifiedCache(PROMPT_KEY_PROFILES);
+  return true;
 }

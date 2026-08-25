@@ -53,7 +53,7 @@ import { loadCharacterMemories } from './longterm.js';
 import { loadSessionMemories } from './session.js';
 import { parseContradictions } from './parsers.js';
 import { smLog } from './logging.js';
-import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { isCurrentLineageQuarantined, isFreshStartActive } from './lineage-runtime.js';
 import { shouldInjectDirectRepair } from './runtime-policy.js';
 
 /**
@@ -159,7 +159,8 @@ export async function checkContinuity(characterName) {
  * @param {string} characterName - Used to load the correct long-term memories.
  * @returns {Promise<string>} The corrective note text.
  */
-export async function generateRepair(contradictions, characterName) {
+export async function generateRepair(contradictions, characterName, abortCheck = null) {
+  if (abortCheck?.()) return null;
   const settings = extension_settings[MODULE_NAME];
   const facts = gatherEstablishedFacts(characterName);
   const prompt = buildRepairPrompt(contradictions, facts);
@@ -167,6 +168,8 @@ export async function generateRepair(contradictions, characterName) {
   const note = await generateMemoryExtract(prompt, {
     responseLength: settings.continuity_response_length ?? 300,
   });
+
+  if (abortCheck?.()) return null;
 
   smLog('[SmartMemory] Repair note generated:', note);
   return typeof note === 'string' ? note.trim() : null;
@@ -179,8 +182,15 @@ export async function generateRepair(contradictions, characterName) {
  * @param {string} repairNote - The corrective note text.
  */
 export function injectRepair(repairNote) {
-  if (!shouldInjectDirectRepair(extension_settings[MODULE_NAME])) return;
-  if (isCurrentLineageQuarantined()) return;
+  const settings = extension_settings[MODULE_NAME];
+  if (
+    settings?.enabled === false ||
+    isFreshStartActive() ||
+    !shouldInjectDirectRepair(settings) ||
+    isCurrentLineageQuarantined() ||
+    typeof repairNote !== 'string' ||
+    repairNote.trim() === ''
+  ) return;
   const context = getContext();
   if (!context.chatMetadata) return;
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
@@ -217,11 +227,13 @@ export function clearRepair() {
  */
 export function loadAndInjectRepair() {
   const context = getContext();
-  if (!shouldInjectDirectRepair(extension_settings[MODULE_NAME])) {
-    clearRepair();
-    return;
-  }
-  if (isCurrentLineageQuarantined()) {
+  const settings = extension_settings[MODULE_NAME];
+  if (
+    settings?.enabled === false ||
+    isFreshStartActive() ||
+    !shouldInjectDirectRepair(settings) ||
+    isCurrentLineageQuarantined()
+  ) {
     setExtensionPrompt(PROMPT_KEY_REPAIR, '', extension_prompt_types.NONE, 0);
     return;
   }

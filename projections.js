@@ -21,6 +21,7 @@ export const PROJECTION_KINDS = Object.freeze({
   RELATIONSHIP: 'relationship',
   ARC: 'arc',
   EPISTEMIC: 'epistemic',
+  SESSION: 'session',
   NARRATIVE_DELTA: 'narrative_delta',
 });
 
@@ -31,6 +32,7 @@ const OWNER_BY_KIND = Object.freeze({
   relationship: PROJECTION_OWNERS.STRUCTURED,
   arc: PROJECTION_OWNERS.STRUCTURED,
   epistemic: PROJECTION_OWNERS.STRUCTURED,
+  session: PROJECTION_OWNERS.STRUCTURED,
   narrative_delta: PROJECTION_OWNERS.NARRATIVE,
 });
 
@@ -137,6 +139,27 @@ export function defaultSourceMessages(sourceRange) {
     : [sourceRange.start, sourceRange.end];
 }
 
+const IDENTITY_VARIANT_KEYS = new Set([
+  'chat_id',
+  'source_chat_id',
+  '_source_chat_id',
+  'chat_uid',
+  'source_chat_uid',
+  '_source_chat_uid',
+  'branch_uid',
+  '_branch_uid',
+  'lineage_epoch',
+  '_lineage_epoch',
+]);
+
+/** Removes untrusted nested chat/branch identity before canonical stamping. */
+export function stripIdentityVariants(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !IDENTITY_VARIANT_KEYS.has(key)),
+  );
+}
+
 /**
  * Builds a typed derived record with the metadata required for later filtering,
  * reconciliation, and branch-safe retrieval.
@@ -161,8 +184,11 @@ export function buildDerivedRecord({
   const range = normalizeSourceRange(sourceRange);
   const chatUid = assertNonEmptyString(scope?.chat_uid, 'record scope.chat_uid');
   const normalizedScope = {
-    ...scope,
+    ...stripIdentityVariants(scope),
     chat_uid: chatUid,
+    ...(scope?.branch_uid != null && scope.branch_uid !== ''
+      ? { branch_uid: String(scope.branch_uid) }
+      : {}),
   };
   if (normalizedScope.branch_uid != null && normalizedScope.branch_uid !== '') {
     normalizedScope.branch_uid = String(normalizedScope.branch_uid);
@@ -174,7 +200,7 @@ export function buildDerivedRecord({
   }
 
   const normalizedProvenance = {
-    ...(provenance ?? {}),
+    ...stripIdentityVariants(provenance),
     source_chat_uid: String(provenance?.source_chat_uid ?? chatUid),
     source_messages: Array.isArray(provenance?.source_messages)
       ? [...provenance.source_messages]
@@ -212,12 +238,12 @@ export function normalizeDerivedRecord(record, window, { owner = null } = {}) {
   const content = record?.content;
   const generatedId = `${window.window_id}:${kind}:${hash32(String(content ?? ''), 0x811c9dc5)}`;
   const scope = {
-    ...(record?.scope ?? {}),
+    ...stripIdentityVariants(record?.scope),
     chat_uid: window.chat_uid,
     ...(window.branch_uid != null ? { branch_uid: window.branch_uid } : {}),
   };
   const provenance = {
-    ...(record?.provenance ?? {}),
+    ...stripIdentityVariants(record?.provenance),
     source_chat_uid: window.chat_uid,
     source_messages:
       record?.provenance?.source_messages ?? defaultSourceMessages(window.source_range),

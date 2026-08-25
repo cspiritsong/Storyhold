@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.6] - 2026-08-21
+
+### Fixed
+
+- **Memorize Chat product pipeline.** The canonical product path now reports transcript-window preparation, narrative and structured projection activity, record counts, cursor saves, completion, cancellation, and failures.
+- Product-mode views now show narrative continuity, long-term facts, relationships, session evidence, current state, story arcs, Perspectives & Secrets, and product entities from the canonical structured store.
+- Product operations are serialized across automatic/manual entry points, and read-only or quarantined chats fail closed before any product write.
+- Added a durable product-status summary and read-only previews without restoring legacy multi-writer prompt injection.
+
+## [1.10.5] - 2026-08-21
+
+### Fixed
+
+- **Memorize Chat product visibility.** Product-mode catch-up now reports start, window, projector, save, completion, cancellation, and failure stages in the Storyhold status UI.
+- Added a canonical Product Memory panel with narrative-layer counts, typed record counts, failure counts, and recent read-only previews.
+- Existing memory sections now display the corresponding product records in read-only mode instead of showing empty legacy stores.
+- The combined structured projection now includes session evidence, which is brokered into the evidence section without adding another model call or prompt writer.
+
 ## [1.10.4] - 2026-08-21
 
 ### Fixed

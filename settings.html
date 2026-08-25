@@ -53,7 +53,7 @@
               Memorize Chat
               <span
                 class="sm-info"
-                data-tooltip="Reads the full chat history and builds memories from it - long-term facts, session details, scene history, story arcs, and summary. Use this to bring Storyhold up to speed on an existing chat. May take a while on long chats."
+                data-tooltip="Reads the full chat history through one bounded product pipeline. It writes the narrative chain plus combined structured records for facts, relationships, session evidence, current state, active arcs, and Perspectives & Secrets."
                 >ⓘ</span
               >
             </span>
@@ -74,7 +74,7 @@
               Rescan Chat
               <span
                 class="sm-info"
-                data-tooltip="Rereads the full transcript in two passes and adds only memories that are not already recorded. Existing memories are kept and used to skip duplicates."
+                data-tooltip="Product mode clears only Storyhold's canonical stores, then rereads the full transcript once through the bounded product pipeline. Compatibility mode retains the older two-pass rescan. Raw chat and unrelated settings are preserved."
                 >ⓘ</span
               >
             </span>
@@ -123,6 +123,15 @@
             </span>
           </button>
         </div>
+
+        <!-- Canonical product-store status and read-only previews -->
+        <div id="sm_product_status_panel" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
+          <p class="sm-section-title">Product Memory</p>
+          <div id="sm_product_status_message" class="sm-muted">No product memory processed for this chat yet.</div>
+          <div id="sm_product_status_counts" class="sm-product-status-counts"></div>
+          <div id="sm_product_status_records" class="sm-product-status-records"></div>
+        </div>
+
         <div id="sm_rename_recovery" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
           <div class="sm-btn-row">
             <button id="sm_audit_chat_memory" class="menu_button menu_button_icon">

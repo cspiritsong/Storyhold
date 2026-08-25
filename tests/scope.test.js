@@ -10,6 +10,7 @@ import {
   seedScopedContainer,
   pinChatScope,
   unpinChatScope,
+  invalidateChatScopePin,
   resolveChatScopeId,
 } from '../scope-core.js';
 
@@ -47,6 +48,17 @@ test('new chat containers are stamped with the schema version', () => {
   const store = {};
   getScopedContainer(store, 'Yuki', '7', MEMORY_SCOPE_CHAT, SCHEMA);
   assert.equal(store.Yuki.chats['7'].schema_version, SCHEMA);
+});
+
+test('new chat containers record stable uid and mutable chat id', () => {
+  const store = {};
+  getScopedContainer(store, 'Yuki', 'stable-uid', MEMORY_SCOPE_CHAT, SCHEMA, {
+    chat_uid: 'stable-uid',
+    chat_id: 'current-filename',
+  });
+
+  assert.equal(store.Yuki.chats['stable-uid'].chat_uid, 'stable-uid');
+  assert.equal(store.Yuki.chats['stable-uid'].chat_id, 'current-filename');
 });
 
 test('existing chat containers are not re-stamped', () => {
@@ -143,42 +155,87 @@ test('resolveChatScopeId returns the live chat id when nothing is pinned', () =>
   assert.equal(resolveChatScopeId(undefined), null);
 });
 
-test('pin overrides the live chat id for the job duration', () => {
-  pinChatScope('job-chat');
+test('pin does not override a different live chat while a job is active', () => {
+  const pin = pinChatScope('job-chat');
   try {
-    assert.equal(resolveChatScopeId('other-chat'), 'job-chat');
+    assert.equal(resolveChatScopeId('other-chat'), null);
+    assert.equal(resolveChatScopeId(null), null);
   } finally {
+    unpinChatScope(pin);
+  }
+});
+
+test('chat navigation invalidates the stale pin before the new chat resolves', () => {
+  const pin = pinChatScope('job-chat');
+  try {
+    assert.equal(resolveChatScopeId('other-chat'), null);
+    invalidateChatScopePin();
+    assert.equal(resolveChatScopeId('other-chat'), 'other-chat');
+  } finally {
+    unpinChatScope(pin);
+  }
+});
+
+test('stale pin cleanup cannot release a newer chat pin', () => {
+  const stalePin = pinChatScope('old-chat');
+  invalidateChatScopePin();
+  const currentPin = pinChatScope('new-chat');
+  try {
+    unpinChatScope(stalePin);
+    assert.equal(resolveChatScopeId('new-chat'), 'new-chat');
+    assert.equal(resolveChatScopeId('other-chat'), null);
+  } finally {
+    unpinChatScope(currentPin);
+  }
+});
+
+test('unowned pin cleanup does not release an active pin', () => {
+  const currentPin = pinChatScope('owned-chat');
+  try {
     unpinChatScope();
+    assert.equal(resolveChatScopeId('owned-chat'), 'owned-chat');
+    assert.equal(resolveChatScopeId('other-chat'), null);
+  } finally {
+    unpinChatScope(currentPin);
+  }
+});
+
+test('pin overrides the live chat id for the job duration', () => {
+  const pin = pinChatScope('job-chat');
+  try {
+    assert.equal(resolveChatScopeId('job-chat'), 'job-chat');
+  } finally {
+    unpinChatScope(pin);
   }
   assert.equal(resolveChatScopeId('other-chat'), 'other-chat', 'pin released after unpin');
 });
 
 test('nested pins keep the outer job-origin chat id', () => {
-  pinChatScope('outer-chat');
-  pinChatScope('inner-chat');
+  const outerPin = pinChatScope('outer-chat');
+  const innerPin = pinChatScope('inner-chat');
   try {
-    assert.equal(resolveChatScopeId('live'), 'outer-chat');
+    assert.equal(resolveChatScopeId('outer-chat'), 'outer-chat');
   } finally {
-    unpinChatScope();
-    assert.equal(resolveChatScopeId('live'), 'outer-chat', 'inner unpin does not release outer');
-    unpinChatScope();
+    unpinChatScope(innerPin);
+    assert.equal(resolveChatScopeId('outer-chat'), 'outer-chat', 'inner unpin does not release outer');
+    unpinChatScope(outerPin);
   }
   assert.equal(resolveChatScopeId('live'), 'live');
 });
 
 test('unpin beyond depth is safe and stays unpinned', () => {
-  pinChatScope('a');
-  unpinChatScope();
-  unpinChatScope();
+  const pin = pinChatScope('a');
+  unpinChatScope(pin);
+  unpinChatScope(pin);
   unpinChatScope();
   assert.equal(resolveChatScopeId('b'), 'b');
 });
 
 test('a null pin falls back to the live chat id', () => {
-  pinChatScope(null);
+  const pin = pinChatScope(null);
   try {
     assert.equal(resolveChatScopeId('live'), 'live');
   } finally {
-    unpinChatScope();
+    unpinChatScope(pin);
   }
 });

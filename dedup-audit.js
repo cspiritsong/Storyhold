@@ -18,6 +18,51 @@ export function isDuplicatePair(score, { semantic = false } = {}) {
 }
 
 /**
+ * Serializes a value deterministically for a short-lived confirmation snapshot.
+ * This is not a security hash; it detects any material change to the reviewed
+ * memory objects before a destructive apply.
+ */
+function stableSnapshot(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSnapshot).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSnapshot(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Captures the exact eligible memory set that a user-approved duplicate plan
+ * was computed against. The snapshot is process-local and is never persisted.
+ */
+export function createDuplicateReview(items = [], plan = {}) {
+  return Object.freeze({
+    items: Object.freeze(
+      items.map((item) =>
+        Object.freeze({
+          id: item?.id,
+          snapshot: stableSnapshot(item),
+        }),
+      ),
+    ),
+    clusters: Object.freeze((plan.clusters ?? []).map((cluster) => Object.freeze([...cluster]))),
+    remove_ids: Object.freeze([...(plan.remove_ids ?? [])]),
+    keep_ids: Object.freeze([...(plan.keep_ids ?? [])]),
+  });
+}
+
+/** Returns true only when the current eligible set is byte-for-byte review-equivalent. */
+export function duplicateReviewMatches(items = [], review = null) {
+  if (!review || !Array.isArray(review.items) || review.items.length !== items.length) return false;
+  return review.items.every(
+    (entry, index) =>
+      entry?.id === items[index]?.id && entry?.snapshot === stableSnapshot(items[index]),
+  );
+}
+
+/**
  * Plans a safe duplicate removal over an ordered item list.
  *
  * @param {Array<{id: *, content: string, type?: string}>} items

@@ -48,6 +48,7 @@ import {
   MODULE_NAME,
   META_KEY,
   PROMPT_KEY_LONG,
+  PROMPT_KEY_SHORT,
   PROMPT_KEY_SESSION,
   PROMPT_KEY_SCENES,
   PROMPT_KEY_ARCS,
@@ -86,7 +87,6 @@ import {
   saveEpistemicKnowledge,
   resetEpistemicWarnFlag,
 } from './epistemic.js';
-import { hideChatMessageRange } from '../../../../scripts/chats.js';
 import { generateRecap, displayRecap } from './recap.js';
 import {
   extractSessionMemories,
@@ -128,8 +128,9 @@ import {
   runStateCardExtraction,
 } from './state-ledger.js';
 import { detectAndPruneInFileBranch } from './branch-ops.js';
-import { watermarkFromChat } from './branch-aware.js';
-import { LINEAGE_STATUS } from './lineage.js';
+import { updateLegacySourceProof, watermarkFromChat } from './branch-aware.js';
+import { buildRebuiltLineageMetadata, LINEAGE_STATUS } from './lineage.js';
+import { currentLineageRecordStamp, isCurrentLineageQuarantined } from './lineage-runtime.js';
 import { NAMESPACE_STATUS } from './rename-recovery.js';
 import {
   DEFAULT_TOTAL_INJECT_BUDGET,
@@ -142,12 +143,19 @@ import {
 } from './budget-policy.js';
 import { buildRescanSummary, normalizeRescanPasses, RESCAN_DEFAULT_PASSES } from './rescan-policy.js';
 import { generateProfiles, injectProfiles, clearProfiles, loadProfiles } from './profiles.js';
-import { clearUnifiedSlot, injectUnified, maybeInjectUnified } from './unified-inject.js';
+import {
+  clearUnifiedSlot,
+  injectUnified,
+  invalidateUnifiedCache,
+  maybeInjectUnified,
+} from './unified-inject.js';
 import { resetProductMemory } from './product-runtime.js';
 import { getTierHWStats, clearTierStats } from './trim-stats.js';
 import { showMemoryGraph } from './graph.js';
+import { smLog } from './logging.js';
 import {
   setStatusMessage,
+  updateProductStatusUI,
   updateLongTermUI,
   updateRelationshipHistoryUI,
   updateEpistemicUI,
@@ -454,6 +462,21 @@ function applyTotalBudget(total, s) {
   return result;
 }
 
+function refreshProductModeViews(characterName = null) {
+  maybeInjectUnified({ respondingCharacter: characterName });
+  updateProductStatusUI();
+  updateLongTermUI(characterName);
+  updateRelationshipHistoryUI(characterName);
+  updateSessionUI();
+  updateScenesUI();
+  updateArcsUI();
+  updateEpistemicUI(characterName);
+  updateProfilesUI(null);
+  updateFreshStartUI(isFreshStart());
+  updateCanonUI(null);
+  updateTokenDisplay();
+}
+
 /**
  * Re-injects all memory tiers using the current budget settings and refreshes
  * the token bar. Called after any budget slider change so the trim indicators
@@ -466,6 +489,10 @@ function applyTotalBudget(total, s) {
  * @param {string|null} characterName - Active character (or group selection).
  */
 async function reinjectAfterBudgetChange(characterName) {
+  if (extension_settings[MODULE_NAME]?.single_extension_mode === true) {
+    refreshProductModeViews(characterName);
+    return;
+  }
   loadAndInjectSummary();
   await injectMemories(characterName);
   injectRelationshipHistory(characterName);
@@ -789,8 +816,49 @@ export function bindSettingsUI(ctrl) {
    * would conflict with an in-progress background job.
    * @returns {boolean}
    */
+  function isProductMode() {
+    return extension_settings[MODULE_NAME].single_extension_mode === true;
+  }
+
+  function blockLegacyProductAction(label) {
+    if (!isProductMode()) return false;
+    toastr.info(`${label} is managed by the canonical Product Memory pipeline.`, 'Storyhold', {
+      timeOut: 4000,
+      positionClass: 'toast-bottom-right',
+    });
+    return true;
+  }
+
+  function captureLegacyOperation() {
+    const context = getContext();
+    const metadata = context.chatMetadata;
+    const chatId = getCurrentChatId();
+    const chatUid = metadata?.[META_KEY]?.chat_uid ?? null;
+    const characterName = ctrl.getSelectedCharacterName();
+    const mode = isProductMode();
+    const stillCurrent = () =>
+      ctrl.chatGeneration === generation &&
+      getCurrentChatId() === chatId &&
+      getContext().chatMetadata === metadata &&
+      getContext().chatMetadata?.[META_KEY]?.chat_uid === chatUid &&
+      ctrl.getSelectedCharacterName() === characterName &&
+      isProductMode() === mode &&
+      extension_settings[MODULE_NAME].enabled !== false &&
+      !isFreshStart() &&
+      !ctrl.lineageQuarantined;
+    const generation = ctrl.chatGeneration;
+    if (
+      mode ||
+      extension_settings[MODULE_NAME].enabled === false ||
+      isFreshStart() ||
+      ctrl.lineageQuarantined ||
+      !context.chatMetadata
+    ) return null;
+    return { context, characterName, stillCurrent };
+  }
+
   function isCatchUpRunning() {
-    if (ctrl.extractionRunning || ctrl.compactionRunning) {
+    if (ctrl.extractionRunning || ctrl.productOperationRunning || ctrl.compactionRunning) {
       toastr.warning(
         'Cannot do this while Memorize Chat is running. Cancel it first.',
         'Storyhold',
@@ -1004,18 +1072,22 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_nuke_selected_chat_memory').on('click', async function () {
+    if (blockLegacyProductAction('Legacy chat-memory management')) return;
     if (isCatchUpRunning()) return;
     const keys = selectedCharacterMemoryKeys();
     if (keys.length === 0) {
       toastr.info('Select one or more chat memory rows first.', 'Storyhold');
       return;
     }
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       `NUKE SELECTED CHAT MEMORY\n\nThis permanently deletes derived Smart-Memory for ${keys.length} selected chat namespace(s). Raw chat JSONL, parent chats, settings outside Storyhold, and native Vector Storage survive. This does not create trash. Continue?`,
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = ctrl.nukeCharacterChatMemory?.(keys);
+    if (!operation.stillCurrent()) return;
+    const result = ctrl.nukeCharacterChatMemory?.(keys, operation.stillCurrent);
     if (!result?.ok) {
       toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
@@ -1026,16 +1098,20 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_nuke_all_chat_memory').on('click', async function () {
+    if (blockLegacyProductAction('Legacy chat-memory management')) return;
     if (isCatchUpRunning()) return;
     const state = ctrl.listCharacterChatMemory?.();
     const count = state?.active?.length ?? 0;
     if (count === 0) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       `NUKE ALL ACTIVE CHAT MEMORY\n\nThis permanently deletes all ${count} active per-chat Smart-Memory namespaces for this character. Raw chat JSONL, parent chats, settings outside Storyhold, rollback archive, and native Vector Storage survive. Continue?`,
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = ctrl.nukeAllCharacterChatMemory?.();
+    if (!operation.stillCurrent()) return;
+    const result = ctrl.nukeAllCharacterChatMemory?.(operation.stillCurrent);
     if (!result?.ok) {
       toastr.error(`Nuke stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
@@ -1046,16 +1122,20 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_empty_rollback_archive').on('click', async function () {
+    if (blockLegacyProductAction('Legacy rollback management')) return;
     if (isCatchUpRunning()) return;
     const state = ctrl.listCharacterChatMemory?.();
     const count = state?.archives?.length ?? 0;
     if (count === 0) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       `EMPTY ROLLBACK ARCHIVE\n\nThis permanently deletes ${count} archived derived Smart-Memory namespace(s). Active chat memory, raw chat JSONL, parent chats, and native Vector Storage survive. This cannot be undone. Continue?`,
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = ctrl.emptyCharacterRollbackArchive?.();
+    if (!operation.stillCurrent()) return;
+    const result = ctrl.emptyCharacterRollbackArchive?.(operation.stillCurrent);
     if (!result?.ok) {
       toastr.error(`Archive cleanup stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
@@ -1065,13 +1145,18 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_unlink_force_link').on('click', async function () {
+    if (blockLegacyProductAction('Legacy force-linked memory management')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       'UNLINK FORCE-LINKED MEMORY\n\nThis removes the manually imported namespace from active retrieval for this chat, preserves it in the rollback archive, and restores the previous quarantine/lineage state. Raw chat JSONL, parent chats, and native Vector Storage survive. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = await ctrl.unlinkManualMemory?.();
+    if (!operation.stillCurrent()) return;
+    const result = await ctrl.unlinkManualMemory?.(operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     if (!result?.ok) {
       toastr.error(`Unlink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
@@ -1084,14 +1169,22 @@ export function bindSettingsUI(ctrl) {
   $('#sm_character_memory_rows').on('click', '.sm_manager_relink', async function (event) {
     event.preventDefault();
     event.stopPropagation();
+    if (blockLegacyProductAction('Legacy chat-memory management')) return;
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       'FORCE LINK THIS MEMORY\n\nYou are overriding Storyhold\'s branch-safety check and attaching this entire orphaned namespace to the current chat. This imports all derived memories from the selected source; it does not prove a shared prefix. The old namespace remains as rollback history. If this is not intentional, cancel. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, { manual: true });
+    if (!operation.stillCurrent()) return;
+    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, {
+      manual: true,
+      abortCheck: operation.stillCurrent,
+    });
+    if (!operation.stillCurrent()) return;
     if (!result?.ok) {
       toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       return;
@@ -1103,14 +1196,21 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_rename_audit_results').on('click', '.sm_rename_relink', async function () {
+    if (blockLegacyProductAction('Legacy chat-memory management')) return;
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       'RELINK EXACT CHAT MEMORY\n\nThe transcript fingerprint matches this namespace. Storyhold will copy the derived namespace to the stable chat identity and keep the old namespace as rollback history. Raw chat, parent chat, settings outside Storyhold, and native vectors are not changed. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = await ctrl.relinkRenameNamespace?.(namespaceKey);
+    if (!operation.stillCurrent()) return;
+    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, {
+      abortCheck: operation.stillCurrent,
+    });
+    if (!operation.stillCurrent()) return;
     if (!result?.ok) {
       toastr.error(`Relink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
@@ -1122,14 +1222,22 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_rename_audit_results').on('click', '.sm_rename_relink_legacy', async function () {
+    if (blockLegacyProductAction('Legacy chat-memory management')) return;
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       'RELINK LEGACY CHAT MEMORY\n\nStoryhold cannot prove the transcript fingerprint because this namespace predates the audit metadata. You are confirming that this is the same chat after a rename. The derived memory will be copied to the stable chat identity and the old namespace will remain as rollback history. If this is not the same chat, stop and rebuild instead. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, { manual: true });
+    if (!operation.stillCurrent()) return;
+    const result = await ctrl.relinkRenameNamespace?.(namespaceKey, {
+      manual: true,
+      abortCheck: operation.stillCurrent,
+    });
+    if (!operation.stillCurrent()) return;
     if (!result?.ok) {
       toastr.error(`Manual relink stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
@@ -1141,14 +1249,23 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_rename_audit_results').on('click', '.sm_rename_archive', async function () {
+    if (blockLegacyProductAction('Legacy chat-memory management')) return;
     if (isCatchUpRunning()) return;
     const namespaceKey = $(this).data('namespace-key');
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const confirmed = await callGenericPopup(
       'ARCHIVE ORPHANED MEMORY\n\nThis removes the selected derived namespace from active Smart-Memory retrieval and keeps it in a rollback archive. It does not delete the raw chat, parent chat, settings, or native vectors. Continue?',
       POPUP_TYPE.CONFIRM,
     );
     if (!confirmed) return;
-    const result = await ctrl.archiveRenameNamespace?.(namespaceKey, 'manual-orphan-archive');
+    if (!operation.stillCurrent()) return;
+    const result = await ctrl.archiveRenameNamespace?.(
+      namespaceKey,
+      'manual-orphan-archive',
+      operation.stillCurrent,
+    );
+    if (!operation.stillCurrent()) return;
     if (!result?.ok) {
       toastr.error(`Archive stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
       renderRenameAudit(result?.audit ?? ctrl.auditRenameNamespaces?.());
@@ -1170,7 +1287,8 @@ export function bindSettingsUI(ctrl) {
    * @param {number} startIndex - Chat index where the read-only window began.
    * @returns {Promise<void>}
    */
-  async function commitReadOnlyWindow(startIndex) {
+  async function commitReadOnlyWindow(startIndex, stillCurrent = () => true) {
+    if (!stillCurrent()) return;
     const context = getContext();
     const settings = extension_settings[MODULE_NAME];
     const windowMessages = (context.chat ?? [])
@@ -1190,47 +1308,57 @@ export function bindSettingsUI(ctrl) {
         .filter(Boolean);
     })();
 
-    pinChatScope(getCurrentChatId());
+    const readOnlyScopePin = pinChatScope(context.chatMetadata?.[META_KEY]?.chat_uid ?? getCurrentChatId());
     setStatusMessage('Committing read-only session...');
     try {
       for (const name of characterNames) {
+        if (!stillCurrent()) return;
         if (settings.longterm_enabled) {
           const nameWindow = context.groupId
             ? windowMessages.filter((m) => m.is_user || m.name === name)
             : windowMessages;
           if (nameWindow.length > 0) {
-            await extractAndStoreMemories(name, nameWindow).catch((err) =>
+            if (!stillCurrent()) return;
+            await extractAndStoreMemories(name, nameWindow, setStatusMessage, stillCurrent).catch((err) =>
               console.error('[SmartMemory] Commit long-term extraction error:', err),
             );
+            if (!stillCurrent()) return;
             if (settings.consolidation_enabled) {
-              await consolidateMemories(name).catch((err) =>
+              if (!stillCurrent()) return;
+              await consolidateMemories(name, false, stillCurrent).catch((err) =>
                 console.error('[SmartMemory] Commit consolidation error:', err),
               );
+              if (!stillCurrent()) return;
             }
           }
         }
         if (settings.profiles_enabled && name) {
-          await generateProfiles(name)
+          if (!stillCurrent()) return;
+          await generateProfiles(name, stillCurrent)
             .then((profiles) => {
-              if (profiles) {
+              if (profiles && stillCurrent()) {
                 injectProfiles(name);
                 updateProfilesUI(profiles);
               }
             })
             .catch((err) => console.error('[SmartMemory] Commit profile generation error:', err));
+          if (!stillCurrent()) return;
         }
       }
 
       if (settings.arcs_enabled) {
-        await extractArcs(windowMessages).catch((err) =>
+        if (!stillCurrent()) return;
+        await extractArcs(windowMessages, null, stillCurrent).catch((err) =>
           console.error('[SmartMemory] Commit arc extraction error:', err),
         );
+        if (!stillCurrent()) return;
       }
 
+      if (!stillCurrent()) return;
       saveSettingsDebounced();
       setStatusMessage('Session committed.');
     } finally {
-      unpinChatScope();
+      unpinChatScope(readOnlyScopePin);
     }
   }
 
@@ -1248,6 +1376,9 @@ export function bindSettingsUI(ctrl) {
       if (!extension_settings[MODULE_NAME].enabled) {
         // Remove all injections immediately so nothing lingers in the prompt.
         ctrl.clearAllInjections();
+        ctrl.clearProductViews?.();
+        ctrl.invalidateProductControl?.();
+        $(document).trigger('smart_memory:rebuild_cancelled');
       } else {
         // Restore injections from stored data so the user picks up where they left off.
         ctrl.onChatChanged();
@@ -1344,6 +1475,10 @@ export function bindSettingsUI(ctrl) {
   $('#sm_group_char_select').on('change', async function () {
     const selection = $(this).val() || null;
     ctrl.selectedGroupCharacter = selection;
+    if (isProductMode()) {
+      refreshProductModeViews(selection);
+      return;
+    }
     updateLongTermUI(ctrl.selectedGroupCharacter);
     updateRelationshipHistoryUI(ctrl.selectedGroupCharacter);
     updateEpistemicUI(ctrl.selectedGroupCharacter);
@@ -1797,8 +1932,21 @@ export function bindSettingsUI(ctrl) {
   $('#sm_compaction_enabled')
     .prop('checked', s.compaction_enabled)
     .on('change', function () {
-      extension_settings[MODULE_NAME].compaction_enabled = $(this).prop('checked');
+      const enabled = $(this).prop('checked');
+      extension_settings[MODULE_NAME].compaction_enabled = enabled;
       saveSettingsDebounced();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
+      if (enabled) {
+        loadAndInjectSummary();
+      } else {
+        setExtensionPrompt(PROMPT_KEY_SHORT, '', extension_prompt_types.NONE, 0);
+        invalidateUnifiedCache(PROMPT_KEY_SHORT);
+      }
+      maybeInjectUnified();
+      updateTokenDisplay();
     });
 
   $('#sm_compaction_threshold')
@@ -1853,15 +2001,21 @@ export function bindSettingsUI(ctrl) {
   $('#sm_canon_enabled')
     .prop('checked', s.canon_enabled ?? true)
     .on('change', function () {
-      extension_settings[MODULE_NAME].canon_enabled = $(this).prop('checked');
+      const enabled = $(this).prop('checked');
+      extension_settings[MODULE_NAME].canon_enabled = enabled;
       saveSettingsDebounced();
-      if (!extension_settings[MODULE_NAME].canon_enabled) {
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
+      if (!enabled) {
         setExtensionPrompt(PROMPT_KEY_CANON, '', extension_prompt_types.NONE, 0);
-        updateTokenDisplay();
+        invalidateUnifiedCache(PROMPT_KEY_CANON);
       } else {
         injectCanon(ctrl.getSelectedCharacterName());
-        updateTokenDisplay();
       }
+      maybeInjectUnified();
+      updateTokenDisplay();
     });
 
   $('#sm_canon_inject_budget')
@@ -1900,6 +2054,14 @@ export function bindSettingsUI(ctrl) {
 
   // Allow manual edits to the canon textarea to take effect immediately.
   $('#sm_canon_display').on('input', function () {
+    if (blockLegacyProductAction('Manual canon editing')) {
+      updateCanonUI(null);
+      return;
+    }
+    if (!captureLegacyOperation()) {
+      updateCanonUI(null);
+      return;
+    }
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
     const val = $(this).val().trim();
@@ -1913,13 +2075,18 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_summarize_now').on('click', async function () {
+    if (blockLegacyProductAction('Manual summary generation')) return;
     if (isCatchUpRunning()) return;
     if (ctrl.compactionRunning) return;
-    ctrl.compactionRunning = true;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
+    const compactionToken = ctrl.claimCompactionOwnership();
+    if (!compactionToken) return;
     setStatusMessage('Extracting short-term memories...');
     $(this).prop('disabled', true);
     try {
-      const summary = await runCompaction();
+      const summary = await runCompaction({ abortCheck: operation.stillCurrent });
+      if (!operation.stillCurrent()) return;
       if (summary) {
         injectSummary(summary);
         updateShortTermUI(summary);
@@ -1932,12 +2099,15 @@ export function bindSettingsUI(ctrl) {
       setStatusMessage('');
     } finally {
       $(this).prop('disabled', false);
-      ctrl.compactionRunning = false;
+      ctrl.releaseCompactionOwnership(compactionToken);
     }
   });
 
   $('#sm_generate_canon').on('click', async function () {
+    if (blockLegacyProductAction('Manual canon generation')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
       toastr.warning('No character loaded.', 'Storyhold');
@@ -1953,7 +2123,8 @@ export function bindSettingsUI(ctrl) {
     $(this).prop('disabled', true);
     setStatusMessage('Generating canon summary...');
     try {
-      const text = await generateCanon(characterName);
+      const text = await generateCanon(characterName, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       if (text) {
         injectCanon(characterName);
         updateCanonUI(characterName);
@@ -1974,6 +2145,14 @@ export function bindSettingsUI(ctrl) {
 
   // Allow manual edits to the summary textarea to take effect immediately.
   $('#sm_current_summary').on('input', function () {
+    if (blockLegacyProductAction('Manual summary editing')) {
+      updateProductStatusUI();
+      return;
+    }
+    if (!captureLegacyOperation()) {
+      updateProductStatusUI();
+      return;
+    }
     const context = getContext();
     if (!context.chatMetadata) context.chatMetadata = {};
     if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
@@ -2035,7 +2214,13 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].longterm_enabled = $(this).prop('checked');
       saveSettingsDebounced();
-      injectMemories(ctrl.getSelectedCharacterName()).catch(console.error);
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
+      injectMemories(ctrl.getSelectedCharacterName())
+        .then(() => maybeInjectUnified())
+        .catch(console.error);
     });
 
   $('#sm_longterm_extract_every')
@@ -2113,7 +2298,12 @@ export function bindSettingsUI(ctrl) {
       extension_settings[MODULE_NAME].relationships_enabled = $(this).prop('checked');
       saveSettingsDebounced();
       const characterName = ctrl.getSelectedCharacterName();
+      if (isProductMode()) {
+        refreshProductModeViews(characterName);
+        return;
+      }
       injectRelationshipHistory(characterName);
+      maybeInjectUnified();
     });
 
   $('#sm_relationships_inject_budget_value').text(s.relationships_inject_budget ?? 250);
@@ -2148,6 +2338,7 @@ export function bindSettingsUI(ctrl) {
 
   // ---- Relationship history panel buttons -----------------------------
   $('#sm_add_relationship').on('click', function () {
+    if (blockLegacyProductAction('Manual relationship editing')) return;
     $('#sm_relationship_add_form').removeData('editing').show();
     $('#sm_rel_subject').val('').focus();
     $('#sm_rel_target').val('');
@@ -2159,8 +2350,11 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_rel_save').on('click', function () {
+    if (blockLegacyProductAction('Manual relationship editing')) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
+    const operation = captureLegacyOperation(characterName);
+    if (!operation) return;
 
     const subject = $('#sm_rel_subject').val().trim();
     const target = $('#sm_rel_target').val().trim();
@@ -2196,7 +2390,8 @@ export function bindSettingsUI(ctrl) {
     const editingKey = $('#sm_relationship_add_form').data('editing');
     if (editingKey && editingKey !== key) delete h[editingKey];
 
-    h[key] = { descriptors, updatedAt: Date.now() };
+    h[key] = { descriptors, updatedAt: Date.now(), ...currentLineageRecordStamp() };
+    if (!operation.stillCurrent()) return;
     saveRelationshipHistory(characterName, h);
     saveSettingsDebounced();
     injectRelationshipHistory(characterName);
@@ -2205,8 +2400,11 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_clear_relationships').on('click', async function () {
+    if (blockLegacyProductAction('Manual relationship clearing')) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
+    const operation = captureLegacyOperation(characterName);
+    if (!operation) return;
     if (
       !(await callGenericPopup(
         `Clear all relationship history for "${characterName}"?`,
@@ -2214,6 +2412,7 @@ export function bindSettingsUI(ctrl) {
       ))
     )
       return;
+    if (!operation.stillCurrent()) return;
     clearRelationshipHistory(characterName);
     saveSettingsDebounced();
     injectRelationshipHistory(null);
@@ -2241,7 +2440,12 @@ export function bindSettingsUI(ctrl) {
       extension_settings[MODULE_NAME].epistemic_enabled = enabling;
       saveSettingsDebounced();
       const characterName = ctrl.getSelectedCharacterName();
+      if (isProductMode()) {
+        refreshProductModeViews(characterName);
+        return;
+      }
       injectEpistemicKnowledge(characterName, characterName);
+      maybeInjectUnified();
     });
 
   $('#sm_epistemic_inject_unaware')
@@ -2249,13 +2453,34 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].epistemic_inject_unaware = $(this).prop('checked');
       saveSettingsDebounced();
+      const characterName = ctrl.getSelectedCharacterName();
+      if (isProductMode()) {
+        refreshProductModeViews(characterName);
+        return;
+      }
+      injectEpistemicKnowledge(characterName, characterName);
+      maybeInjectUnified({ respondingCharacter: characterName });
+      updateTokenDisplay();
     });
 
   $('#sm_epistemic_secondhand_framing')
     .prop('checked', s.epistemic_secondhand_framing ?? true)
-    .on('change', function () {
+    .on('change', async function () {
       extension_settings[MODULE_NAME].epistemic_secondhand_framing = $(this).prop('checked');
       saveSettingsDebounced();
+      const characterName = ctrl.getSelectedCharacterName();
+      if (isProductMode()) {
+        refreshProductModeViews(characterName);
+        return;
+      }
+      try {
+        await injectMemories(characterName);
+        maybeInjectUnified({ respondingCharacter: characterName });
+        updateLongTermUI(characterName);
+        updateTokenDisplay();
+      } catch (error) {
+        console.error('[Storyhold] Secondhand setting refresh failed:', error);
+      }
     });
 
   $('#sm_epistemic_inject_budget_value').text(s.epistemic_inject_budget ?? 200);
@@ -2308,7 +2533,12 @@ export function bindSettingsUI(ctrl) {
       }
       extension_settings[MODULE_NAME].state_ledger_enabled = enabling;
       saveSettingsDebounced();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
       injectStateLedger();
+      maybeInjectUnified();
     });
 
   $('#sm_state_ledger_inject_budget_value').text(s.state_ledger_inject_budget ?? 200);
@@ -2347,6 +2577,7 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_epistemic_add').on('click', function () {
+    if (blockLegacyProductAction('Manual Perspectives & Secrets editing')) return;
     $('#sm_ep_type').val('knows');
     $('#sm_ep_subject').val('');
     $('#sm_ep_target').val('');
@@ -2361,8 +2592,11 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_ep_save').on('click', function () {
+    if (blockLegacyProductAction('Manual Perspectives & Secrets editing')) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
+    const operation = captureLegacyOperation(characterName);
+    if (!operation) return;
 
     const type = $('#sm_ep_type').val();
     const subject = $('#sm_ep_subject').val().trim();
@@ -2379,12 +2613,13 @@ export function bindSettingsUI(ctrl) {
       // Update the existing entry in place.
       const idx = entries.findIndex((e) => e.id === editingId);
       if (idx !== -1) {
-        entries[idx] = { ...entries[idx], type, subject, target, content };
+        entries[idx] = { ...entries[idx], type, subject, target, content, ...currentLineageRecordStamp() };
       }
     } else {
-      entries.push({ id: generateMemoryId(), type, subject, target, content, ts: Date.now() });
+      entries.push({ id: generateMemoryId(), type, subject, target, content, ts: Date.now(), ...currentLineageRecordStamp() });
     }
 
+    if (!operation.stillCurrent()) return;
     saveEpistemicKnowledge(characterName, entries);
     injectEpistemicKnowledge(characterName, characterName);
     updateEpistemicUI(characterName);
@@ -2393,8 +2628,11 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_epistemic_clear').on('click', async function () {
+    if (blockLegacyProductAction('Manual Perspectives & Secrets clearing')) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
+    const operation = captureLegacyOperation(characterName);
+    if (!operation) return;
     if (
       !(await callGenericPopup(
         `Clear all Perspectives & Secrets entries for "${characterName}"?`,
@@ -2402,6 +2640,7 @@ export function bindSettingsUI(ctrl) {
       ))
     )
       return;
+    if (!operation.stillCurrent()) return;
     clearEpistemicKnowledge(characterName);
     injectEpistemicKnowledge(null, null);
     updateEpistemicUI(characterName);
@@ -2410,14 +2649,42 @@ export function bindSettingsUI(ctrl) {
 
   $('#sm_read_only').on('change', async function () {
     const val = $(this).prop('checked');
-    await setFreshStart(val);
+    if (isCatchUpRunning()) {
+      $(this).prop('checked', !val);
+      return;
+    }
+    let productControlReserved = isProductMode() ? ctrl.reserveProductControl() : null;
+    if (isProductMode() && !productControlReserved) {
+      $(this).prop('checked', !val);
+      toastr.warning('A Product Memory operation is already running.', 'Storyhold', { timeOut: 3000 });
+      return;
+    }
+    try {
+      const transitionGeneration = ctrl.chatGeneration;
+    const transitionChatId = getCurrentChatId();
+    const transitionMetadata = getContext().chatMetadata;
+    const transitionStillCurrent = () =>
+      ctrl.chatGeneration === transitionGeneration &&
+      getCurrentChatId() === transitionChatId &&
+      getContext().chatMetadata === transitionMetadata &&
+      extension_settings[MODULE_NAME].enabled !== false &&
+      !ctrl.lineageQuarantined;
+    const commitStillCurrent = () => transitionStillCurrent() && !isFreshStart();
 
     if (val) {
+      // Set the gate synchronously before awaiting its save so no product
+      // operation can enter while the read-only window is being initialized.
+      const freshStartSave = setFreshStart(true);
+      ctrl.clearAllInjections();
+      ctrl.clearProductViews?.();
+      await freshStartSave;
+      if (!transitionStillCurrent()) return;
       // Record where this read-only window starts so we know which messages
       // to ghost if the user disables it later. setReadOnlyStartIndex also
       // records the current timestamp for session memory purging.
       const context = getContext();
       await setReadOnlyStartIndex(context.chat?.length ?? 0);
+      if (!transitionStillCurrent()) return;
       $('body').addClass('sm-read-only');
     } else {
       const startIndex = getReadOnlyStartIndex();
@@ -2430,48 +2697,116 @@ export function bindSettingsUI(ctrl) {
         ? await callGenericPopup(
             'Commit memories from this read-only session?\n\n' +
               'Yes - Keep session memories and extract long-term memories from this window.\n' +
-              'No - Discard all memories and hide messages from this window.',
+              'No - Discard derived memories from this window; keep the raw chat transcript unchanged.',
             POPUP_TYPE.CONFIRM,
           )
         : false;
 
+      if (!transitionStillCurrent()) {
+        $(this).prop('checked', true);
+        return;
+      }
+
       if (commit) {
-        // Lift the gate and process the window as if it had always been active.
+        // Keep Fresh Start active while clearing the window marker. Once the
+        // gate is lifted, start the intended operation in the same turn before
+        // any unrelated automatic handler can claim the chat.
         await setReadOnlyStartIndex(null);
+        if (!transitionStillCurrent()) return;
+        const freshStartSave = setFreshStart(false);
+        await freshStartSave;
+        if (!transitionStillCurrent()) return;
         $('body').removeClass('sm-read-only');
-        await commitReadOnlyWindow(startIndex);
+        const productCommit = isProductMode();
+        if (productCommit) {
+          ctrl.releaseProductControl(productControlReserved);
+          productControlReserved = null;
+          await runCatchUpFlow({ rescan: false });
+        } else {
+          await commitReadOnlyWindow(startIndex, commitStillCurrent);
+        }
       } else {
-        // Discard: purge session memories then ghost the messages.
-        if (startTime !== null) {
-          await purgeSessionMemoriesSince(startTime).catch((err) =>
+        // Discard: purge derived session memories and run the derived-state
+        // branch safety pass. The raw chat is authoritative and must remain
+        // byte-for-byte untouched; do not call SillyTavern's hide/ghost helper.
+        if (!isProductMode() && startTime !== null) {
+          if (!transitionStillCurrent()) return;
+          await purgeSessionMemoriesSince(startTime, transitionStillCurrent).catch((err) =>
             console.error('[SmartMemory] Session memory purge failed:', err),
           );
+          if (!transitionStillCurrent()) return;
         }
         if (hasWindow) {
-          await hideChatMessageRange(startIndex, endIndex, false);
+          if (!transitionStillCurrent()) return;
+          const discardContext = getContext();
+          const discardMetadata = discardContext.chatMetadata;
+          const discardChatUid = discardMetadata?.[META_KEY]?.chat_uid ?? null;
+          const discardCharacterNames = discardContext.groupId
+            ? (() => {
+                const group = discardContext.groups?.find((g) => g.id === discardContext.groupId);
+                return group
+                  ? group.members
+                      .filter((avatar) => !(group.disabled_members ?? []).includes(avatar))
+                      .map((avatar) => discardContext.characters.find((c) => c.avatar === avatar)?.name)
+                      .filter(Boolean)
+                  : [ctrl.getSelectedCharacterName()].filter(Boolean);
+              })()
+            : [ctrl.getSelectedCharacterName()].filter(Boolean);
+          await detectAndPruneInFileBranch(discardCharacterNames, {
+            shouldAbort: () => !transitionStillCurrent(),
+            isControlBusy: () => false,
+            expectedChatId: transitionChatId,
+            expectedChatUid: discardChatUid,
+            expectedMetadata: discardMetadata,
+            allowUnclassifiedPrune: true,
+          });
+          if (!transitionStillCurrent()) return;
         }
+        if (!transitionStillCurrent()) return;
         await setReadOnlyStartIndex(null);
+        if (!transitionStillCurrent()) return;
         $('body').removeClass('sm-read-only');
+        if (!transitionStillCurrent()) return;
+        await setFreshStart(false);
+        if (!transitionStillCurrent()) return;
       }
     }
 
-    await injectMemories(ctrl.getSelectedCharacterName());
-    await injectSessionMemories();
-    updateSessionUI();
+    if (!transitionStillCurrent()) return;
+    if (isProductMode()) {
+      refreshProductModeViews(ctrl.getSelectedCharacterName());
+    } else {
+      await injectMemories(ctrl.getSelectedCharacterName());
+      await injectSessionMemories();
+      updateSessionUI();
+    }
+    } finally {
+      if (productControlReserved) ctrl.releaseProductControl(productControlReserved);
+    }
   });
 
   $('#sm_extract_now').on('click', async function () {
+    if (blockLegacyProductAction('Manual long-term extraction')) return;
     if (isCatchUpRunning()) return;
     if (ctrl.extractionRunning || ctrl.consolidationRunning) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
-    ctrl.extractionRunning = true;
+    const extractionToken = ctrl.claimExtractionOwnership();
+    if (!extractionToken) return;
     $(this).prop('disabled', true);
     setStatusMessage(`Extracting memories for ${characterName}...`);
     try {
       const context = getContext();
       const recentMessages = ctrl.getStableExtractionWindowWithFallback(context.chat, 20);
-      const count = await extractAndStoreMemories(characterName, recentMessages, setStatusMessage);
+      const count = await extractAndStoreMemories(
+        characterName,
+        recentMessages,
+        setStatusMessage,
+        operation.stillCurrent,
+      );
+      if (!operation.stillCurrent()) return;
       saveSettingsDebounced();
       updateLongTermUI(characterName);
       updateRelationshipHistoryUI(characterName);
@@ -2486,16 +2821,20 @@ export function bindSettingsUI(ctrl) {
       setStatusMessage('');
     } finally {
       $(this).prop('disabled', false);
-      ctrl.extractionRunning = false;
+      ctrl.releaseExtractionOwnership(extractionToken);
     }
   });
 
   $('#sm_clear_memories').on('click', async function () {
+    if (blockLegacyProductAction('Manual long-term clearing')) return;
     if (isCatchUpRunning()) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) return;
+    const operation = captureLegacyOperation(characterName);
+    if (!operation) return;
     if (!(await callGenericPopup(`Clear all memories for "${characterName}"?`, POPUP_TYPE.CONFIRM)))
       return;
+    if (!operation.stillCurrent()) return;
     clearCharacterMemories(characterName);
     clearRelationshipHistory(characterName);
     clearEpistemicKnowledge(characterName);
@@ -2505,7 +2844,8 @@ export function bindSettingsUI(ctrl) {
     updateCanonUI(characterName);
     updateRelationshipHistoryUI(characterName);
     updateEpistemicUI(characterName);
-    injectMemories(null).catch(console.error);
+    await injectMemories(characterName, false, operation.stillCurrent).catch(console.error);
+    if (!operation.stillCurrent()) return;
     injectRelationshipHistory(null);
     injectEpistemicKnowledge(null, null);
     injectStateLedger();
@@ -2518,7 +2858,11 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].session_enabled = $(this).prop('checked');
       saveSettingsDebounced();
-      injectSessionMemories();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
+      injectSessionMemories().then(() => maybeInjectUnified()).catch(console.error);
     });
 
   $('#sm_session_extract_every')
@@ -2576,15 +2920,20 @@ export function bindSettingsUI(ctrl) {
     });
 
   $('#sm_extract_session_now').on('click', async function () {
+    if (blockLegacyProductAction('Manual session extraction')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     if (isFreshStart()) return;
     $(this).prop('disabled', true);
     setStatusMessage('Extracting session memories...');
     try {
       const context = getContext();
       const recentMessages = ctrl.getStableExtractionWindowWithFallback(context.chat, 40);
-      const count = await extractSessionMemories(recentMessages);
-      await injectSessionMemories();
+      const count = await extractSessionMemories(recentMessages, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
+      await injectSessionMemories(false, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       updateSessionUI();
       updateTokenDisplay();
       setStatusMessage(
@@ -2601,13 +2950,21 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_clear_session').on('click', async function () {
+    if (blockLegacyProductAction('Manual session clearing')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     if (!(await callGenericPopup('Clear all session memories for this chat?', POPUP_TYPE.CONFIRM)))
       return;
-    await clearSessionMemories();
+    if (!operation.stillCurrent()) return;
+    await clearSessionMemories(operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     await clearSessionEntityRegistry();
-    await clearStateLedger();
-    injectSessionMemories();
+    if (!operation.stillCurrent()) return;
+    await clearStateLedger(operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
+    await injectSessionMemories(false, operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     injectStateLedger();
     updateSessionUI();
     setStatusMessage('Session memories cleared.');
@@ -2619,7 +2976,12 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].scene_enabled = $(this).prop('checked');
       saveSettingsDebounced();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
       injectSceneHistory();
+      maybeInjectUnified();
     });
 
   $('#sm_scene_ai_detect')
@@ -2667,7 +3029,10 @@ export function bindSettingsUI(ctrl) {
     });
 
   $('#sm_extract_scenes_now').on('click', async function () {
+    if (blockLegacyProductAction('Manual scene extraction')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     $(this).prop('disabled', true);
     setStatusMessage('Summarizing current scene...');
     try {
@@ -2677,12 +3042,32 @@ export function bindSettingsUI(ctrl) {
       const messages =
         ctrl.sceneMessageBuffer.length > 0 ? ctrl.sceneMessageBuffer : context.chat.slice(-40);
       const summary = await summarizeScene(messages);
+      if (!operation.stillCurrent()) return;
       if (summary) {
         const history = loadSceneHistory();
         const max = extension_settings[MODULE_NAME].scene_max_history ?? 5;
-        history.push({ summary, ts: Date.now() });
+        const sourceChatId = getCurrentChatId() ?? null;
+        const firstIndex = context.chat?.indexOf(messages[0]) ?? -1;
+        const lastIndex = context.chat?.lastIndexOf(messages[messages.length - 1]) ?? -1;
+        const sourceMessageRange =
+          firstIndex >= 0 && lastIndex >= firstIndex ? [firstIndex, lastIndex] : null;
+        const sourceMesIds = messages
+          .filter((message) => typeof message?.mesId === 'number')
+          .map((message) => message.mesId);
+        history.push({
+          summary,
+          ts: Date.now(),
+          source_memory_ids: [],
+          source_chat_id: sourceChatId,
+          ...(sourceMessageRange ? { source_message_range: sourceMessageRange } : {}),
+          ...(sourceMesIds.length > 0
+            ? { source_mes_range: [Math.min(...sourceMesIds), Math.max(...sourceMesIds)] }
+            : {}),
+          ...currentLineageRecordStamp(),
+        });
         if (history.length > max) history.splice(0, history.length - max);
-        await saveSceneHistory(history);
+        await saveSceneHistory(history, operation.stillCurrent);
+        if (!operation.stillCurrent()) return;
         // Reset the buffer - we just archived what was in it.
         ctrl.sceneMessageBuffer = [];
         ctrl.sceneBufferLastIndex = -1;
@@ -2702,10 +3087,15 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_clear_scenes').on('click', async function () {
+    if (blockLegacyProductAction('Manual scene clearing')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     if (!(await callGenericPopup('Clear all scene history for this chat?', POPUP_TYPE.CONFIRM)))
       return;
-    await clearSceneHistory();
+    if (!operation.stillCurrent()) return;
+    await clearSceneHistory(operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     injectSceneHistory();
     updateScenesUI();
     setStatusMessage('Scene history cleared.');
@@ -2717,7 +3107,12 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].arcs_enabled = $(this).prop('checked');
       saveSettingsDebounced();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
       injectArcs();
+      maybeInjectUnified();
     });
 
   $('#sm_arcs_max')
@@ -2758,13 +3153,17 @@ export function bindSettingsUI(ctrl) {
     });
 
   $('#sm_extract_arcs_now').on('click', async function () {
+    if (blockLegacyProductAction('Manual arc extraction')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     $(this).prop('disabled', true);
     setStatusMessage('Extracting story arcs...');
     try {
       const context = getContext();
       const recentMessages = ctrl.getStableExtractionWindowWithFallback(context.chat, 100);
-      const count = await extractArcs(recentMessages);
+      const count = await extractArcs(recentMessages, null, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       injectArcs();
       updateArcsUI();
       setStatusMessage(
@@ -2779,10 +3178,15 @@ export function bindSettingsUI(ctrl) {
   });
 
   $('#sm_clear_arcs').on('click', async function () {
+    if (blockLegacyProductAction('Manual arc clearing')) return;
     if (isCatchUpRunning()) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     if (!(await callGenericPopup('Clear all story arcs for this chat?', POPUP_TYPE.CONFIRM)))
       return;
-    await clearArcs();
+    if (!operation.stillCurrent()) return;
+    await clearArcs(operation.stillCurrent);
+    if (!operation.stillCurrent()) return;
     injectArcs();
     updateArcsUI();
     setStatusMessage('Arcs cleared.');
@@ -2808,9 +3212,35 @@ export function bindSettingsUI(ctrl) {
 
   $('#sm_recap_now').on('click', async function () {
     $(this).prop('disabled', true);
+    const recapGeneration = ctrl.chatGeneration;
+    const recapChatId = getCurrentChatId();
+    const recapMetadata = getContext().chatMetadata;
+    const recapChatUid = recapMetadata?.[META_KEY]?.chat_uid ?? null;
+    const recapProductMode = isProductMode();
+    const recapStillCurrent = () =>
+      ctrl.chatGeneration === recapGeneration &&
+      getCurrentChatId() === recapChatId &&
+      getContext().chatMetadata === recapMetadata &&
+      getContext().chatMetadata?.[META_KEY]?.chat_uid === recapChatUid &&
+      isProductMode() === recapProductMode;
+    if (
+      extension_settings[MODULE_NAME].enabled === false ||
+      isFreshStart() ||
+      isCurrentLineageQuarantined()
+    ) {
+      setStatusMessage('Recap unavailable while Storyhold is disabled, read-only, or unverified.');
+      $(this).prop('disabled', false);
+      return;
+    }
     setStatusMessage('Generating recap...');
     try {
-      const recap = await generateRecap();
+      const recap = await generateRecap(recapStillCurrent);
+      if (!recapStillCurrent()) return;
+      if (
+        extension_settings[MODULE_NAME].enabled === false ||
+        isFreshStart() ||
+        isCurrentLineageQuarantined()
+      ) return;
       if (recap) {
         displayRecap(recap);
         setStatusMessage('Recap displayed.');
@@ -2818,8 +3248,10 @@ export function bindSettingsUI(ctrl) {
         setStatusMessage('Recap failed.');
       }
     } catch (err) {
-      showError('Recap generation', err);
-      setStatusMessage('');
+      if (recapStillCurrent()) {
+        showError('Recap generation', err);
+        setStatusMessage('');
+      }
     } finally {
       $(this).prop('disabled', false);
     }
@@ -2835,70 +3267,223 @@ export function bindSettingsUI(ctrl) {
   // from the configured context size at the time catch-up runs - see below.
 
   $('#sm_rebuild_branch').on('click', async function () {
+    if (extension_settings[MODULE_NAME].enabled === false) {
+      setStatusMessage('Branch rebuild is unavailable because Storyhold is disabled.');
+      toastr.info('Enable Storyhold before rebuilding a branch.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
+      return;
+    }
+    if (isFreshStart()) {
+      setStatusMessage('Branch rebuild is unavailable while read-only mode is active.');
+      toastr.info('Turn off read-only mode before rebuilding a branch.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
+      return;
+    }
     if (isCatchUpRunning()) return;
+    const rebuildProductMode = isProductMode();
+    const productControlReserved = rebuildProductMode && ctrl.reserveProductControl();
+    if (rebuildProductMode && !productControlReserved) {
+      toastr.warning('A Product Memory operation is already running.', 'Storyhold', { timeOut: 3000 });
+      return;
+    }
+    const releaseProductControl = () => {
+      if (productControlReserved) ctrl.releaseProductControl(productControlReserved);
+    };
+    let rebuildHandoff = false;
+    let cleanupRebuildWait = releaseProductControl;
 
+    try {
     const context = getContext();
     const chatId = getCurrentChatId();
+    const priorSmartMemory = context.chatMetadata?.[META_KEY] ?? {};
+    const stableChatUid = priorSmartMemory.chat_uid ?? null;
+    const stableChatAliases = Array.isArray(priorSmartMemory.chat_aliases)
+      ? [...priorSmartMemory.chat_aliases]
+      : [];
+    const operationGeneration = ctrl.chatGeneration;
     const lineage = ctrl.lineageState;
+    const rebuildMustStop = () =>
+      extension_settings[MODULE_NAME].enabled === false ||
+      !isProductMode() && productControlReserved ||
+      isProductMode() !== rebuildProductMode ||
+      isFreshStart() ||
+      getCurrentChatId() !== chatId ||
+      getContext().chatMetadata !== context.chatMetadata ||
+      context.chatMetadata?.[META_KEY]?.chat_uid !== stableChatUid ||
+      ctrl.chatGeneration !== operationGeneration;
     if (!chatId || !lineage?.parentChatId) {
       toastr.warning('No cross-file branch is active.', 'Storyhold', { timeOut: 3000 });
+      releaseProductControl();
       return;
     }
 
-    const confirmed = await callGenericPopup(
-      'REBUILD THIS BRANCH\n\nThis clears only this branch\'s derived Storyhold and rebuilds it from the raw transcript.\n\nWILL SURVIVE: this branch\'s chat transcript, the parent chat, all other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
-      POPUP_TYPE.CONFIRM,
-    );
-    if (!confirmed) return;
-
-    const characterName = ctrl.getSelectedCharacterName();
-    if (characterName) {
-      clearCharacterMemories(characterName);
-      clearRelationshipHistory(characterName);
-      clearEpistemicKnowledge(characterName);
-      clearCanon(characterName);
+    let confirmed;
+    try {
+      confirmed = await callGenericPopup(
+        'REBUILD THIS BRANCH\n\nThis clears only this branch\'s derived Storyhold and rebuilds it from the raw transcript.\n\nWILL SURVIVE: this branch\'s chat transcript, the parent chat, all other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
+        POPUP_TYPE.CONFIRM,
+      );
+    } catch (error) {
+      releaseProductControl();
+      throw error;
     }
-    await clearSessionMemories();
-    await clearSessionEntityRegistry();
-    await clearSceneHistory();
-    await clearArcs();
-    await clearArcSummaries();
-    await clearProfiles(characterName);
-    await clearStateLedger();
-    clearRepair();
+    if (!confirmed) {
+      releaseProductControl();
+      return;
+    }
+    if (rebuildMustStop()) {
+      setStatusMessage('Branch rebuild cancelled before writing: the active state changed.');
+      releaseProductControl();
+      return;
+    }
 
-    const parentChatId = lineage.parentChatId;
+      const characterName = ctrl.getSelectedCharacterName();
+      $(document).trigger('smart_memory:rebuild_cancelled');
+      ctrl.clearAllInjections();
+      ctrl.clearProductViews?.();
+      if (rebuildProductMode) {
+        try {
+          await resetProductMemory(context.chatMetadata, async () => {
+            if (rebuildMustStop()) return;
+            await context.saveMetadata();
+          }, META_KEY, rebuildMustStop);
+        } catch (error) {
+          releaseProductControl();
+          throw error;
+        }
+        if (rebuildMustStop()) {
+          releaseProductControl();
+          return;
+        }
+      } else {
+        const rebuildScopePin = pinChatScope(stableChatUid ?? chatId);
+        try {
+          if (rebuildMustStop()) return;
+          if (characterName) {
+            if (rebuildMustStop()) return;
+            clearCharacterMemories(characterName);
+            clearRelationshipHistory(characterName);
+            clearEpistemicKnowledge(characterName);
+            clearCanon(characterName);
+          }
+          if (rebuildMustStop()) return;
+          await clearSessionMemories(rebuildMustStop);
+          if (rebuildMustStop()) return;
+          await clearSessionEntityRegistry();
+          if (rebuildMustStop()) return;
+          await clearSceneHistory(rebuildMustStop);
+          if (rebuildMustStop()) return;
+          await clearArcs(rebuildMustStop);
+          if (rebuildMustStop()) return;
+          await clearArcSummaries(rebuildMustStop);
+          if (rebuildMustStop()) return;
+          await clearProfiles(characterName, rebuildMustStop);
+          if (rebuildMustStop()) return;
+          await clearStateLedger(rebuildMustStop);
+          if (rebuildMustStop()) return;
+          clearRepair();
+        } finally {
+          unpinChatScope(rebuildScopePin);
+        }
+      }
+
+      const parentChatId = lineage.parentChatId;
     const epochId = generateMemoryId();
-    context.chatMetadata[META_KEY] = {
-      schema_version: SCHEMA_VERSION,
-      lastExtractCutoff: 0,
-      lastInjectionRefresh: 0,
-      lineage: {
-        status: LINEAGE_STATUS.REBUILT,
-        chat_id: String(chatId),
-        chat_uid: context.chatMetadata[META_KEY]?.chat_uid ?? null,
-        parent_chat_id: String(parentChatId),
-        prefix_end: null,
-        prefix_length: 0,
-        method: 'raw-rebuild',
-        epoch_id: epochId,
-        rebuilt_from_raw: true,
-      },
-    };
-    await context.saveMetadata();
+    context.chatMetadata[META_KEY] = buildRebuiltLineageMetadata({
+      priorSmartMemory,
+      chatId,
+      parentChatId,
+      chatUid: stableChatUid,
+      aliases: stableChatAliases,
+      schemaVersion: SCHEMA_VERSION,
+      epochId,
+    });
+    try {
+      await context.saveMetadata();
+      if (rebuildMustStop()) {
+        releaseProductControl();
+        return;
+      }
+    } catch (error) {
+      releaseProductControl();
+      throw error;
+    }
     saveSettingsDebounced();
     ctrl.clearAllInjections();
-    ctrl.onChatChanged();
     setStatusMessage('Branch reset. Rebuilding from raw chat...');
 
-    // Allow the debounced chat refresh to classify the rebuilt lineage before
-    // starting the existing catch-up flow.
-    setTimeout(() => {
-      if (!ctrl.lineageQuarantined) $('#sm_catch_up').trigger('click');
-    }, 300);
+    // Wait for the debounced chat refresh to publish a rebuilt lineage before
+    // starting catch-up. The event gate avoids guessing at a fixed delay.
+    const rebuildEvent = 'smart_memory:lineage_changed.storyholdRebuild';
+    const rebuildCancelEvent = 'smart_memory:rebuild_cancelled.storyholdRebuild';
+    const rebuildFailedEvent = 'smart_memory:rebuild_failed.storyholdRebuild';
+    const rebuildGeneration = ctrl.chatGeneration + 1;
+    const rebuildMetadata = context.chatMetadata;
+    cleanupRebuildWait = () => {
+      $(document).off(rebuildEvent, onRebuiltLineage);
+      $(document).off(rebuildCancelEvent, onRebuildCancelled);
+      $(document).off(rebuildFailedEvent, onRebuildFailed);
+      releaseProductControl();
+    };
+    const onRebuildCancelled = () => cleanupRebuildWait();
+    const onRebuildFailed = () => cleanupRebuildWait();
+    const onRebuiltLineage = () => {
+      if (
+        extension_settings[MODULE_NAME].enabled === false ||
+        isFreshStart() ||
+        getCurrentChatId() !== chatId ||
+        ctrl.chatGeneration !== rebuildGeneration ||
+        getContext().chatMetadata !== rebuildMetadata
+      ) {
+        cleanupRebuildWait();
+        return;
+      }
+      const activeLineage = ctrl.lineageState;
+      if (!activeLineage) {
+        return;
+      }
+      if (
+        ctrl.lineageQuarantined ||
+        activeLineage?.status !== LINEAGE_STATUS.REBUILT ||
+        activeLineage?.epoch_id !== epochId
+      ) {
+        cleanupRebuildWait();
+        return;
+      }
+      cleanupRebuildWait();
+      $('#sm_catch_up').trigger('click');
+    };
+    $(document).off(rebuildEvent).on(rebuildEvent, onRebuiltLineage);
+    $(document).off(rebuildCancelEvent).on(rebuildCancelEvent, onRebuildCancelled);
+    $(document).off(rebuildFailedEvent).on(rebuildFailedEvent, onRebuildFailed);
+    ctrl.onChatChanged({ preserveProductControl: true });
+    rebuildHandoff = true;
+    } finally {
+      if (!rebuildHandoff) cleanupRebuildWait();
+    }
   });
 
   async function runCatchUpFlow({ passes = 1, rescan = false } = {}) {
+    if (extension_settings[MODULE_NAME].enabled === false) {
+      setStatusMessage('Memorize Chat is unavailable because Storyhold is disabled.');
+      toastr.info('Enable Storyhold before running Memorize Chat.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
+      return;
+    }
+    if (isFreshStart()) {
+      setStatusMessage('Memorize Chat is unavailable while read-only mode is active.');
+      toastr.info('Turn off read-only mode before running Memorize Chat.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
+      return;
+    }
     if (ctrl.lineageQuarantined) {
       toastr.warning(
         'This branch has unverified memory lineage. Rebuild or verify the branch before catch-up.',
@@ -2907,7 +3492,10 @@ export function bindSettingsUI(ctrl) {
       );
       return;
     }
-    if (ctrl.extractionRunning || ctrl.compactionRunning) {
+    const operationRunning = isProductMode()
+      ? ctrl.productOperationRunningForCurrentChat || ctrl.productControlRunning || ctrl.compactionRunning
+      : ctrl.extractionRunning || ctrl.productOperationRunning || ctrl.compactionRunning;
+    if (operationRunning) {
       toastr.warning('An extraction is already running.', 'Storyhold', { timeOut: 3000 });
       return;
     }
@@ -2917,26 +3505,57 @@ export function bindSettingsUI(ctrl) {
       return;
     }
 
-    if (s.single_extension_mode && typeof ctrl.runProductCatchUp === 'function') {
-      ctrl.extractionRunning = true;
-      ctrl.compactionRunning = true;
+    const flowGeneration = ctrl.chatGeneration;
+    const flowChatId = getCurrentChatId();
+    const flowMetadata = getContext().chatMetadata;
+    const flowChatUid = flowMetadata?.[META_KEY]?.chat_uid ?? null;
+    const flowProductMode = isProductMode();
+    const flowIsCurrent = () =>
+      ctrl.chatGeneration === flowGeneration &&
+      getCurrentChatId() === flowChatId &&
+      getContext().chatMetadata === flowMetadata &&
+      getContext().chatMetadata?.[META_KEY]?.chat_uid === flowChatUid &&
+      isProductMode() === flowProductMode &&
+      extension_settings[MODULE_NAME].enabled !== false &&
+      !isFreshStart() &&
+      !ctrl.lineageQuarantined;
+    const flowMustStop = () => !flowIsCurrent() || ctrl.catchUpCancelled;
+
+    if (isProductMode() && typeof ctrl.runProductCatchUp === 'function') {
+      if (rescan) {
+        ctrl.clearAllInjections();
+        ctrl.clearProductViews?.();
+      }
       ctrl.catchUpCancelled = false;
       $('#sm_catch_up').hide();
       $('#sm_rescan_chat').hide();
       $('#sm_cancel_catch_up').show().prop('disabled', false);
       try {
-        const outcome = await ctrl.runProductCatchUp({ rescan, passes });
-        if (ctrl.catchUpCancelled || outcome.cancelled) {
+        const outcome = await ctrl.runProductCatchUp({ rescan });
+        if (!flowIsCurrent()) return;
+        if (outcome.skipped) {
+          setStatusMessage('Product catch-up skipped: this chat is read-only or quarantined.');
+          toastr.info('No Product Memory was written for this chat.', 'Storyhold', {
+            timeOut: 5000,
+            positionClass: 'toast-bottom-right',
+          });
+        } else if (ctrl.catchUpCancelled || outcome.cancelled) {
           setStatusMessage('Product catch-up cancelled.');
           toastr.warning(
             `Product catch-up cancelled after ${outcome.windows} window(s). Partial results were saved.`,
             'Storyhold',
             { timeOut: 5000, positionClass: 'toast-bottom-right' },
           );
-        } else if (outcome.last?.status !== 'completed' && outcome.last !== null) {
+        } else if (
+          outcome.noProgress ||
+          !outcome.exhausted ||
+          (outcome.last?.status !== 'completed' && outcome.last !== null)
+        ) {
           setStatusMessage('Product catch-up incomplete.');
           toastr.warning(
-            'Product catch-up stopped after a projection failure. Check the browser console and retry.',
+            !outcome.exhausted
+              ? 'Product catch-up reached its window safety limit. Run Memorize Chat again to continue.'
+              : 'Product catch-up stopped after a projection failure. Check the browser console and retry.',
             'Storyhold',
             { timeOut: 6000, positionClass: 'toast-bottom-right' },
           );
@@ -2949,15 +3568,17 @@ export function bindSettingsUI(ctrl) {
           );
         }
       } catch (err) {
+        if (!flowIsCurrent()) return;
         showError('Product catch-up', err);
         setStatusMessage('Product catch-up failed.');
+        updateProductStatusUI({ message: 'Memorize Chat failed. Check the browser console and retry.' });
       } finally {
-        $('#sm_cancel_catch_up').hide();
-        $('#sm_catch_up').show();
-        $('#sm_rescan_chat').show();
-        ctrl.extractionRunning = false;
-        ctrl.compactionRunning = false;
-        ctrl.catchUpCancelled = false;
+        if (flowIsCurrent()) {
+          $('#sm_cancel_catch_up').hide();
+          $('#sm_catch_up').show();
+          $('#sm_rescan_chat').show();
+          ctrl.catchUpCancelled = false;
+        }
       }
       return;
     }
@@ -2970,6 +3591,8 @@ export function bindSettingsUI(ctrl) {
     // for minutes; if the user switches chats mid-run, writes must still land
     // in the chat being processed, not whatever chat is active at write time.
     const catchUpChatId = getCurrentChatId() ?? null;
+    const catchUpMetadata = flowMetadata;
+    const catchUpChatUid = catchUpMetadata?.[META_KEY]?.chat_uid ?? null;
     const catchUpCharacterNames = (() => {
       if (!catchUpContext.groupId) return [characterName];
       const group = catchUpContext.groups?.find((g) => g.id === catchUpContext.groupId);
@@ -2990,27 +3613,41 @@ export function bindSettingsUI(ctrl) {
         : 'Memories already exist for one or more characters. Running Memorize Chat again may add near-duplicate entries on top of existing ones.\n\nContinue?';
       if (!(await callGenericPopup(message, POPUP_TYPE.CONFIRM))) return;
     }
+    if (flowMustStop()) return;
 
     // The catch-up loop holds extractionRunning=true for its entire duration.
     // This blocks the background extraction path in onCharacterMessageRendered
     // from running concurrently, so consolidationRunning does not need a
     // separate check here - no other path can interleave with catch-up while
     // extractionRunning is set.
-    ctrl.extractionRunning = true;
-    ctrl.compactionRunning = true;
+    const catchUpExtractionToken = ctrl.claimExtractionOwnership();
+    if (!catchUpExtractionToken) return;
+    const catchUpCompactionToken = ctrl.claimCompactionOwnership();
+    if (!catchUpCompactionToken) {
+      ctrl.releaseExtractionOwnership(catchUpExtractionToken);
+      return;
+    }
     ctrl.catchUpCancelled = false;
     $('#sm_catch_up').hide();
     $('#sm_rescan_chat').hide();
     $('#sm_cancel_catch_up').show().prop('disabled', false);
 
+    let catchUpScopePin = null;
     try {
-      pinChatScope(catchUpChatId);
+      catchUpScopePin = pinChatScope(catchUpChatUid ?? catchUpChatId);
       const context = getContext();
       const settings = extension_settings[MODULE_NAME];
 
       // Detect an in-file branch before re-digesting the chat so memories from
       // the discarded timeline do not linger alongside the fresh extraction.
-      await detectAndPruneInFileBranch(characterName);
+      await detectAndPruneInFileBranch(catchUpCharacterNames, {
+        shouldAbort: () => !flowIsCurrent() || ctrl.catchUpCancelled,
+        isControlBusy: () => ctrl.productControlRunning,
+        expectedChatId: catchUpChatId,
+        expectedChatUid: catchUpChatUid,
+        expectedMetadata: catchUpMetadata,
+      });
+      if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
 
       // Use the stable window first so an in-progress trailing swipe candidate
       // is not ingested during catch-up.
@@ -3023,6 +3660,26 @@ export function bindSettingsUI(ctrl) {
       // the chunk count or confuse the model.
       const allMessages = stableChat.filter((m) => m.mes && !m.is_system);
       const total = allMessages.length;
+      const buildSceneProvenance = (sourceMessages) => {
+        if (!Array.isArray(sourceMessages) || sourceMessages.length === 0 || catchUpChatId == null) return null;
+        const firstIndex = context.chat?.indexOf(sourceMessages[0]) ?? -1;
+        const lastIndex = context.chat?.lastIndexOf(sourceMessages[sourceMessages.length - 1]) ?? -1;
+        if (firstIndex < 0 || lastIndex < firstIndex) return null;
+        const stamp = currentLineageRecordStamp();
+        if (stamp.source_chat_uid == null) return null;
+        const sourceMesIds = sourceMessages
+          .filter((message) => typeof message?.mesId === 'number')
+          .map((message) => message.mesId);
+        return {
+          ...stamp,
+          source_chat_id: String(catchUpChatId),
+          source_chat_uid: String(catchUpChatUid),
+          source_message_range: [firstIndex, lastIndex],
+          ...(sourceMesIds.length > 0
+            ? { source_mes_range: [Math.min(...sourceMesIds), Math.max(...sourceMesIds)] }
+            : {}),
+        };
+      };
       const totalPasses = normalizeRescanPasses(passes);
       const rescanBefore = rescan
         ? {
@@ -3051,6 +3708,7 @@ export function bindSettingsUI(ctrl) {
         // UI remains responsive and the cancel button stays clickable even
         // when individual model calls complete quickly (e.g. cached responses).
         await new Promise((resolve) => setTimeout(resolve, 0));
+        if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
 
         // Build the chunk by accumulating messages until the token budget or
         // the message cap is reached. Always include at least one message so
@@ -3081,40 +3739,47 @@ export function bindSettingsUI(ctrl) {
             setStatusMessage(
               `Catching up... (${i}/${total} messages - extracting long-term for ${name})`,
             );
-            await extractAndStoreMemories(name, nameChunk, setStatusMessage).catch((err) => {
+            await extractAndStoreMemories(name, nameChunk, setStatusMessage, flowMustStop).catch((err) => {
               console.error('[SmartMemory] Catch-up long-term extraction error (chunk):', err);
             });
+            if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
             // Consolidate after each chunk so near-duplicates are collapsed before
             // the next chunk can add more similar entries.
             if (settings.consolidation_enabled) {
               setStatusMessage(`Catching up... (${i}/${total} messages - consolidating ${name})`);
-              await consolidateMemories(name).catch((err) => {
+              await consolidateMemories(name, false, flowMustStop).catch((err) => {
                 console.error('[SmartMemory] Catch-up long-term consolidation error (chunk):', err);
               });
+              if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
             }
           }
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
         }
         if (settings.session_enabled && !isFreshStart()) {
           setStatusMessage(`Catching up... (${i}/${total} messages - extracting session)`);
-          await extractSessionMemories(chunk).catch((err) => {
+          await extractSessionMemories(chunk, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up session extraction error (chunk):', err);
           });
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
           setStatusMessage(`Catching up... (${i}/${total} messages - consolidating session)`);
-          await consolidateSessionMemories().catch((err) => {
+          await consolidateSessionMemories(false, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up session consolidation error (chunk):', err);
           });
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
         }
         if (settings.arcs_enabled && !isFreshStart()) {
           setStatusMessage(`Catching up... (${i}/${total} messages - extracting arcs)`);
-          await extractArcs(chunk, characterName).catch((err) => {
+          await extractArcs(chunk, characterName, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up arc extraction error (chunk):', err);
           });
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
         }
         if (isStateLedgerEnabled() && !isFreshStart()) {
           setStatusMessage(`Catching up... (${i}/${total} messages - updating state ledger)`);
-          await runStateCardExtraction(characterName, chunk).catch((err) => {
+          await runStateCardExtraction(characterName, chunk, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up state ledger extraction error (chunk):', err);
           });
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
         }
 
         // Re-inject after each chunk so the token display reflects what is
@@ -3122,19 +3787,23 @@ export function bindSettingsUI(ctrl) {
         // Wrap with .catch so an embedding failure here does not abort the
         // entire catch-up run via the outer catch block.
         if (settings.longterm_enabled && characterName) {
-          await injectMemories(characterName).catch((err) => {
+          await injectMemories(characterName, false, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up inject long-term error:', err);
           });
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
         }
         if (settings.session_enabled) {
-          await injectSessionMemories().catch((err) => {
+          await injectSessionMemories(false, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up inject session error:', err);
           });
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
         }
         if (settings.arcs_enabled) {
+          if (flowMustStop()) return;
           injectArcs();
         }
         if (settings.relationships_enabled) {
+          if (flowMustStop()) return;
           injectRelationshipHistory(characterName);
         }
 
@@ -3142,6 +3811,7 @@ export function bindSettingsUI(ctrl) {
         // where catch-up left off rather than re-processing the same messages.
         const cuMeta = catchUpContext.chatMetadata?.[META_KEY];
         if (cuMeta) {
+          if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
           const lastChunkMsg = chunk[chunk.length - 1];
           const chatIdx = lastChunkMsg
             ? catchUpContext.chat.lastIndexOf(lastChunkMsg)
@@ -3151,17 +3821,26 @@ export function bindSettingsUI(ctrl) {
               ? chatIdx
               : chatIdx + 1;
           if (cuCutoff > (cuMeta.lastExtractCutoff ?? 0)) {
+            if (flowMustStop()) return;
             cuMeta.lastExtractCutoff = cuCutoff;
-            catchUpContext.saveMetadata().catch(console.error);
+            await catchUpContext.saveMetadata();
+            if (flowMustStop()) return;
           }
           // Advance the mesId watermark alongside the index cutoff so
           // branch-aware windows resume where catch-up left off.
           const chunkWatermark = watermarkFromChat(catchUpContext.chat, cuCutoff);
           if (chunkWatermark !== null && (cuMeta.lastExtractMesId ?? -1) < chunkWatermark) {
+            if (flowMustStop()) return;
             cuMeta.lastExtractMesId = chunkWatermark;
-            catchUpContext.saveMetadata().catch(console.error);
+            await catchUpContext.saveMetadata();
+            if (flowMustStop()) return;
           }
+          if (flowMustStop()) return;
+          updateLegacySourceProof(cuMeta, catchUpContext.chat, cuCutoff);
+          await catchUpContext.saveMetadata();
+          if (flowMustStop()) return;
         }
+        if (!flowIsCurrent() || ctrl.catchUpCancelled) return;
 
         // Update progress and token display after each chunk so the user can
         // see memories accumulating in real time rather than only at the end.
@@ -3204,6 +3883,7 @@ export function bindSettingsUI(ctrl) {
 
           for (let msgIdx = 0; msgIdx < allMessages.length; msgIdx++) {
             if (ctrl.catchUpCancelled) break;
+            if (flowMustStop()) return;
             const msg = allMessages[msgIdx];
             sceneBuffer.push(msg);
 
@@ -3221,6 +3901,7 @@ export function bindSettingsUI(ctrl) {
                 sceneBuffer.length >= minMessages &&
                 (await detectSceneBreakAI(msgText, prevAiMsg))
               : detectSceneBreakHeuristic(msgText) && sceneBuffer.length >= minMessages;
+            if (flowMustStop()) return;
 
             if (isAiMsg) prevAiMsg = msgText;
 
@@ -3231,47 +3912,73 @@ export function bindSettingsUI(ctrl) {
                 console.error('[SmartMemory] Catch-up scene summary failed:', err);
                 return null;
               });
+              if (flowMustStop()) return;
               if (sceneSummary && !(await isDuplicateScene(sceneSummary))) {
-                sceneHistory.push({
-                  summary: sceneSummary,
-                  ts: Date.now(),
-                  source_memory_ids: [],
-                });
+                if (flowMustStop()) return;
+                const sceneProvenance = buildSceneProvenance(sceneBuffer);
+                if (!sceneProvenance) {
+                  smLog('[SmartMemory] Catch-up scene skipped: source range unavailable.');
+                } else {
+                  sceneHistory.push({
+                    summary: sceneSummary,
+                    ts: Date.now(),
+                    source_memory_ids: [],
+                    ...sceneProvenance,
+                  });
+                }
                 if (sceneHistory.length > max) sceneHistory.splice(0, sceneHistory.length - max);
               }
               if (isEpistemicEnabled() && !isFreshStart()) {
                 setStatusMessage(
                   `Summarizing scene ${sceneCount}... (extracting epistemic knowledge)`,
                 );
-                await extractEpistemicKnowledge(sceneBuffer, characterName).catch((err) => {
+                await extractEpistemicKnowledge(sceneBuffer, characterName, '', flowMustStop).catch((err) => {
                   console.error('[SmartMemory] Catch-up epistemic extraction error:', err);
                 });
+                if (flowMustStop()) return;
               }
+              if (flowMustStop()) return;
               sceneBuffer = [];
             }
           }
 
           // Summarize any remaining messages after the last break as the current scene.
           if (!ctrl.catchUpCancelled && sceneBuffer.length >= minMessages) {
+            if (flowMustStop()) return;
             const sceneSummary = await summarizeScene(sceneBuffer).catch((err) => {
               console.error('[SmartMemory] Catch-up final scene summary failed:', err);
               return null;
             });
+            if (flowMustStop()) return;
             if (sceneSummary && !(await isDuplicateScene(sceneSummary))) {
-              sceneHistory.push({ summary: sceneSummary, ts: Date.now(), source_memory_ids: [] });
+              if (flowMustStop()) return;
+              const sceneProvenance = buildSceneProvenance(sceneBuffer);
+              if (!sceneProvenance) {
+                smLog('[SmartMemory] Catch-up final scene skipped: source range unavailable.');
+              } else {
+                sceneHistory.push({
+                  summary: sceneSummary,
+                  ts: Date.now(),
+                  source_memory_ids: [],
+                  ...sceneProvenance,
+                });
+              }
               if (sceneHistory.length > max) sceneHistory.splice(0, sceneHistory.length - max);
             }
+            if (flowMustStop()) return;
             if (isEpistemicEnabled() && !isFreshStart()) {
               setStatusMessage('Extracting epistemic knowledge from final scene...');
-              await extractEpistemicKnowledge(sceneBuffer, characterName).catch((err) => {
+              await extractEpistemicKnowledge(sceneBuffer, characterName, '', flowMustStop).catch((err) => {
                 console.error('[SmartMemory] Catch-up epistemic extraction error (final):', err);
               });
+              if (flowMustStop()) return;
             }
           }
 
-          await saveSceneHistory(sceneHistory).catch((err) => {
+          await saveSceneHistory(sceneHistory, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up scene history save failed:', err);
           });
+          if (flowMustStop()) return;
           ctrl.sceneMessageBuffer = [];
           ctrl.sceneBufferLastIndex = -1;
           updateTokenDisplay();
@@ -3282,28 +3989,34 @@ export function bindSettingsUI(ctrl) {
         // across the whole chat). Forces consolidation regardless of threshold.
         if (settings.longterm_enabled && settings.consolidation_enabled) {
           for (const name of catchUpCharacterNames) {
+            if (flowMustStop()) return;
             setStatusMessage(`Consolidating long-term memories for ${name}...`);
-            await consolidateMemories(name, true).catch((err) => {
+            await consolidateMemories(name, true, flowMustStop).catch((err) => {
               console.error('[SmartMemory] Catch-up final consolidation failed:', err);
             });
+            if (flowMustStop()) return;
           }
+          if (flowMustStop()) return;
           updateTokenDisplay();
         }
         if (settings.session_enabled) {
+          if (flowMustStop()) return;
           setStatusMessage('Consolidating session memories...');
-          await consolidateSessionMemories(true).catch((err) => {
+          await consolidateSessionMemories(true, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up final session consolidation failed:', err);
           });
+          if (flowMustStop()) return;
           updateTokenDisplay();
         }
 
         // Short-term compaction runs once at the end - it uses the real token
         // count to decide what to include, so chunking doesn't apply.
         if (settings.compaction_enabled) {
+          if (flowMustStop()) return;
           setStatusMessage('Extracting short-term memories...');
-          await runCompaction({ includeLastMessage: true })
+          await runCompaction({ includeLastMessage: true, abortCheck: flowMustStop })
             .then((summary) => {
-              if (summary) {
+              if (summary && !flowMustStop()) {
                 injectSummary(summary);
                 updateShortTermUI(summary);
               }
@@ -3311,6 +4024,7 @@ export function bindSettingsUI(ctrl) {
             .catch((err) => {
               console.error('[SmartMemory] Catch-up compaction failed:', err);
             });
+          if (flowMustStop()) return;
           updateTokenDisplay();
         }
       }
@@ -3319,14 +4033,16 @@ export function bindSettingsUI(ctrl) {
       // Skipped on cancel - partial data may produce low-quality profiles.
       if (!ctrl.catchUpCancelled && settings.profiles_enabled) {
         for (const name of catchUpCharacterNames) {
+          if (flowMustStop()) return;
           setStatusMessage(`Generating character & world profiles for ${name}...`);
-          const profiles = await generateProfiles(name).catch((err) => {
+          const profiles = await generateProfiles(name, flowMustStop).catch((err) => {
             console.error('[SmartMemory] Catch-up profile generation failed:', err);
             return null;
           });
           // Update UI with the selected character's profiles - other characters'
           // profiles are stored but only the active character is displayed.
           if (profiles && name === characterName) {
+            if (flowMustStop()) return;
             injectProfiles(name);
             updateProfilesUI(profiles);
           }
@@ -3334,23 +4050,32 @@ export function bindSettingsUI(ctrl) {
         // If the selected character wasn't in the group (edge case), inject
         // whatever profiles exist for them anyway.
         if (!catchUpCharacterNames.includes(characterName)) {
+          if (!flowIsCurrent()) return;
           injectProfiles(characterName);
         }
       }
 
       // Re-inject and refresh UI for everything processed so far, whether the
       // run completed or was cancelled partway through.
-      await injectMemories(characterName);
+      if (!flowIsCurrent()) return;
+      await injectMemories(characterName, false, flowMustStop);
+      if (!flowIsCurrent()) return;
       injectRelationshipHistory(characterName);
-      injectSessionMemories();
+      if (!flowIsCurrent()) return;
+      await injectSessionMemories(false, flowMustStop);
+      if (!flowIsCurrent()) return;
       injectSceneHistory();
+      if (!flowIsCurrent()) return;
       injectArcs();
+      if (!flowIsCurrent()) return;
       injectStateLedger();
+      if (!flowIsCurrent()) return;
       // Reset the warn flag so the catch-up final inject can prompt if needed,
       // then pass warn=true so a single exact-fit dialog fires if the full list
       // exceeds the current budget.
       resetEpistemicWarnFlag();
       injectEpistemicKnowledge(characterName, characterName, false, true, true);
+      if (!flowIsCurrent()) return;
       injectProfiles(characterName);
       updateEntityPanel(characterName);
       updateLongTermUI(characterName);
@@ -3394,16 +4119,24 @@ export function bindSettingsUI(ctrl) {
         });
       }
     } catch (err) {
-      showError('Catch-up', err);
-      setStatusMessage('Catch-up failed.');
+      if (flowIsCurrent()) {
+        showError('Catch-up', err);
+        setStatusMessage('Catch-up failed.');
+      }
     } finally {
-      unpinChatScope();
-      $('#sm_cancel_catch_up').hide();
-      $('#sm_catch_up').show();
-      $('#sm_rescan_chat').show();
-      ctrl.extractionRunning = false;
-      ctrl.compactionRunning = false;
-      ctrl.catchUpCancelled = false;
+      unpinChatScope(catchUpScopePin);
+      const flowOwnsState =
+        ctrl.chatGeneration === flowGeneration && getContext().chatMetadata === flowMetadata;
+      if (flowOwnsState) {
+        ctrl.catchUpCancelled = false;
+      }
+      ctrl.releaseCompactionOwnership(catchUpCompactionToken);
+      ctrl.releaseExtractionOwnership(catchUpExtractionToken);
+      if (flowIsCurrent()) {
+        $('#sm_cancel_catch_up').hide();
+        $('#sm_catch_up').show();
+        $('#sm_rescan_chat').show();
+      }
     }
   }
 
@@ -3413,6 +4146,7 @@ export function bindSettingsUI(ctrl) {
   );
 
   $('#sm_scan_duplicates').on('click', async function () {
+    if (blockLegacyProductAction('Legacy duplicate scanning')) return;
     if (ctrl.lineageQuarantined) {
       toastr.warning(
         'This branch has unverified memory lineage. Verify or rebuild the branch before scanning.',
@@ -3430,10 +4164,13 @@ export function bindSettingsUI(ctrl) {
       toastr.warning('No character is active.', 'Storyhold', { timeOut: 3000 });
       return;
     }
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const $btn = $(this).prop('disabled', true);
     setStatusMessage('Scanning for duplicate memories...');
     try {
-      const scan = await ctrl.scanDuplicateMemories?.(characterName);
+      const scan = await ctrl.scanDuplicateMemories?.(characterName, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       if (!scan || scan.remove_count === 0) {
         setStatusMessage(scan?.clusters ? 'No removable duplicates found.' : 'No duplicates found.');
         toastr.info(
@@ -3450,7 +4187,18 @@ export function bindSettingsUI(ctrl) {
         setStatusMessage('Duplicate removal cancelled.');
         return;
       }
-      const applied = await ctrl.applyDuplicateRemoval?.(characterName);
+      if (!operation.stillCurrent()) return;
+      const applied = await ctrl.applyDuplicateRemoval?.(
+        characterName,
+        operation.stillCurrent,
+        scan.review,
+      );
+      if (!operation.stillCurrent()) return;
+      if (applied?.stale) {
+        setStatusMessage('Duplicate scan expired; no memories were removed.');
+        toastr.warning('Memory data changed during confirmation. Scan again before removing duplicates.', 'Storyhold');
+        return;
+      }
       if (!applied || applied.removed === 0) {
         setStatusMessage('Nothing removed.');
         toastr.info('Duplicate scan finished; nothing was removed.', 'Storyhold');
@@ -3462,7 +4210,8 @@ export function bindSettingsUI(ctrl) {
         'Storyhold',
         { timeOut: 5000, positionClass: 'toast-bottom-right' },
       );
-      await injectMemories(characterName);
+      await injectMemories(characterName, false, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       updateLongTermUI(characterName);
       updateTokenDisplay();
     } catch (err) {
@@ -3481,7 +4230,32 @@ export function bindSettingsUI(ctrl) {
 
   // ---- Clear Chat Memory -----------------------------------------------
   $('#sm_clear_chat_context').on('click', async function () {
+    const clearChatId = getCurrentChatId();
+    const clearGeneration = ctrl.chatGeneration;
+    const clearMetadata = getContext().chatMetadata;
+    const productClearBlocked = () =>
+      extension_settings[MODULE_NAME].enabled === false ||
+      ctrl.lineageQuarantined ||
+      getCurrentChatId() !== clearChatId ||
+      ctrl.chatGeneration !== clearGeneration ||
+      getContext().chatMetadata !== clearMetadata ||
+      isFreshStart();
+    const clearStillCurrent = () => !productClearBlocked();
+    if (productClearBlocked()) {
+      setStatusMessage('Chat memory clear is unavailable while Storyhold is disabled or the chat is unverified.');
+      toastr.info('Verify this chat lineage before clearing Storyhold memory.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
+      return;
+    }
     if (isCatchUpRunning()) return;
+    let productControlReserved = isProductMode() ? ctrl.reserveProductControl() : null;
+    if (isProductMode() && !productControlReserved) {
+      toastr.warning('A Product Memory operation is already running.', 'Storyhold', { timeOut: 3000 });
+      return;
+    }
+    try {
     if (
       !(await callGenericPopup(
         'Clear all Storyhold for this chat?\n\nThis removes every derived memory belonging to this chat, including long-term chat memory, relationships, Perspectives & Secrets, state cards, canon, summaries, scenes, arcs, profiles, and the memory cursor.\n\nWILL SURVIVE: the raw chat transcript, the character card, and other chats. This cannot be undone.',
@@ -3490,10 +4264,34 @@ export function bindSettingsUI(ctrl) {
     )
       return;
 
+    if (productClearBlocked()) {
+      setStatusMessage('Chat memory clear cancelled because the active state changed.');
+      return;
+    }
+
     const characterName = ctrl.getSelectedCharacterName();
     const context = getContext();
     if (!context.chatMetadata) context.chatMetadata = {};
     if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
+
+    if (isProductMode()) {
+      $(document).trigger('smart_memory:rebuild_cancelled');
+      ctrl.clearAllInjections();
+      ctrl.clearProductViews?.();
+      await resetProductMemory(context.chatMetadata, async () => {
+        if (productClearBlocked()) return;
+        await context.saveMetadata();
+      }, META_KEY, productClearBlocked);
+      if (productClearBlocked()) return;
+      ctrl.clearAllInjections();
+      ctrl.clearProductViews?.();
+      refreshProductModeViews(characterName);
+      ctrl.sceneMessageBuffer = [];
+      ctrl.sceneBufferLastIndex = -1;
+      setStatusMessage('Chat memory cleared.');
+      return;
+    }
+
     if (characterName) {
       clearCharacterMemories(characterName);
       clearRelationshipHistory(characterName);
@@ -3501,29 +4299,37 @@ export function bindSettingsUI(ctrl) {
       clearCanon(characterName);
       saveSettingsDebounced();
     }
-    if (extension_settings[MODULE_NAME].single_extension_mode) {
-      await resetProductMemory(context.chatMetadata);
-    }
     // Wipe chat-local summary state and all other chat-local tiers.
+    if (!clearStillCurrent()) return;
     delete context.chatMetadata[META_KEY].summary;
     delete context.chatMetadata[META_KEY].summaryEnd;
     delete context.chatMetadata[META_KEY].summaryUpdated;
 
     await clearSessionMemories();
+    if (!clearStillCurrent()) return;
     await clearSessionEntityRegistry();
+    if (!clearStillCurrent()) return;
     await clearSceneHistory();
+    if (!clearStillCurrent()) return;
     await clearArcs();
+    if (!clearStillCurrent()) return;
     await clearArcSummaries();
+    if (!clearStillCurrent()) return;
     await clearProfiles(characterName);
-    await clearStateLedger();
+    if (!clearStillCurrent()) return;
+    await clearStateLedger(clearStillCurrent);
+    if (!clearStillCurrent()) return;
     $('#sm_recap_overlay').remove();
     await context.saveMetadata();
+    if (!clearStillCurrent()) return;
 
     // Clear all injection slots and cached unified content.
     clearUnifiedSlot();
     loadAndInjectSummary();
-    await injectMemories(characterName);
-    injectSessionMemories();
+    await injectMemories(characterName, false, clearStillCurrent);
+    if (!clearStillCurrent()) return;
+    await injectSessionMemories(false, clearStillCurrent);
+    if (!clearStillCurrent()) return;
     injectSceneHistory();
     injectArcs();
     injectProfiles(characterName);
@@ -3539,10 +4345,14 @@ export function bindSettingsUI(ctrl) {
     updateArcsUI();
     updateProfilesUI(null);
     updateEntityPanel(characterName);
+    updateProductStatusUI();
     updateTokenDisplay();
     ctrl.sceneMessageBuffer = [];
     ctrl.sceneBufferLastIndex = -1;
     setStatusMessage('Chat memory cleared.');
+    } finally {
+      if (productControlReserved) ctrl.releaseProductControl(productControlReserved);
+    }
   });
 
   // ---- Embedding deduplication ----------------------------------------
@@ -3704,14 +4514,21 @@ export function bindSettingsUI(ctrl) {
   $('#sm_profiles_enabled')
     .prop('checked', s.profiles_enabled)
     .on('change', function () {
-      extension_settings[MODULE_NAME].profiles_enabled = $(this).prop('checked');
+      const enabled = $(this).prop('checked');
+      extension_settings[MODULE_NAME].profiles_enabled = enabled;
       saveSettingsDebounced();
-      if (!extension_settings[MODULE_NAME].profiles_enabled) {
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
+      if (!enabled) {
         setExtensionPrompt(PROMPT_KEY_PROFILES, '', extension_prompt_types.NONE, 0);
-        updateTokenDisplay();
+        invalidateUnifiedCache(PROMPT_KEY_PROFILES);
       } else {
         injectProfiles(ctrl.getSelectedCharacterName());
       }
+      maybeInjectUnified();
+      updateTokenDisplay();
     });
 
   const $profilesThresholdVal = $('#sm_profiles_stale_threshold_value');
@@ -3739,6 +4556,9 @@ export function bindSettingsUI(ctrl) {
     });
 
   $('#sm_profiles_regenerate').on('click', async function () {
+    if (blockLegacyProductAction('Manual profile generation')) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
     const characterName = ctrl.getSelectedCharacterName();
     if (!characterName) {
       toastr.warning('No active character - profiles need a character.', 'Storyhold', {
@@ -3750,7 +4570,8 @@ export function bindSettingsUI(ctrl) {
     $(this).prop('disabled', true);
     setStatusMessage('Generating profiles...');
     try {
-      const profiles = await generateProfiles(characterName);
+      const profiles = await generateProfiles(characterName, operation.stillCurrent);
+      if (!operation.stillCurrent()) return;
       if (profiles) {
         injectProfiles(characterName);
         updateProfilesUI(profiles);
@@ -3785,6 +4606,7 @@ export function bindSettingsUI(ctrl) {
   $('input[name="sm_profiles_position"]').on('change', function () {
     extension_settings[MODULE_NAME].profiles_position = parseInt($(this).val(), 10);
     saveSettingsDebounced();
+    if (isProductMode()) return;
     injectProfiles(ctrl.getSelectedCharacterName());
   });
 
@@ -3793,6 +4615,7 @@ export function bindSettingsUI(ctrl) {
     .on('input', function () {
       extension_settings[MODULE_NAME].profiles_depth = parseInt($(this).val(), 10);
       saveSettingsDebounced();
+      if (isProductMode()) return;
       injectProfiles(ctrl.getSelectedCharacterName());
     });
 
@@ -3801,6 +4624,7 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].profiles_role = parseInt($(this).val(), 10);
       saveSettingsDebounced();
+      if (isProductMode()) return;
       injectProfiles(ctrl.getSelectedCharacterName());
     });
 
@@ -3878,6 +4702,10 @@ export function bindSettingsUI(ctrl) {
       extension_settings[MODULE_NAME].unified_injection = enabled;
       saveSettingsDebounced();
       applyInjectionOverrideUI();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
       if (enabled) {
         injectUnified();
       } else {
@@ -3902,7 +4730,7 @@ export function bindSettingsUI(ctrl) {
   $('[name="sm_unified_position"]').on('change', function () {
     extension_settings[MODULE_NAME].unified_position = Number($(this).val());
     saveSettingsDebounced();
-    maybeInjectUnified();
+    maybeInjectUnified({ respondingCharacter: ctrl.getSelectedCharacterName() });
   });
 
   $('#sm_unified_depth')
@@ -3910,7 +4738,7 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].unified_depth = Number($(this).val());
       saveSettingsDebounced();
-      maybeInjectUnified();
+      maybeInjectUnified({ respondingCharacter: ctrl.getSelectedCharacterName() });
     });
 
   $('#sm_unified_role')
@@ -3918,7 +4746,7 @@ export function bindSettingsUI(ctrl) {
     .on('change', function () {
       extension_settings[MODULE_NAME].unified_role = Number($(this).val());
       saveSettingsDebounced();
-      maybeInjectUnified();
+      maybeInjectUnified({ respondingCharacter: ctrl.getSelectedCharacterName() });
     });
 
   const refreshPeriod = s.injection_refresh_period ?? 1;
@@ -3939,16 +4767,25 @@ export function bindSettingsUI(ctrl) {
       extension_settings[MODULE_NAME].macros_enabled = enabled;
       saveSettingsDebounced();
       applyInjectionOverrideUI();
+      if (isProductMode()) {
+        refreshProductModeViews(ctrl.getSelectedCharacterName());
+        return;
+      }
+      reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
     });
   applyInjectionOverrideUI();
 
   $('#sm_check_continuity').on('click', async function () {
-    const characterName = ctrl.getSelectedCharacterName();
+    if (blockLegacyProductAction('Manual continuity repair')) return;
+    const operation = captureLegacyOperation();
+    if (!operation) return;
+    const characterName = operation.characterName;
     $(this).prop('disabled', true);
     setStatusMessage('Checking continuity...');
     $('#sm_continuity_result').hide().empty();
     try {
       const contradictions = await checkContinuity(characterName);
+      if (!operation.stillCurrent()) return;
       if (contradictions.length === 0) {
         $('#sm_continuity_result')
           .addClass('sm_continuity_clean')
@@ -3975,7 +4812,8 @@ export function bindSettingsUI(ctrl) {
         if (extension_settings[MODULE_NAME].continuity_auto_repair) {
           setStatusMessage('Generating repair...');
           try {
-            const note = await generateRepair(contradictions, characterName);
+            const note = await generateRepair(contradictions, characterName, operation.stillCurrent);
+            if (!operation.stillCurrent() || !note) return;
             injectRepair(note);
             const $repairBlock = $('<div class="sm_repair_queued">');
             $repairBlock.append($('<p>').text('Correction queued for next response:'));

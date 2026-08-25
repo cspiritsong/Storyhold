@@ -6,7 +6,7 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { MODULE_NAME, META_KEY, SCHEMA_VERSION, generateMemoryId } from './constants.js';
 import { isPerChatScope } from './scope.js';
 import { LINEAGE_STATUS } from './lineage.js';
-import { retagNarrativeChatUid } from './narrative-chain.js';
+import { retagNarrativeChatUid, narrativeIdentityMatches } from './narrative-chain.js';
 import {
   emptyRollbackArchive,
   listChatMemoryNamespaces,
@@ -50,6 +50,16 @@ function mergeAliases(meta, values) {
     if (normalized !== String(meta.chat_id ?? '')) aliases.add(normalized);
   }
   return [...aliases];
+}
+
+function cloneData(value) {
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function commitNamespaceStore(target, staged) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, staged);
 }
 
 /**
@@ -97,13 +107,39 @@ export async function ensureStableChatIdentity() {
   }
   meta.schema_version = Math.max(meta.schema_version ?? 0, SCHEMA_VERSION);
   if (meta.narrative) {
-    const retaggedNarrative = retagNarrativeChatUid(meta.narrative, {
-      chatUid: meta.chat_uid,
-      branchUid: meta.lineage?.epoch_id ?? meta.chat_uid,
-    });
-    if (JSON.stringify(retaggedNarrative) !== JSON.stringify(meta.narrative)) {
-      meta.narrative = retaggedNarrative;
+    const currentBranchUid =
+      meta.lineage?.branchUid ??
+      meta.lineage?.branch_uid ??
+      meta.lineage?.epoch_id ??
+      meta.lineage?.epochId ??
+      meta.branch_uid ??
+      null;
+    if (
+      !narrativeIdentityMatches(meta.narrative, {
+        chatUid: meta.chat_uid,
+        chatId,
+        branchUid: currentBranchUid,
+        requireChat: true,
+        requireBranch: currentBranchUid != null,
+      })
+    ) {
+      meta.narrative = null;
+      meta.lineage = {
+        ...(meta.lineage ?? {}),
+        status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
+        quarantined: true,
+        reason: 'narrative-provenance-mismatch',
+      };
       metadataChanged = true;
+    } else {
+      const retaggedNarrative = retagNarrativeChatUid(meta.narrative, {
+        chatUid: meta.chat_uid,
+        branchUid: currentBranchUid,
+      });
+      if (JSON.stringify(retaggedNarrative) !== JSON.stringify(meta.narrative)) {
+        meta.narrative = retaggedNarrative;
+        metadataChanged = true;
+      }
     }
   }
   context.chatMetadata[META_KEY] = meta;
@@ -112,18 +148,44 @@ export async function ensureStableChatIdentity() {
     const targetKey = String(identity.chat_uid);
     const currentKey = String(chatId);
     if (!store[targetKey] && store[currentKey]) {
-      const moved = relinkNamespace(store, currentKey, targetKey, {
-        chat_id: chatId,
-        transcript_fingerprint: fingerprint,
-        relinked_at: Date.now(),
-      });
-      settingsChanged = moved.ok || settingsChanged;
+      if (store[currentKey]?.transcript_fingerprint === fingerprint) {
+        const moved = relinkNamespace(store, currentKey, targetKey, {
+          chat_id: chatId,
+          transcript_fingerprint: fingerprint,
+          relinked_at: Date.now(),
+        });
+        settingsChanged = moved.ok || settingsChanged;
+      } else {
+        // An unproven filename namespace stays visible to the audit/recovery path.
+      }
     } else if (store[targetKey]) {
       const target = store[targetKey];
-      if (target.chat_uid !== targetKey || target.chat_id !== currentKey || target.transcript_fingerprint !== fingerprint) {
-        target.chat_uid = targetKey;
+      const targetChatId = target.chat_id == null ? null : String(target.chat_id);
+      const targetOwnerMatches =
+        target.chat_uid === targetKey &&
+        (targetChatId === currentKey || aliases.includes(targetChatId));
+      const targetFingerprintMatches =
+        typeof target.transcript_fingerprint === 'string' &&
+        target.transcript_fingerprint.trim() !== '' &&
+        target.transcript_fingerprint === fingerprint;
+      if (!targetOwnerMatches) {
+        meta.lineage = {
+          ...(meta.lineage ?? {}),
+          status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
+          quarantined: true,
+          reason: 'stable-namespace-owner-mismatch',
+        };
+        metadataChanged = true;
+      } else if (!targetFingerprintMatches) {
+        meta.lineage = {
+          ...(meta.lineage ?? {}),
+          status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
+          quarantined: true,
+          reason: 'stable-namespace-fingerprint-mismatch',
+        };
+        metadataChanged = true;
+      } else if (target.chat_id !== currentKey) {
         target.chat_id = currentKey;
-        target.transcript_fingerprint = fingerprint;
         settingsChanged = true;
       }
     }
@@ -165,7 +227,11 @@ export function auditCurrentChatNamespaces() {
 /**
  * Relinks only an exact-fingerprint candidate selected from the audit result.
  */
-export async function relinkCurrentNamespace(namespaceKey, { manual = false } = {}) {
+export async function relinkCurrentNamespace(
+  namespaceKey,
+  { manual = false, abortCheck = null } = {},
+) {
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale' };
   const context = getContext();
   const audit = auditCurrentChatNamespaces();
   const store = currentNamespaceStore(context);
@@ -185,19 +251,26 @@ export async function relinkCurrentNamespace(namespaceKey, { manual = false } = 
   }
   const meta = context.chatMetadata?.[META_KEY];
   if (!meta?.chat_uid || !store) return { ok: false, reason: 'stable-identity-missing', audit };
+  const stagedStore = cloneData(store);
+  const originalMeta = context.chatMetadata[META_KEY];
 
-  const result = relinkNamespace(store, candidate.key, meta.chat_uid, {
+  const manualEpochId = manual ? generateMemoryId() : null;
+  const result = relinkNamespace(stagedStore, candidate.key, meta.chat_uid, {
     chat_id: getCurrentChatId() ?? null,
     transcript_fingerprint: audit.current_fingerprint,
     relinked_at: Date.now(),
+    ...(manualEpochId ? { branch_uid: manualEpochId } : {}),
   });
   if (!result.ok) return { ...result, audit };
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', audit };
 
   const retaggedMeta = retagChatMetadata(
     meta,
     candidate.key,
     getCurrentChatId() ?? null,
     meta.chat_uid,
+    stagedStore[candidate.key]?.chat_uid ?? candidate.key,
+    manualEpochId,
   );
   retaggedMeta.chat_aliases = mergeAliases(retaggedMeta, [candidate.key]);
   if (manual) {
@@ -211,12 +284,30 @@ export async function relinkCurrentNamespace(namespaceKey, { manual = false } = 
       method: 'manual-full-namespace',
       manual_override: true,
       manual_source_namespace: String(candidate.key),
-      epoch_id: generateMemoryId(),
+      epoch_id: manualEpochId,
     };
     retaggedMeta.manual_previous_lineage = meta.lineage ?? null;
   }
   context.chatMetadata[META_KEY] = retaggedMeta;
-  await context.saveMetadata();
+  const metadataStillStaged = () => context.chatMetadata?.[META_KEY] === retaggedMeta;
+  if (abortCheck?.()) {
+    if (metadataStillStaged()) context.chatMetadata[META_KEY] = originalMeta;
+    return { ok: false, reason: 'operation-stale', audit };
+  }
+  try {
+    await context.saveMetadata();
+  } catch (error) {
+    if (metadataStillStaged()) context.chatMetadata[META_KEY] = originalMeta;
+    throw error;
+  }
+  if (abortCheck?.()) {
+    if (metadataStillStaged()) context.chatMetadata[META_KEY] = originalMeta;
+    return { ok: false, reason: 'operation-stale', audit };
+  }
+  // The shared namespace store was staged on a clone, so no stale await can
+  // leave relinked data installed globally. Commit only after metadata save and
+  // the final currentness check have both succeeded.
+  commitNamespaceStore(store, stagedStore);
   saveSettingsDebounced();
   return { ...result, audit: auditCurrentChatNamespaces() };
 }
@@ -225,7 +316,12 @@ export async function relinkCurrentNamespace(namespaceKey, { manual = false } = 
  * Archives a selected legacy/unsafe candidate. Ambiguous and high-confidence
  * candidates are refused so cleanup cannot destroy a recoverable namespace.
  */
-export async function archiveCurrentNamespace(namespaceKey, reason = 'manual-orphan-archive') {
+export async function archiveCurrentNamespace(
+  namespaceKey,
+  reason = 'manual-orphan-archive',
+  abortCheck = null,
+) {
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale' };
   const audit = auditCurrentChatNamespaces();
   const candidate = audit.candidates.find((entry) => entry.key === String(namespaceKey));
   if (!candidate) return { ok: false, reason: 'candidate-missing', audit };
@@ -238,8 +334,10 @@ export async function archiveCurrentNamespace(namespaceKey, reason = 'manual-orp
 
   const context = getContext();
   const store = currentNamespaceStore(context);
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', audit };
   const result = archiveNamespace(store, candidate.key, { reason });
   if (!result.ok) return { ...result, audit };
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', audit };
   saveSettingsDebounced();
   return { ...result, audit: auditCurrentChatNamespaces() };
 }
@@ -269,7 +367,8 @@ export function listCurrentCharacterChatMemory() {
 }
 
 /** Permanently nukes selected active derived namespaces; raw chats/vectors are untouched. */
-export function nukeCurrentCharacterChatMemory(keys = []) {
+export function nukeCurrentCharacterChatMemory(keys = [], abortCheck = null) {
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', state: chatMemoryManagerState() };
   if (!isPerChatScope()) {
     return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
   }
@@ -280,7 +379,8 @@ export function nukeCurrentCharacterChatMemory(keys = []) {
 }
 
 /** Permanently nukes every active chat namespace for the current character. */
-export function nukeAllCurrentCharacterChatMemory() {
+export function nukeAllCurrentCharacterChatMemory(abortCheck = null) {
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', state: chatMemoryManagerState() };
   if (!isPerChatScope()) {
     return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
   }
@@ -291,7 +391,8 @@ export function nukeAllCurrentCharacterChatMemory() {
 }
 
 /** Permanently empties the rollback archive for the current character. */
-export function emptyCurrentCharacterRollbackArchive() {
+export function emptyCurrentCharacterRollbackArchive(abortCheck = null) {
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', state: chatMemoryManagerState() };
   if (!isPerChatScope()) {
     return { ok: false, reason: 'not-per-chat-scope', state: chatMemoryManagerState() };
   }
@@ -302,23 +403,41 @@ export function emptyCurrentCharacterRollbackArchive() {
 }
 
 /** Undoes a force link, archives the imported target, and restores prior lineage. */
-export async function unlinkCurrentManualMemory() {
+export async function unlinkCurrentManualMemory(abortCheck = null) {
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale' };
   const context = getContext();
   const meta = context?.chatMetadata?.[META_KEY];
   if (meta?.lineage?.status !== LINEAGE_STATUS.MANUAL_LINKED) {
     return { ok: false, reason: 'no-manual-link', state: chatMemoryManagerState() };
   }
   const store = currentNamespaceStore(context);
-  const result = unlinkNamespace(store, meta.chat_uid, { reason: 'manual-link-undone' });
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', state: chatMemoryManagerState() };
+  const stagedStore = cloneData(store);
+  const originalMeta = context.chatMetadata[META_KEY];
+  const result = unlinkNamespace(stagedStore, meta.chat_uid, { reason: 'manual-link-undone' });
   if (!result.ok) return { ...result, state: chatMemoryManagerState() };
+  if (abortCheck?.()) return { ok: false, reason: 'operation-stale', state: chatMemoryManagerState() };
 
-  if (meta.manual_previous_lineage) {
-    meta.lineage = meta.manual_previous_lineage;
+  const stagedMeta = cloneData(meta);
+  if (stagedMeta.manual_previous_lineage) {
+    stagedMeta.lineage = stagedMeta.manual_previous_lineage;
   } else {
-    delete meta.lineage;
+    delete stagedMeta.lineage;
   }
-  delete meta.manual_previous_lineage;
-  await context.saveMetadata();
+  delete stagedMeta.manual_previous_lineage;
+  context.chatMetadata[META_KEY] = stagedMeta;
+  const metadataStillStaged = () => context.chatMetadata?.[META_KEY] === stagedMeta;
+  try {
+    await context.saveMetadata();
+  } catch (error) {
+    if (metadataStillStaged()) context.chatMetadata[META_KEY] = originalMeta;
+    throw error;
+  }
+  if (abortCheck?.()) {
+    if (metadataStillStaged()) context.chatMetadata[META_KEY] = originalMeta;
+    return { ok: false, reason: 'operation-stale', state: chatMemoryManagerState() };
+  }
+  commitNamespaceStore(store, stagedStore);
   saveSettingsDebounced();
   return { ok: true, ...result, state: chatMemoryManagerState() };
 }

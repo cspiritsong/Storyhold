@@ -462,8 +462,8 @@ function runBranchAwareTests() {
   assert(regen.branchPointMesId === 100, 'branch point is highest surviving below watermark');
   const fullReplace = detectTruncation(mkChat([200, 201]), 100);
   assert(
-    fullReplace.truncated === true && fullReplace.branchPointMesId === 0,
-    'whole prefix replaced -> branch point 0',
+    fullReplace.truncated === true && fullReplace.branchPointMesId === null,
+    'whole prefix replaced -> no surviving numeric branch point',
   );
   assert(detectTruncation([], 5).truncated === false, 'empty chat -> no truncation');
   assert(detectTruncation([{ mes: 'x' }], 5).truncated === false, 'mesId-less chat -> no truncation');

@@ -41,12 +41,16 @@ import { RECAP_PROMPT } from './prompts.js';
  * on disk would cause a spurious recap the next time they return.
  * Returns the save promise so async callers can await it at critical sites.
  */
-export async function updateLastActive() {
+export async function updateLastActive(abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
+  if (abortCheck?.()) return false;
   context.chatMetadata[META_KEY].lastActive = Date.now();
+  if (abortCheck?.()) return false;
   await context.saveMetadata?.();
+  return true;
 }
 
 /**
@@ -73,13 +77,15 @@ export function getAwayHours() {
  * Generates a "Previously on..." recap using the current chat context.
  * @returns {Promise<string|null>} The recap text, or null on failure.
  */
-export async function generateRecap() {
+export async function generateRecap(abortCheck = null) {
   const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.()) return null;
   try {
     const response = await generateMemorySummarize(RECAP_PROMPT, {
       responseLength: settings.recap_response_length ?? 300,
       includeLastMessage: true,
     });
+    if (abortCheck?.()) return null;
     return response?.trim() || null;
   } catch (err) {
     console.error('[SmartMemory] Recap generation failed:', err);

@@ -86,7 +86,13 @@ import { smLog } from './logging.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  currentLineageEpochStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 import { buildTimelinePromptBlock } from './timeline.js';
 
 /**
@@ -171,23 +177,29 @@ export function loadSessionMemories() {
  * Persists the session memory array to chatMetadata.
  * @param {Array<{type: string, content: string, ts: number}>} memories
  */
-export async function saveSessionMemories(memories) {
+export async function saveSessionMemories(memories, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
   context.chatMetadata[META_KEY].sessionMemories = memories;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**
  * Empties session memories for the current chat.
  */
-export async function clearSessionMemories() {
+export async function clearSessionMemories(abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (context.chatMetadata?.[META_KEY]) {
     context.chatMetadata[META_KEY].sessionMemories = [];
+    if (abortCheck?.()) return false;
     await context.saveMetadata();
   }
+  return true;
 }
 
 /**
@@ -201,21 +213,26 @@ export async function clearSessionMemories() {
  * @param {number} since - Unix ms timestamp. Memories at or after this time are deleted.
  * @returns {Promise<number>} Number of memories removed.
  */
-export async function purgeSessionMemoriesSince(since) {
+export async function purgeSessionMemoriesSince(since, abortCheck = null) {
+  if (abortCheck?.()) return 0;
   const all = loadSessionMemories();
   const kept = all.filter((m) => typeof m.ts !== 'number' || m.ts < since);
   const removed = all.length - kept.length;
   if (removed === 0) return 0;
+  if (abortCheck?.()) return 0;
 
   // Repair entity registry - reconcileEntityRegistry prunes stale memory_ids
   // left behind by the deleted memories and re-links by name match.
   const entityRegistry = loadSessionEntityRegistry();
   if (entityRegistry.length > 0) {
     reconcileEntityRegistry(entityRegistry, kept);
+    if (abortCheck?.()) return 0;
     await saveSessionEntityRegistry(entityRegistry);
+    if (abortCheck?.()) return 0;
   }
 
-  await saveSessionMemories(kept);
+  await saveSessionMemories(kept, abortCheck);
+  if (abortCheck?.()) return 0;
   smLog(`[SmartMemory] Purged ${removed} session memories from read-only window.`);
   return removed;
 }
@@ -355,9 +372,13 @@ export async function extractSessionMemories(recentMessages, abortCheck = null) 
     const windowMesIds = hasRealMesIds
       ? recentMessages.map((m, i) => (typeof m.mesId === 'number' ? m.mesId : windowStart + i))
       : null;
+    const epochStamp = currentLineageEpochStamp();
+    const recordStamp = currentLineageRecordStamp();
     for (const mem of incoming) {
       mem.source_messages = [[windowStart, windowEnd]];
       mem.source_chat_id = sourceChatId;
+      if (epochStamp) mem.lineage_epoch = epochStamp.lineage_epoch;
+      Object.assign(mem, recordStamp);
       if (windowMesIds) {
         mem.source_mes_range = [Math.min(...windowMesIds), Math.max(...windowMesIds)];
       }
@@ -466,7 +487,7 @@ export async function extractSessionMemories(recentMessages, abortCheck = null) 
 
     const added = finalActive.filter((m) => !existingKeys.has(`${m.type}|${m.content}`)).length;
     if (abortCheck?.()) return 0;
-    await saveSessionMemories([...finalActive, ...updatedRetired]);
+    await saveSessionMemories([...finalActive, ...updatedRetired], abortCheck);
 
     return added;
   } catch (err) {
@@ -587,6 +608,56 @@ export async function consolidateSessionMemories(force = false, abortCheck = nul
         [...base, ...unprocessed],
         getEmbeddingBatch,
       );
+      if (abortCheck?.()) return totalRemoved;
+
+      const allInputs = [...base, ...unprocessed];
+      const sourceRanges = (record) => {
+        if (!Array.isArray(record?.source_messages) || record.source_messages.length === 0) return [];
+        return Array.isArray(record.source_messages[0])
+          ? record.source_messages
+          : [record.source_messages];
+      };
+      const mostRecentSource = unprocessed.reduce((best, memory) => {
+        const ranges = sourceRanges(memory);
+        const last = ranges.at(-1);
+        if (!Array.isArray(last) || !Number.isInteger(last[1])) return best;
+        return !best || last[1] > best[1] ? last : best;
+      }, null);
+      const mostRecentSourceMemory = unprocessed.find(
+        (memory) => sourceRanges(memory).length > 0,
+      );
+      const recordStamp = currentLineageRecordStamp();
+      for (const entry of reconciledType) {
+        const match = allInputs.find(
+          (memory) =>
+            (entry.id && memory.id === entry.id) ||
+            (entry.content && memory.content === entry.content),
+        );
+        if (match) {
+          const inheritedRanges = sourceRanges(match);
+          if (inheritedRanges.length > 0) entry.source_messages = inheritedRanges;
+          if (Array.isArray(match.source_mes_range)) {
+            entry.source_mes_range = [...match.source_mes_range];
+          }
+          if (match.source_chat_id != null) entry.source_chat_id = match.source_chat_id;
+          if (match.source_chat_uid != null) entry.source_chat_uid = match.source_chat_uid;
+        }
+        if (sourceRanges(entry).length === 0 && mostRecentSource) {
+          entry.source_messages = [mostRecentSource];
+          if (mostRecentSourceMemory?.source_chat_id != null) {
+            entry.source_chat_id = mostRecentSourceMemory.source_chat_id;
+          }
+          if (mostRecentSourceMemory?.source_chat_uid != null) {
+            entry.source_chat_uid = mostRecentSourceMemory.source_chat_uid;
+          }
+          if (Array.isArray(mostRecentSourceMemory?.source_mes_range)) {
+            entry.source_mes_range = [...mostRecentSourceMemory.source_mes_range];
+          }
+        }
+        if (sourceRanges(entry).length > 0 || Array.isArray(entry.source_mes_range)) {
+          Object.assign(entry, recordStamp);
+        }
+      }
 
       // Replace this type's entries. Other types are untouched.
       const otherTypes = memories.filter((m) => m.type !== type);
@@ -612,6 +683,13 @@ export async function consolidateSessionMemories(force = false, abortCheck = nul
 
   const max = settings.session_max_memories ?? 30;
   const finalMemories = sortByTimeline(trimByPriority(memories, max));
+  const recordStamp = currentLineageRecordStamp();
+  for (const memory of finalMemories) {
+    const hasSourceRange =
+      (Array.isArray(memory.source_messages) && memory.source_messages.length > 0) ||
+      (Array.isArray(memory.source_mes_range) && memory.source_mes_range.length > 0);
+    if (hasSourceRange) Object.assign(memory, recordStamp);
+  }
   if (dirty || finalMemories.length !== memories.length) {
     if (abortCheck?.()) return totalRemoved;
     // Repair session entity registry links - same stale-ID problem as long-term:
@@ -620,9 +698,10 @@ export async function consolidateSessionMemories(force = false, abortCheck = nul
     if (entityRegistry.length > 0) {
       reconcileEntityRegistry(entityRegistry, finalMemories);
       await saveSessionEntityRegistry(entityRegistry);
+      if (abortCheck?.()) return totalRemoved;
     }
 
-    await saveSessionMemories(finalMemories);
+    await saveSessionMemories(finalMemories, abortCheck);
   }
 
   return totalRemoved;
@@ -652,9 +731,10 @@ function formatSessionMemories(memories) {
  *   Only pass true from the post-extraction path (one real AI response turn).
  * @returns {Promise<void>}
  */
-export async function injectSessionMemories(updateTelemetry = false) {
+export async function injectSessionMemories(updateTelemetry = false, abortCheck = null) {
   const settings = extension_settings[MODULE_NAME];
-  if (isCurrentLineageQuarantined() || !settings.session_enabled) {
+  if (abortCheck?.()) return;
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !settings.session_enabled) {
     setMacroContent(MACRO_NAMES.session, '');
     setExtensionPrompt(PROMPT_KEY_SESSION, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_SESSION);
@@ -663,7 +743,10 @@ export async function injectSessionMemories(updateTelemetry = false) {
 
   // Only inject active memories - retired ones (superseded_by set) are kept in
   // storage for history but must not appear in the prompt.
-  const memories = filterCurrentChatRecords(loadSessionMemories()).filter((m) => !m.superseded_by);
+  const memories = filterCurrentChatRecords(loadSessionMemories(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  }).filter((m) => !m.superseded_by);
   if (memories.length === 0) {
     setMacroContent(MACRO_NAMES.session, '');
     setExtensionPrompt(PROMPT_KEY_SESSION, '', extension_prompt_types.NONE, 0);
@@ -697,6 +780,7 @@ export async function injectSessionMemories(updateTelemetry = false) {
       lastTurnText: lastMessages[lastMessages.length - 1]?.mes ?? '',
       w5: getHardwareProfile() === 'b' ? 0.6 : 0.2,
     });
+    if (abortCheck?.()) return;
   } else {
     trimmed = prioritizeMemories(memories);
   }
@@ -717,6 +801,7 @@ export async function injectSessionMemories(updateTelemetry = false) {
   // filtered 'memories' variable only contains active entries and saving it
   // would permanently delete the retired pool.
   if (updateTelemetry) {
+    if (abortCheck?.()) return;
     const recalled = new Set(trimmed.map((m) => `${m.type}|${m.content}`));
     const allMemories = loadSessionMemories();
     const updated = allMemories.map((m) => {
@@ -729,10 +814,12 @@ export async function injectSessionMemories(updateTelemetry = false) {
         last_confirmed_ts: Date.now(),
       };
     });
-    await saveSessionMemories(updated);
+    if (abortCheck?.()) return;
+    await saveSessionMemories(updated, abortCheck);
   }
 
   const content = buildContent(trimmed);
+  if (abortCheck?.()) return;
   reportTierTrimStats(PROMPT_KEY_SESSION, estimateTokens(content), fullTokens);
 
   setMacroContent(MACRO_NAMES.session, content);

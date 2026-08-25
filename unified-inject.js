@@ -59,6 +59,9 @@ import {
 } from './constants.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { getCurrentLineage, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { filterProductRecords } from './runtime-policy.js';
+import { filterRetrievalRecords } from './retrieval.js';
+import { isFreshStart } from './longterm.js';
 import {
   BROKER_SLOT_SECTIONS,
   buildMemoryEnvelopeSync,
@@ -91,6 +94,12 @@ const INDIVIDUAL_KEYS = [
     PROMPT_KEY_REPAIR,
   ]),
 ];
+
+export function clearIndividualPromptSlots() {
+  for (const key of INDIVIDUAL_KEYS) {
+    setExtensionPrompt(key, '', extension_prompt_types.NONE, 0);
+  }
+}
 
 /**
  * Per-tier token breakdown from the last injectUnified call.
@@ -158,37 +167,63 @@ export function invalidateUnifiedCache(key) {
  * Call this after all individual injectors have run for a given generation
  * cycle. Tiers with no content are skipped silently.
  */
-export function injectUnified() {
-  if (isCurrentLineageQuarantined()) {
+export function injectUnified({ respondingCharacter = null } = {}) {
+  if (isCurrentLineageQuarantined() || isFreshStart()) {
+    clearIndividualPromptSlots();
     clearUnifiedSlot();
     return;
   }
 
   const settings = extension_settings[MODULE_NAME];
+  if (settings.enabled === false) {
+    clearIndividualPromptSlots();
+    clearUnifiedSlot();
+    return;
+  }
   if (settings.single_extension_mode) {
     const context = getContext();
     const meta = context.chatMetadata?.[META_KEY] ?? {};
     const lineage = getCurrentLineage();
+    const chatUid = meta.chat_uid ?? lineage?.chatUid ?? null;
+    if (chatUid == null || String(chatUid).trim() === '') {
+      clearIndividualPromptSlots();
+      clearUnifiedSlot();
+      return;
+    }
     const structuredRecords = Array.isArray(meta.structured_records)
       ? meta.structured_records
       : [];
+    const responder = respondingCharacter ?? context.name2 ?? context.characterName ?? null;
+    const branchUid = lineage?.epoch_id ?? lineage?.epochId ?? meta.lineage?.epoch_id ?? chatUid;
+    const scopedStructuredRecords = filterRetrievalRecords(structuredRecords, {
+      chatUid,
+      branchUid,
+      lineage: {
+        chatId: lineage?.chatId ?? meta.lineage?.chat_id ?? null,
+        legacyChatIds: lineage?.legacyChatIds ?? meta.chat_aliases ?? [],
+      },
+      allowLegacy: false,
+    });
+    const injectableRecords = filterProductRecords(scopedStructuredRecords, settings, responder);
     const query = (context.chat ?? [])
       .slice(-2)
       .map((message) => message?.mes ?? '')
       .filter(Boolean)
       .join('\n');
     const result = buildMemoryEnvelopeSync({
-      chatUid: meta.chat_uid ?? lineage?.chatUid ?? null,
-      branchUid: lineage?.epoch_id ?? lineage?.epochId ?? meta.lineage?.epoch_id ?? meta.chat_uid,
-      respondingCharacter: context.name2 ?? context.characterName ?? null,
+      chatUid,
+      branchUid,
+      respondingCharacter: responder,
       query,
-      records: structuredRecords,
+      records: injectableRecords,
       sections: buildSectionsFromTypedState({
         narrativeState: meta.narrative ?? null,
-        chatUid: meta.chat_uid ?? lineage?.chatUid ?? null,
-        branchUid: lineage?.epoch_id ?? lineage?.epochId ?? meta.lineage?.epoch_id ?? meta.chat_uid,
+        chatUid,
+        chatId: lineage?.chatId ?? null,
+        branchUid,
       }),
       lineage,
+      allowLegacy: false,
       totalBudget: settings.total_inject_budget ?? 8000,
     });
 
@@ -200,10 +235,8 @@ export function injectUnified() {
           tokens: result.tokens,
         }]
       : [];
-    for (const key of INDIVIDUAL_KEYS) {
-      setExtensionPrompt(key, '', extension_prompt_types.NONE, 0);
-    }
-    setMacroContent(MACRO_NAMES.unified, result.text);
+    clearIndividualPromptSlots();
+    setMacroContent(MACRO_NAMES.unified, settings.unified_injection ? result.text : '');
     if (isMacroActive(MACRO_NAMES.unified)) {
       setExtensionPrompt(PROMPT_KEY_UNIFIED, '', extension_prompt_types.NONE, 0);
       return;
@@ -244,9 +277,7 @@ export function injectUnified() {
 
   // The broker block replaces every individual memory slot. This is the single
   // envelope invariant; non-memory extensions are not touched.
-  for (const key of INDIVIDUAL_KEYS) {
-    setExtensionPrompt(key, '', extension_prompt_types.NONE, 0);
-  }
+  clearIndividualPromptSlots();
 
   if (!result.text) {
     setMacroContent(MACRO_NAMES.unified, '');
@@ -275,7 +306,12 @@ export function injectUnified() {
  * Drop this call after every batch injection point (chat load, extraction
  * pass, compaction, scene break, group character switch, catch-up).
  */
-export function maybeInjectUnified() {
+export function maybeInjectUnified(options = {}) {
   const settings = extension_settings[MODULE_NAME];
-  if (settings.unified_injection || settings.single_extension_mode) injectUnified();
+  if (settings.enabled === false) {
+    clearIndividualPromptSlots();
+    clearUnifiedSlot();
+    return;
+  }
+  if (settings.unified_injection || settings.single_extension_mode) injectUnified(options);
 }
