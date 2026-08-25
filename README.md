@@ -451,7 +451,7 @@ If you do not have an embedding model set up, Storyhold falls back to keyword ma
 | Embedding source        | Ollama                          | Provider list mirrors SillyTavern Vector Storage: local/runtime, OpenAI-compatible, and provider-specific API sources                         |
 | Embedding URL           | _(blank, uses localhost:11434)_ | Server URL for Ollama, Extras, llama.cpp, vLLM, KoboldCpp, or the legacy OpenAI Compatible source                                              |
 | Embedding model         | `nomic-embed-text`              | Model exposed by the selected provider; Storyhold remembers a separate model selection for each provider                                       |
-| API key                 | _(blank)_                       | Provider key for cloud/API sources; stored in a separate Storyhold slot per provider and never put into a provider URL                                  |
+| API key                 | _(blank)_                       | Provider key for cloud/API sources; stored in a separate Storyhold slot per provider and never put into a provider URL. OpenRouter prefers SillyTavern API Connections |
 | Keep model in memory    | Off                             | (Ollama only) Keeps the helper model loaded between calls - faster if Storyhold runs frequently                                                 |
 
 The **Embedding source** menu contains the same 20 source identifiers as current SillyTavern Vector Storage:
@@ -478,6 +478,8 @@ The **Embedding source** menu contains the same 20 source identifiers as current
 - WebLLM Extension
 
 Storyhold also retains its older **OpenAI Compatible** option so existing configurations keep working. Cloud provider requests use the provider’s native embedding contract; OpenAI-compatible local servers use `/v1/embeddings`. Provider requests are made from the browser, so a provider must allow browser CORS or be reachable through a suitable local proxy.
+
+**OpenRouter:** When selected, Storyhold loads the current embedding-capable model list from SillyTavern's API Connections-backed route and displays the provider's human-readable model names in a dropdown. Storyhold uses the OpenRouter key saved in **API Connections** first; its own API-key field remains only as a compatibility fallback when the host secret cannot be read. Use the refresh button after changing the host connection or when OpenRouter adds a model.
 
 **Ollama:** The embedding model must be installed before enabling this. If you already use SillyTavern's built-in Vector Storage extension with Ollama, you likely have `nomic-embed-text` installed already. If not:
 

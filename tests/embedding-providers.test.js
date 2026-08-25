@@ -4,8 +4,10 @@ import {
   EMBEDDING_SOURCE_IDS,
   EMBEDDING_SOURCE_DEFINITIONS,
   buildEmbeddingRequest,
+  fetchOpenRouterEmbeddingModels,
   getDefaultEmbeddingModel,
   getEmbeddingSourceDefinition,
+  normalizeOpenRouterEmbeddingModels,
   parseEmbeddingResponse,
   requestEmbeddingBatch,
 } from '../embedding-providers.js';
@@ -63,6 +65,53 @@ test('provider defaults match SillyTavern vector configuration defaults', () => 
   assert.equal(getDefaultEmbeddingModel('nomicai'), 'nomic-embed-text-v1.5');
   assert.equal(getDefaultEmbeddingModel('openrouter'), 'openai/text-embedding-3-large');
   assert.equal(getDefaultEmbeddingModel('workers_ai'), '@cf/baai/bge-m3');
+});
+
+test('OpenRouter catalog normalizes human-readable model options and drops invalid duplicates', () => {
+  assert.deepEqual(
+    normalizeOpenRouterEmbeddingModels([
+      { id: 'perplexity/embed-v1', name: 'Perplexity: Embed V1 0.6B' },
+      { id: 'perplexity/embed-v1', name: 'Duplicate' },
+      { id: 'openai/text-embedding-3-small' },
+      { id: '', name: 'Missing ID' },
+      null,
+    ]),
+    [
+      { id: 'perplexity/embed-v1', name: 'Perplexity: Embed V1 0.6B' },
+      { id: 'openai/text-embedding-3-small', name: 'openai/text-embedding-3-small' },
+    ],
+  );
+});
+
+test('OpenRouter catalog uses SillyTavern API Connections without sending a key', async () => {
+  let request;
+  const models = await fetchOpenRouterEmbeddingModels(
+    async (url, options) => {
+      request = { url, options };
+      return {
+        ok: true,
+        json: async () => [{ id: 'perplexity/embed-v1', name: 'Perplexity: Embed V1 0.6B' }],
+      };
+    },
+    { 'X-CSRF-Token': 'csrf-token' },
+  );
+
+  assert.equal(request.url, '/api/openrouter/models/embedding');
+  assert.equal(request.options.method, 'POST');
+  assert.deepEqual(request.options.headers, { 'X-CSRF-Token': 'csrf-token' });
+  assert.deepEqual(JSON.parse(request.options.body), {});
+  assert.deepEqual(models, [{ id: 'perplexity/embed-v1', name: 'Perplexity: Embed V1 0.6B' }]);
+});
+
+test('OpenRouter catalog rejects failed host responses', async () => {
+  await assert.rejects(
+    () =>
+      fetchOpenRouterEmbeddingModels(async () => ({
+        ok: false,
+        status: 401,
+      })),
+    /OpenRouter embedding model catalog request failed/i,
+  );
 });
 
 test('every non-runtime source has a complete request construction contract', () => {

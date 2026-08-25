@@ -216,6 +216,51 @@ export function getDefaultEmbeddingModel(source) {
   return getEmbeddingSourceDefinition(source).defaultModel;
 }
 
+/**
+ * Normalizes SillyTavern's OpenRouter embedding catalog into safe option data.
+ * The host route returns `{ id, name }` entries, but keeping this boundary
+ * defensive prevents malformed provider data from reaching the settings DOM.
+ * @param {unknown} data
+ * @returns {{id: string, name: string}[]}
+ */
+export function normalizeOpenRouterEmbeddingModels(data) {
+  const entries = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+  const seen = new Set();
+  const models = [];
+
+  for (const entry of entries) {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const name = typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : id;
+    models.push({ id, name });
+  }
+
+  return models;
+}
+
+/**
+ * Fetches OpenRouter's embedding catalog through SillyTavern's same-origin
+ * backend route. SillyTavern resolves API Connections server-side, so this
+ * request deliberately carries no provider key or model secret.
+ * @param {typeof fetch} [fetchImpl]
+ * @param {HeadersInit} [headers]
+ * @returns {Promise<{id: string, name: string}[]>}
+ */
+export async function fetchOpenRouterEmbeddingModels(fetchImpl = fetch, headers = {}) {
+  const response = await fetchImpl('/api/openrouter/models/embedding', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({}),
+  });
+  if (!response?.ok) {
+    throw new Error(
+      `OpenRouter embedding model catalog request failed (${response?.status ?? 'unknown'})`,
+    );
+  }
+  return normalizeOpenRouterEmbeddingModels(await response.json());
+}
+
 function requireTexts(texts) {
   if (!Array.isArray(texts) || texts.length === 0) {
     throw new Error('Embedding request requires at least one text');
@@ -455,7 +500,9 @@ export function buildEmbeddingRequest(source, options = {}) {
 
     case 'openai_compatible': {
       if (source === 'koboldcpp') {
-        const server = String(options.url || '').trim().replace(/\/+$/, '');
+        const server = String(options.url || '')
+          .trim()
+          .replace(/\/+$/, '');
         parseBaseUrl(server, undefined, definition.label);
         return {
           url: '/api/backends/kobold/embed',

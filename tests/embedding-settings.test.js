@@ -34,6 +34,46 @@ test('Storyhold settings include account and endpoint controls required by provi
   assert.match(html, /id="sm_embedding_model_openai_row"/);
 });
 
+test('OpenRouter has a dedicated live model selector and API Connections hint', async () => {
+  const html = await readFile(resolve(root, 'settings.html'), 'utf8');
+  const source = await readFile(resolve(root, 'settings.js'), 'utf8');
+
+  assert.match(html, /id="sm_embedding_model_openrouter_row"/);
+  assert.match(html, /id="sm_embedding_model_openrouter"/);
+  assert.match(html, /id="sm_embedding_openrouter_refresh"/);
+  assert.match(html, /Set your OpenRouter API key in API Connections\./);
+  assert.match(source, /fetchOpenRouterEmbeddingModels/);
+  assert.match(source, /sm_embedding_openrouter_refresh/);
+});
+
+test('OpenRouter embedding requests prefer the SillyTavern API Connections secret', async () => {
+  const source = await readFile(resolve(root, 'embeddings.js'), 'utf8');
+
+  assert.match(source, /from ['"]\.\.\/\.\.\/\.\.\/secrets\.js['"]/);
+  assert.match(source, /SECRET_KEYS\.OPENROUTER/);
+  assert.match(source, /findSecret\(SECRET_KEYS\.OPENROUTER\)/);
+  assert.match(source, /resolveEmbeddingApiKey/);
+  assert.match(source, /getEmbeddingApiKeyForSource\(source, settings\)/);
+});
+
+test('OpenRouter does not show the generic manual-provider hint', async () => {
+  const source = await readFile(resolve(root, 'settings.js'), 'utf8');
+
+  assert.match(
+    source,
+    /#sm_embedding_install_hint_provider.*toggle\(!isOllama && !isRuntime && !isOpenRouter\)/s,
+  );
+});
+
+test('enabling embeddings loads the OpenRouter catalog when OpenRouter is already selected', async () => {
+  const source = await readFile(resolve(root, 'settings.js'), 'utf8');
+
+  assert.match(
+    source,
+    /const enabled = \$\(this\)\.prop\('checked'\);[\s\S]*embedding_enabled = enabled[\s\S]*embedding_source \?\? 'ollama'\) === 'openrouter'[\s\S]*refreshOpenRouterEmbeddingModels\(\)/,
+  );
+});
+
 test('provider-specific embedding settings have durable defaults and model-map migration support', async () => {
   const source = await readFile(resolve(root, 'settings.js'), 'utf8');
 
@@ -63,7 +103,9 @@ test('embedding source switching resolves the next provider model before changin
   const end = source.indexOf('clearEmbeddingFailed();', start);
   const handler = source.slice(start, end);
 
-  const modelIndex = handler.indexOf('const nextModel = getEmbeddingModelForSource(nextSource, settings);');
+  const modelIndex = handler.indexOf(
+    'const nextModel = getEmbeddingModelForSource(nextSource, settings);',
+  );
   const sourceIndex = handler.indexOf('settings.embedding_source = nextSource;');
   assert.ok(modelIndex >= 0, 'next provider model is not resolved');
   assert.ok(sourceIndex > modelIndex, 'active source changes before next model resolution');

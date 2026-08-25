@@ -20,8 +20,8 @@
 /**
  * Semantic embedding support for memory deduplication and supersession detection.
  *
- * Supports two embedding sources: Ollama (/api/embed) and any OpenAI-compatible
- * endpoint (/v1/embeddings). Cosine similarity between vectors catches near-paraphrase
+ * Supports local, runtime, provider-specific, and OpenAI-compatible embedding
+ * sources. Cosine similarity between vectors catches near-paraphrase
  * duplicates that word-overlap (Jaccard) misses - e.g. "Finn is Senjin's anchor" vs
  * "Finn serves as Senjin's emotional foundation" score near-zero in Jaccard but
  * ~0.92 in cosine space.
@@ -45,6 +45,7 @@
  */
 
 import { extension_settings } from '../../../extensions.js';
+import { SECRET_KEYS, findSecret, secret_state } from '../../../secrets.js';
 import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { MODULE_NAME } from './constants.js';
 import {
@@ -122,6 +123,42 @@ export function getEmbeddingApiKeyForSource(
   }
 
   return '';
+}
+
+function hasSecretState(key) {
+  const value = secret_state?.[key];
+  return Array.isArray(value) ? value.length > 0 : Boolean(value);
+}
+
+/**
+ * Returns whether SillyTavern reports an OpenRouter API Connection secret.
+ * The secret value itself is never exposed by this helper.
+ * @param {string} [source]
+ * @returns {boolean}
+ */
+export function hasSillyTavernApiKey(source = 'openrouter') {
+  return source === 'openrouter' && hasSecretState(SECRET_KEYS.OPENROUTER);
+}
+
+/**
+ * Resolves an API key for a provider. OpenRouter uses SillyTavern's backend
+ * secret store first, then falls back to the legacy Storyhold key for older
+ * installations or hosts with secret exposure disabled.
+ * @param {string} source
+ * @param {object} settings
+ * @returns {Promise<string>}
+ */
+async function resolveEmbeddingApiKey(source, settings) {
+  if (source === 'openrouter') {
+    try {
+      const hostKey = await findSecret(SECRET_KEYS.OPENROUTER);
+      if (typeof hostKey === 'string' && hostKey.trim()) return hostKey.trim();
+    } catch {
+      // Fall through to the explicit Storyhold compatibility key.
+    }
+  }
+
+  return getEmbeddingApiKeyForSource(source, settings);
 }
 
 function embeddingCacheKey(text, source, model, settings, inputType = '') {
@@ -218,10 +255,11 @@ export async function getEmbeddingBatch(texts, { queryTexts = [] } = {}) {
   const queryTextSet = new Set((Array.isArray(queryTexts) ? queryTexts : []).map(normalizeEmbeddingText));
   let definition;
   let model;
-  const apiKey = getEmbeddingApiKeyForSource(source, settings);
+  let apiKey;
   try {
     definition = getEmbeddingSourceDefinition(source);
     model = getEmbeddingModelForSource(source, settings);
+    apiKey = await resolveEmbeddingApiKey(source, settings);
   } catch (error) {
     warnEmbeddingFailure(source, error);
     return result;

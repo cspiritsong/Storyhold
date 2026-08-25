@@ -32,12 +32,16 @@ import {
   extension_prompt_roles,
   setExtensionPrompt,
   saveSettingsDebounced,
+  eventSource,
+  event_types,
   getMaxContextSize,
   stopGeneration,
   getCurrentChatId,
+  getRequestHeaders,
 } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/popup.js';
 import { getContext, extension_settings } from '../../../extensions.js';
+import { SECRET_KEYS } from '../../../secrets.js';
 import {
   MEMORY_SCOPE_CHAT,
   pinChatScope,
@@ -120,8 +124,12 @@ import {
   hasEmbeddingApiKey,
   getEmbeddingModelForSource,
   getEmbeddingApiKeyForSource,
+  hasSillyTavernApiKey,
 } from './embeddings.js';
-import { EMBEDDING_SOURCE_DEFINITIONS } from './embedding-providers.js';
+import {
+  EMBEDDING_SOURCE_DEFINITIONS,
+  fetchOpenRouterEmbeddingModels,
+} from './embedding-providers.js';
 import { clearCanon, generateCanon, injectCanon, saveCanon } from './canon.js';
 import { clearSessionEntityRegistry } from './graph-migration.js';
 import {
@@ -1685,6 +1693,74 @@ export function bindSettingsUI(ctrl) {
       $btn.hide();
     } finally {
       $btn.prop('disabled', false);
+    }
+  }
+
+  /**
+   * Fetches SillyTavern's OpenRouter embedding catalog and populates the
+   * provider-specific model selector. A saved model is retained even when it
+   * is no longer returned by the catalog so existing configurations do not
+   * silently change provider models.
+   */
+  async function refreshOpenRouterEmbeddingModels() {
+    const $select = $('#sm_embedding_model_openrouter');
+    const $btn = $('#sm_embedding_openrouter_refresh');
+    const $status = $('#sm_embedding_openrouter_connection_status');
+    const sourceAtStart = 'openrouter';
+    const settings = extension_settings[MODULE_NAME];
+    const previousModel = getEmbeddingModelForSource(sourceAtStart, settings);
+    const populate = (models, fallbackLabel = '') => {
+      const options = [...models];
+      if (previousModel && !options.some((model) => model.id === previousModel)) {
+        options.unshift({ id: previousModel, name: `${previousModel}${fallbackLabel}` });
+      }
+      $select.empty();
+      if (options.length === 0) {
+        $select.append($('<option>', { value: '', text: 'No OpenRouter embedding models found' }));
+        return '';
+      }
+      options.forEach((model) => {
+        $select.append($('<option>', { value: model.id, text: model.name }));
+      });
+      const selected = options.some((model) => model.id === previousModel)
+        ? previousModel
+        : options[0].id;
+      $select.val(selected);
+      return selected;
+    };
+
+    $btn.prop('disabled', true);
+    $select.prop('disabled', true);
+    $status.text(' Loading OpenRouter embedding models...');
+    try {
+      const models = await fetchOpenRouterEmbeddingModels(fetch, getRequestHeaders());
+      if ((extension_settings[MODULE_NAME].embedding_source ?? 'ollama') !== sourceAtStart) return;
+
+      const selected = populate(models);
+      if (selected) {
+        saveEmbeddingModelForSource(sourceAtStart, selected);
+        clearEmbeddingFailed();
+        updateEmbeddingNotice();
+        saveSettingsDebounced();
+      }
+      $status.text(
+        hasSillyTavernApiKey(sourceAtStart)
+          ? ' OpenRouter key found in API Connections.'
+          : ' Add your OpenRouter key in API Connections. A Storyhold fallback key may be used if configured.',
+      );
+    } catch (error) {
+      if ((extension_settings[MODULE_NAME].embedding_source ?? 'ollama') !== sourceAtStart) return;
+      const selected = populate([], ' (saved/default fallback)');
+      if (selected) $select.val(selected);
+      $status.text(
+        hasSillyTavernApiKey(sourceAtStart)
+          ? ' Model catalog unavailable; the saved/default model remains selected.'
+          : ' Model catalog unavailable. Add your OpenRouter key in API Connections, then refresh.',
+      );
+      console.warn('[Storyhold] OpenRouter embedding model fetch failed:', error);
+    } finally {
+      $btn.prop('disabled', false);
+      $select.prop('disabled', false);
     }
   }
 
@@ -4442,40 +4518,58 @@ export function bindSettingsUI(ctrl) {
     const src = settings.embedding_source ?? 'ollama';
     const definition = EMBEDDING_SOURCE_DEFINITIONS.find((source) => source.id === src);
     const isOllama = src === 'ollama';
+    const isOpenRouter = src === 'openrouter';
     const isRuntime = definition?.kind === 'runtime';
     const isModelless = embeddingModellessSources.has(src);
-    const showApiKey = embeddingApiKeySources.has(src) || src === 'openai_compatible' || src === 'extras';
+    const hostApiKey = isOpenRouter && hasSillyTavernApiKey(src);
+    const showApiKey =
+      (embeddingApiKeySources.has(src) || src === 'openai_compatible' || src === 'extras') &&
+      (!isOpenRouter || !hostApiKey);
 
     $('#sm_embedding_url_row').toggle(embeddingUrlSources.has(src));
     $('#sm_embedding_model_ollama_row').toggle(isOllama);
-    $('#sm_embedding_model_openai_row').toggle(!isOllama && !isModelless);
+    $('#sm_embedding_model_openai_row').toggle(!isOllama && !isModelless && !isOpenRouter);
+    $('#sm_embedding_model_openrouter_row').toggle(isOpenRouter);
     $('#sm_embedding_api_key_row').toggle(showApiKey);
     $('#sm_embedding_keep_row').toggle(isOllama);
     $('#sm_embedding_account_id_row').toggle(src === 'workers_ai');
     $('#sm_embedding_vertex_settings').toggle(src === 'vertexai');
     $('#sm_embedding_siliconflow_endpoint_row').toggle(src === 'siliconflow');
     $('#sm_embedding_install_hint_ollama').toggle(isOllama);
-    $('#sm_embedding_install_hint_provider').toggle(!isOllama && !isRuntime);
+    $('#sm_embedding_install_hint_provider').toggle(!isOllama && !isRuntime && !isOpenRouter);
     $('#sm_embedding_install_hint_runtime').toggle(isRuntime);
 
-    if (!isOllama && !isModelless) {
+    if (!isOllama && !isModelless && !isOpenRouter) {
       $('#sm_embedding_model_openai').val(getEmbeddingModelForSource(src, settings));
+    }
+    if (isOpenRouter) {
+      $('#sm_embedding_model_openrouter').val(getEmbeddingModelForSource(src, settings));
+      $('#sm_embedding_openrouter_connection_status').text(
+        hostApiKey
+          ? ' OpenRouter key found in API Connections.'
+          : ' No OpenRouter key found in API Connections; the fallback key field remains available.',
+      );
     }
     $('#sm_embedding_api_key')
       .val('')
-      .attr('placeholder', hasEmbeddingApiKey() ? '(key stored)' : 'Provider API key');
+      .attr('placeholder', hasEmbeddingApiKey(src) ? '(key stored)' : 'Provider API key');
   }
 
   $('#sm_embedding_enabled')
     .prop('checked', s.embedding_enabled)
     .on('change', function () {
-      extension_settings[MODULE_NAME].embedding_enabled = $(this).prop('checked');
-      $('#sm_embedding_config').toggle(extension_settings[MODULE_NAME].embedding_enabled);
+      const enabled = $(this).prop('checked');
+      const settings = extension_settings[MODULE_NAME];
+      settings.embedding_enabled = enabled;
+      $('#sm_embedding_config').toggle(enabled);
       // Reset failure flag so the next attempt gets a clean slate.
       clearEmbeddingFailed();
       $('#sm_embedding_test_result').text('');
       updateEmbeddingNotice();
       saveSettingsDebounced();
+      if (enabled && (settings.embedding_source ?? 'ollama') === 'openrouter') {
+        refreshOpenRouterEmbeddingModels();
+      }
     });
   $('#sm_embedding_config').toggle(s.embedding_enabled);
 
@@ -4504,7 +4598,26 @@ export function bindSettingsUI(ctrl) {
       saveSettingsDebounced();
       if (nextSource === 'ollama') {
         refreshEmbeddingModels();
+      } else if (nextSource === 'openrouter') {
+        refreshOpenRouterEmbeddingModels();
       }
+    });
+
+  [
+    event_types.SECRET_WRITTEN,
+    event_types.SECRET_EDITED,
+    event_types.SECRET_ROTATED,
+    event_types.SECRET_DELETED,
+  ]
+    .filter(Boolean)
+    .forEach((event) => {
+      eventSource.on(event, (key) => {
+        if (key !== SECRET_KEYS.OPENROUTER) return;
+        applyEmbeddingSourceUI();
+        if ((extension_settings[MODULE_NAME].embedding_source ?? 'ollama') === 'openrouter') {
+          refreshOpenRouterEmbeddingModels();
+        }
+      });
     });
 
   $('#sm_embedding_url')
@@ -4574,6 +4687,16 @@ export function bindSettingsUI(ctrl) {
     saveSettingsDebounced();
   });
 
+  // OpenRouter model catalog - populated from SillyTavern's API Connections-backed route.
+  $('#sm_embedding_model_openrouter').on('change', function () {
+    saveEmbeddingModelForSource('openrouter', $(this).val());
+    clearEmbeddingFailed();
+    $('#sm_embedding_test_result').text('');
+    updateEmbeddingNotice();
+    saveSettingsDebounced();
+  });
+  $('#sm_embedding_openrouter_refresh').on('click', () => refreshOpenRouterEmbeddingModels());
+
   // Non-Ollama provider model field.
   $('#sm_embedding_model_openai').on('input', function () {
     const source = extension_settings[MODULE_NAME].embedding_source ?? 'ollama';
@@ -4598,10 +4721,13 @@ export function bindSettingsUI(ctrl) {
 
   applyEmbeddingSourceUI();
 
-  // Refresh button and auto-load on settings open (Ollama only).
+  // Refresh button and auto-load on settings open.
   $('#sm_embedding_refresh').on('click', () => refreshEmbeddingModels());
   if (s.embedding_enabled && (s.embedding_source ?? 'ollama') === 'ollama') {
     refreshEmbeddingModels();
+  }
+  if (s.embedding_enabled && (s.embedding_source ?? 'ollama') === 'openrouter') {
+    refreshOpenRouterEmbeddingModels();
   }
 
   $('#sm_embedding_keep')
