@@ -112,6 +112,67 @@ test('single-extension qualification ingests one window into narrative plus type
   assert.equal(metadata.smartMemory.product_cursor.last_mes_id, 104);
 });
 
+test('product ingestion converts legacy tagged extraction output into structured records', async () => {
+  const metadata = {};
+  const pipeline = createProductPipeline({
+    metadata,
+    settings: {
+      respondingCharacter: 'Gustav',
+      chatUid: 'tagged-chat',
+      chatId: 'tagged-chat',
+      branchUid: 'tagged-branch',
+    },
+    summarizeNarrative: async () => 'Gustav rests after coffee.',
+    extractStructured: async () => '[fact:2:permanent] Gustav is tired after drinking coffee.',
+  });
+  const window = buildProductWindow({
+    chat: [
+      { mesId: 1, name: 'Badi', is_user: true, mes: 'Gustav drinks coffee.' },
+      { mesId: 2, name: 'Gustav', is_user: false, mes: 'Gustav is tired.' },
+    ],
+    chatUid: 'tagged-chat',
+    branchUid: 'tagged-branch',
+  });
+
+  const result = await pipeline.ingest(window);
+
+  assert.equal(result.status, 'completed');
+  assert.ok(metadata.smartMemory.structured_records.some(
+    (record) => record.kind === 'fact' && /tired after drinking coffee/i.test(record.content),
+  ));
+});
+
+test('product ingestion reports unparseable structured output as partial', async () => {
+  const metadata = {};
+  const pipeline = createProductPipeline({
+    metadata,
+    settings: {
+      respondingCharacter: 'Gustav',
+      chatUid: 'invalid-chat',
+      chatId: 'invalid-chat',
+      branchUid: 'invalid-branch',
+    },
+    summarizeNarrative: async () => 'Gustav rests after coffee.',
+    extractStructured: async () => 'The model returned prose instead of a structured response.',
+  });
+  const window = buildProductWindow({
+    chat: [
+      { mesId: 11, name: 'Badi', is_user: true, mes: 'Gustav drinks coffee.' },
+      { mesId: 12, name: 'Gustav', is_user: false, mes: 'Gustav is tired.' },
+    ],
+    chatUid: 'invalid-chat',
+    branchUid: 'invalid-branch',
+  });
+
+  const result = await pipeline.ingest(window);
+
+  assert.equal(result.status, 'partial');
+  assert.ok(result.failures.some(
+    (failure) => failure.projection === 'structured' && /parseable/i.test(failure.error),
+  ));
+  assert.equal(metadata.smartMemory.structured_records?.length ?? 0, 0);
+});
+
 test('qualification branch and rename operations fail closed or retag without changing narrative text', () => {
   const parent = createNarrativeState({ chatUid: 'parent-chat', branchUid: 'parent-branch' });
   parent.layers = [[

@@ -5,6 +5,7 @@ import {
   mergeStructuredRecords,
   normalizeStructuredRecords,
   parseStructuredResponse,
+  parseStructuredResponseResult,
 } from '../structured-records.js';
 import { buildIngestWindow } from '../projections.js';
 
@@ -38,6 +39,19 @@ test('structured response parser accepts plain and fenced JSON', () => {
 test('structured response parser rejects malformed or non-object output safely', () => {
   assert.deepEqual(parseStructuredResponse('not json'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
   assert.deepEqual(parseStructuredResponse('null'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
+  assert.equal(parseStructuredResponseResult('not json').valid, false);
+  assert.equal(parseStructuredResponseResult('').valid, false);
+});
+
+test('structured response parser accepts legacy tagged extraction output', () => {
+  const result = parseStructuredResponseResult(
+    '[fact:2:permanent] The silver key opens the temple door.\n[scene] Rain starts outside.',
+  );
+
+  assert.equal(result.valid, true);
+  assert.equal(result.format, 'tagged');
+  assert.equal(result.payload.facts.length, 1);
+  assert.equal(result.payload.session.length, 1);
 });
 
 test('one structured payload becomes typed records with shared scope and provenance', () => {

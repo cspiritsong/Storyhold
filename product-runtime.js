@@ -16,7 +16,7 @@ import {
   buildStructuredExtractionPrompt,
   mergeStructuredRecords,
   normalizeStructuredRecords,
-  parseStructuredResponse,
+  parseStructuredResponseResult,
 } from './structured-records.js';
 import { META_KEY } from './constants.js';
 import { isProjectionTemporallyCompatible } from './timeline.js';
@@ -226,7 +226,11 @@ function recordsFromExtraction(extracted, window, timeline = null, enabledKinds 
     return normalizeStructuredRecords(payload, window, { timeline, enabledKinds });
   }
   if (typeof extracted === 'string') {
-    return normalizeStructuredRecords(parseStructuredResponse(extracted), window, { timeline, enabledKinds });
+    const parsed = parseStructuredResponseResult(extracted);
+    if (!parsed.valid) {
+      throw new Error('structured extraction returned no parseable JSON or tagged records');
+    }
+    return normalizeStructuredRecords(parsed.payload, window, { timeline, enabledKinds });
   }
   if (extracted && typeof extracted === 'object') {
     if (Array.isArray(extracted.records)) return recordsFromExtraction(extracted.records, window, timeline, enabledKinds);

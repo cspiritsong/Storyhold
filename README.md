@@ -300,7 +300,7 @@ You are the judge. The hint on each tier tells you what to expect; the raw outpu
 
 ## Manual Operations
 
-The product pipeline runs one bounded window at a time. Each window writes two product projections: the recursive narrative chain and one combined structured response. The Product Memory panel in the settings shows the resulting narrative layers and typed record counts/previews. The legacy per-tier prompt slots remain empty because the broker owns the only product injection; they are not separate writers.
+The product pipeline runs one bounded window at a time. Each window writes two product projections: the recursive narrative chain and one combined structured response. The Product Memory panel in the settings shows the resulting narrative layers and typed record counts/previews. The legacy per-tier prompt slots remain empty because the broker owns the only product injection; they are not separate writers. The structured projector prefers JSON but also accepts Storyhold's existing tagged-line output (`[fact]`, `[relationship]`, `[scene]`, and `[arc]`) for compatibility with older extraction models. If a model returns empty or unparseable output, the window is marked incomplete and remains retryable; Storyhold does not advance the cursor while pretending the projection succeeded.
 
 Already have a chat that predates Storyhold? **Memorize Chat** reads through that chat and builds its product narrative chain and combined structured records. Run it separately in each chat you want to process; memories do not accumulate across chats.
 

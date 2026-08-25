@@ -15,6 +15,7 @@ import {
 } from './projections.js';
 import { hash32 } from './identity.js';
 import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './timeline.js';
+import { parseArcOutput, parseExtractionOutput, parseSessionOutput } from './parsers.js';
 
 const EMPTY_RESPONSE = Object.freeze({
   facts: [],
@@ -133,18 +134,90 @@ function withMetadata(base, item) {
   return { ...base, ...metadata };
 }
 
-/** Parses model output, accepting a fenced JSON block but rejecting prose safely. */
-export function parseStructuredResponse(raw) {
-  if (typeof raw !== 'string') return emptyResponse();
-  let source = raw.trim();
-  source = source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  try {
-    const parsed = JSON.parse(source);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptyResponse();
-    return parsed;
-  } catch {
-    return emptyResponse();
+function legacyTaggedResponse(source) {
+  const payload = emptyResponse();
+  let recognized = false;
+  const confidenceFromImportance = (importance) =>
+    Math.max(0, Math.min(1, Number(importance ?? 2) / 3));
+
+  for (const item of parseExtractionOutput(source)) {
+    recognized = true;
+    const target = item.expiration === 'session' || item.expiration === 'scene'
+      ? payload.session
+      : item.type === 'relationship'
+        ? payload.relationships
+        : payload.facts;
+    if (target === payload.session) {
+      target.push({
+        type: 'detail',
+        content: item.content,
+        confidence: confidenceFromImportance(item.importance),
+      });
+    } else if (target === payload.relationships) {
+      target.push({
+        content: item.content,
+        confidence: confidenceFromImportance(item.importance),
+        ...(item._raw_entity_names?.length ? { entity_names: item._raw_entity_names } : {}),
+      });
+    } else {
+      target.push({
+        content: item.content,
+        type: item.type,
+        confidence: confidenceFromImportance(item.importance),
+        ...(item._raw_entity_names?.length ? { entity_names: item._raw_entity_names } : {}),
+      });
+    }
   }
+
+  for (const item of parseSessionOutput(source)) {
+    recognized = true;
+    payload.session.push({
+      type: item.type,
+      content: item.content,
+      confidence: confidenceFromImportance(item.importance),
+    });
+  }
+
+  const arcs = parseArcOutput(source, []);
+  if (/^\[(?:arc|resolved)\]/im.test(source)) recognized = true;
+  for (const item of arcs.add) {
+    payload.arcs.push({ content: item.content, status: 'active', confidence: 0.7 });
+  }
+
+  return { payload, recognized };
+}
+
+/** Parses model output, preferring JSON and accepting legacy tagged lines. */
+export function parseStructuredResponseResult(raw) {
+  if (typeof raw !== 'string') {
+    return { payload: emptyResponse(), valid: false, format: 'invalid' };
+  }
+  const source = raw.trim();
+  if (!source) {
+    return { payload: emptyResponse(), valid: false, format: 'empty' };
+  }
+  if (source.toUpperCase() === 'NONE') {
+    return { payload: emptyResponse(), valid: true, format: 'empty' };
+  }
+
+  const jsonSource = source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  try {
+    const parsed = JSON.parse(jsonSource);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { payload: parsed, valid: true, format: 'json' };
+    }
+  } catch {
+    // Fall through to the legacy tagged-line compatibility parser.
+  }
+
+  const legacy = legacyTaggedResponse(source);
+  if (legacy.recognized) return { payload: legacy.payload, valid: true, format: 'tagged' };
+  return { payload: emptyResponse(), valid: false, format: 'invalid' };
+}
+
+/** Parses model output, accepting JSON, fenced JSON, and legacy tagged lines. */
+export function parseStructuredResponse(raw) {
+  return parseStructuredResponseResult(raw).payload;
 }
 
 /** Builds the one-call structured extraction prompt. */
