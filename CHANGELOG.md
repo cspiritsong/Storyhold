@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-08-26
+
+### Changed
+
+- **Visible Query & Challenge lifecycle.** Panel and slash-command reviews now acknowledge receipt, show an in-progress state with the active record count, and report a clear completion or failure outcome.
+- Query and challenge controls are disabled while a review is running and restore after completion. Chat changes invalidate stale review requests so an old result cannot appear in the new chat.
+- The result panel now explains the outcome and next step, including the explicit read-only guarantee. Empty lookups still open an outcome panel instead of disappearing into a toast.
+
 ## [1.11.0] - 2026-08-25
 
 ### Added

@@ -185,7 +185,7 @@ import {
 import { createOwnedProductControl } from './product-control.js';
 import { enabledProductKinds, filterProductRecords, shouldRunProductIngest } from './runtime-policy.js';
 import { filterRetrievalRecords } from './retrieval.js';
-import { buildMemoryReview, MEMORY_REVIEW_MODES } from './memory-review.js';
+import { buildMemoryReview, MEMORY_REVIEW_MODES, MEMORY_REVIEW_PHASES, memoryReviewProgress } from './memory-review.js';
 import {
   setStatusMessage,
   updateProductStatusUI,
@@ -204,6 +204,7 @@ import {
   updateEntityPanel,
   updateEmbeddingNotice,
   setContinuityBadge,
+  setMemoryReviewStatus,
   showMemoryReview,
   initTooltips,
   initTypePickers,
@@ -235,6 +236,7 @@ let compactionRunning = false;
 let compactionOwner = null;
 let extractionRunning = false;
 let consolidationRunning = false;
+let memoryReviewOwner = null;
 const productOperationGate = createProductOperationGate();
 const productControl = createOwnedProductControl();
 let productControlToken = null;
@@ -3172,6 +3174,16 @@ async function applyDuplicateRemoval(characterName, abortCheck = null, review = 
   };
 }
 
+function publishMemoryReviewProgress(progress) {
+  const state = setMemoryReviewStatus(memoryReviewProgress(progress));
+  setStatusMessage(state.message);
+  return state;
+}
+
+function yieldToMemoryReviewUi() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /**
  * Runs a read-only memory query or challenge review.
  *
@@ -3186,7 +3198,7 @@ async function applyDuplicateRemoval(characterName, abortCheck = null, review = 
  * @param {string} queryText - The query or claim text.
  * @returns {Promise<string>} Summary string for the slash command.
  */
-async function runMemoryReview(mode, args, queryText) {
+async function executeMemoryReview(mode, args, queryText, expectedIdentity = null) {
   const reviewMode = mode === MEMORY_REVIEW_MODES.CHALLENGE
     ? MEMORY_REVIEW_MODES.CHALLENGE
     : MEMORY_REVIEW_MODES.QUERY;
@@ -3200,22 +3212,29 @@ async function runMemoryReview(mode, args, queryText) {
     return '';
   }
 
-  const reviewGeneration = chatLoadId;
-  const reviewChatId = getCurrentChatId();
-  const reviewMetadata = getContext().chatMetadata;
-  const reviewChatUid = reviewMetadata?.[META_KEY]?.chat_uid ?? null;
-  const reviewProductMode = getSettings().single_extension_mode === true;
-  const reviewResponder = currentProductResponder();
-  const reviewStillCurrent = () =>
+  const reviewGeneration = expectedIdentity?.generation ?? chatLoadId;
+  const reviewChatId = expectedIdentity?.chatId ?? getCurrentChatId();
+  const reviewMetadata = expectedIdentity?.metadata ?? getContext().chatMetadata;
+  const reviewChatUid = expectedIdentity?.chatUid ?? reviewMetadata?.[META_KEY]?.chat_uid ?? null;
+  const reviewProductMode = expectedIdentity?.productMode ?? getSettings().single_extension_mode === true;
+  const reviewResponder = expectedIdentity?.responder ?? currentProductResponder();
+  const reviewIdentityMatches = () =>
     chatLoadId === reviewGeneration &&
     getCurrentChatId() === reviewChatId &&
     getContext().chatMetadata === reviewMetadata &&
     getContext().chatMetadata?.[META_KEY]?.chat_uid === reviewChatUid &&
     getSettings().single_extension_mode === reviewProductMode &&
+    currentProductResponder() === reviewResponder &&
+    (!expectedIdentity?.token || memoryReviewOwner?.token === expectedIdentity.token);
+  const reviewStillCurrent = () =>
+    reviewIdentityMatches() &&
     getSettings().enabled !== false &&
     !isFreshStart() &&
-    !isCurrentLineageQuarantined() &&
-    currentProductResponder() === reviewResponder;
+    !isCurrentLineageQuarantined();
+
+  if (expectedIdentity && !reviewIdentityMatches()) {
+    return 'Memory review cancelled because the active chat changed.';
+  }
 
   let allMems;
   if (getSettings().single_extension_mode) {
@@ -3224,6 +3243,9 @@ async function runMemoryReview(mode, args, queryText) {
     const root = context.chatMetadata?.[META_KEY] ?? {};
     const lineage = getCurrentLineage();
     if (productSettings.enabled === false || isFreshStart() || isCurrentLineageQuarantined() || !root.chat_uid) {
+      if (reviewIdentityMatches()) {
+        publishMemoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.FAILED });
+      }
       return 'Product memory is unavailable until this chat has a verified identity.';
     }
     const responder = reviewResponder;
@@ -3251,12 +3273,30 @@ async function runMemoryReview(mode, args, queryText) {
     ];
   }
 
+  if (!reviewStillCurrent()) return 'Memory review cancelled because the active chat changed.';
+  publishMemoryReviewProgress({
+    mode: reviewMode,
+    phase: MEMORY_REVIEW_PHASES.IN_PROGRESS,
+    totalRecords: allMems.length,
+  });
+  await yieldToMemoryReviewUi();
+  if (!reviewStillCurrent()) return 'Memory review cancelled because the active chat changed.';
+
   if (allMems.length === 0) {
-    toastr.info('No memories to review.', 'Storyhold', {
-      timeOut: 3000,
-      positionClass: 'toast-bottom-right',
+    const emptyReview = buildMemoryReview({
+      mode: reviewMode,
+      query: q,
+      results: [],
+      totalRecords: 0,
     });
-    return '';
+    showMemoryReview(emptyReview);
+    publishMemoryReviewProgress({
+      mode: reviewMode,
+      phase: MEMORY_REVIEW_PHASES.COMPLETED,
+      resultCount: 0,
+      challenge: emptyReview.challenge,
+    });
+    return `${actionLabel === 'challenge' ? 'Related evidence' : 'Results'}: 0 matches for "${q}".`;
   }
 
   const topK = Math.max(1, Math.min(50, Number(args?.k) || 10));
@@ -3267,7 +3307,20 @@ async function runMemoryReview(mode, args, queryText) {
       .toLowerCase()
       .trim(),
   );
-  const vectorMap = await getEmbeddingBatch([qLower, ...memTexts], { queryTexts: [qLower] });
+  let vectorMap;
+  try {
+    vectorMap = await getEmbeddingBatch([qLower, ...memTexts], { queryTexts: [qLower] });
+  } catch (error) {
+    if (reviewStillCurrent()) {
+      publishMemoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.FAILED });
+      toastr.error('Memory review failed. No memory was changed.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
+    }
+    console.warn('[Storyhold] Memory review failed:', error);
+    return 'Memory review failed. No memory was changed.';
+  }
   if (!reviewStillCurrent()) return 'Memory review cancelled because the active chat changed.';
   if (
     reviewProductMode &&
@@ -3291,8 +3344,67 @@ async function runMemoryReview(mode, args, queryText) {
 
   scored.sort((a, b) => b.score - a.score);
   const top = scored.slice(0, topK);
-  showMemoryReview(buildMemoryReview({ mode: reviewMode, query: q, results: top }));
+  const review = buildMemoryReview({
+    mode: reviewMode,
+    query: q,
+    results: top,
+    totalRecords: allMems.length,
+  });
+  showMemoryReview(review);
+  publishMemoryReviewProgress({
+    mode: reviewMode,
+    phase: MEMORY_REVIEW_PHASES.COMPLETED,
+    resultCount: top.length,
+    challenge: review.challenge,
+  });
   return `${actionLabel === 'challenge' ? 'Related evidence' : 'Results'}: ${top.length} match${top.length === 1 ? '' : 'es'} for "${q}".`;
+}
+
+/**
+ * Starts one review request with visible acknowledgement and request ownership.
+ * A zero-delay yield lets the acknowledgement render before the progress state.
+ */
+async function runMemoryReview(mode, args, queryText) {
+  const reviewMode = mode === MEMORY_REVIEW_MODES.CHALLENGE
+    ? MEMORY_REVIEW_MODES.CHALLENGE
+    : MEMORY_REVIEW_MODES.QUERY;
+  const q = String(queryText || '').trim();
+  if (!q) return executeMemoryReview(reviewMode, args, queryText);
+
+  const currentContext = {
+    generation: chatLoadId,
+    chatId: getCurrentChatId(),
+    metadata: getContext().chatMetadata,
+    chatUid: getContext().chatMetadata?.[META_KEY]?.chat_uid ?? null,
+    productMode: getSettings().single_extension_mode === true,
+    responder: currentProductResponder(),
+  };
+  const existing = memoryReviewOwner;
+  if (
+    existing &&
+    existing.generation === currentContext.generation &&
+    existing.chatId === currentContext.chatId &&
+    existing.metadata === currentContext.metadata &&
+    existing.chatUid === currentContext.chatUid &&
+    existing.productMode === currentContext.productMode &&
+    existing.responder === currentContext.responder
+  ) {
+    return 'Memory review already in progress. Please wait for the current result.';
+  }
+
+  const owner = { ...currentContext, token: Symbol('memory-review-owner') };
+  memoryReviewOwner = owner;
+  publishMemoryReviewProgress({
+    mode: reviewMode,
+    phase: MEMORY_REVIEW_PHASES.ACKNOWLEDGED,
+  });
+  await yieldToMemoryReviewUi();
+
+  try {
+    return await executeMemoryReview(reviewMode, args, q, owner);
+  } finally {
+    if (memoryReviewOwner === owner) memoryReviewOwner = null;
+  }
 }
 
 jQuery(async function () {

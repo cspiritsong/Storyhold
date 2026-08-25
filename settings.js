@@ -180,6 +180,7 @@ import {
   updateEntityPanel,
   updateTokenDisplay,
   updateEmbeddingNotice,
+  setMemoryReviewStatus,
 } from './ui.js';
 
 // ---- Default settings ---------------------------------------------------
@@ -1129,12 +1130,15 @@ export function bindSettingsUI(ctrl) {
       });
       return;
     }
-    const $button = $(this);
-    $button.prop('disabled', true);
     try {
       await ctrl.runMemoryReview?.(mode, { k: 10, min: 0.5 }, text);
-    } finally {
-      $button.prop('disabled', false);
+    } catch (error) {
+      setMemoryReviewStatus({ mode, phase: 'failed' });
+      console.warn('[Storyhold] Memory review panel action failed:', error);
+      toastr.error('Memory review failed. No memory was changed.', 'Storyhold', {
+        timeOut: 5000,
+        positionClass: 'toast-bottom-right',
+      });
     }
   });
 

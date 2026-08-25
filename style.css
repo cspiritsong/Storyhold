@@ -1574,6 +1574,61 @@
   border-left-color: #6fa578;
 }
 
+/* Query/challenge lifecycle and explicit result outcome. */
+#smart_memory_settings .sm_review_status {
+  min-height: 1.3em;
+  margin-top: 6px;
+  font-size: 0.82em;
+  line-height: 1.35;
+  color: var(--SmartReplyColor, #aaa);
+}
+
+#smart_memory_settings .sm_review_status_acknowledged,
+#smart_memory_settings .sm_review_status_in-progress {
+  color: var(--SmartThemeQuoteColor, #d8c98a);
+}
+
+#smart_memory_settings .sm_review_status_completed {
+  color: var(--SmartThemeBodyColor, #9dccaa);
+}
+
+#smart_memory_settings .sm_review_status_failed {
+  color: var(--SmartThemeWarningColor, #d99b9b);
+}
+
+.sm_review_outcome {
+  border: 1px solid var(--SmartThemeBorderColor, #444);
+  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.1);
+  padding: 10px;
+  margin: 0 0 12px 0;
+  font-size: 0.86em;
+  line-height: 1.45;
+}
+
+.sm_review_outcome_strong-match {
+  border-left: 3px solid #6fa578;
+}
+
+.sm_review_outcome_related {
+  border-left: 3px solid #4a8fb5;
+}
+
+.sm_review_outcome_no-match {
+  border-left: 3px solid #8a8a6a;
+}
+
+.sm_review_next_step {
+  margin-top: 6px;
+  color: var(--SmartReplyColor, #aaa);
+}
+
+.sm_review_unchanged {
+  margin-top: 7px;
+  font-size: 0.9em;
+  color: var(--SmartThemeBodyColor, #9dccaa);
+}
+
 /* Type badge colours reused in search overlay (same values as panel badges). */
 #sm_search_overlay .sm_type_fact {
   background: #4a6fa5;

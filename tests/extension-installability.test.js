@@ -106,6 +106,30 @@ test('query and challenge review share one read-only console', async () => {
   assert.doesNotMatch(indexSource, /runMemoryReview[\s\S]{0,3000}generateMemoryExtract/);
 });
 
+test('query and challenge expose acknowledgement, progress, and outcome states', async () => {
+  const [indexSource, settingsHtml, settingsSource, uiSource] = await Promise.all([
+    readFile(resolve(root, 'index.js'), 'utf8'),
+    readFile(resolve(root, 'settings.html'), 'utf8'),
+    readFile(resolve(root, 'settings.js'), 'utf8'),
+    readFile(resolve(root, 'ui.js'), 'utf8'),
+  ]);
+
+  assert.match(settingsHtml, /id="sm_review_status"/);
+  assert.match(settingsHtml, /aria-live="polite"/);
+  assert.match(uiSource, /export function setMemoryReviewStatus/);
+  assert.match(uiSource, /aria-busy/);
+  assert.match(uiSource, /Querying…/);
+  assert.match(uiSource, /Challenging…/);
+  assert.match(indexSource, /MEMORY_REVIEW_PHASES\.ACKNOWLEDGED/);
+  assert.match(indexSource, /MEMORY_REVIEW_PHASES\.IN_PROGRESS/);
+  assert.match(indexSource, /MEMORY_REVIEW_PHASES\.COMPLETED/);
+  assert.match(indexSource, /MEMORY_REVIEW_PHASES\.FAILED/);
+  assert.match(settingsSource, /setMemoryReviewStatus/);
+  assert.match(uiSource, /Outcome/);
+  assert.match(uiSource, /Next step/);
+  assert.match(uiSource, /No memory was changed/);
+});
+
 
 test('product catch-up exposes progress and canonical pipeline messaging', async () => {
   const [indexSource, settingsHtml, unifiedSource] = await Promise.all([
@@ -314,8 +338,8 @@ test('product slash commands do not read legacy stores', async () => {
   const searchBlock = source.slice(searchStart, challengeStart + 5000);
   assert.match(searchBlock, /runMemoryReview\('query', args, query\)/);
   assert.match(searchBlock, /runMemoryReview\('challenge', args, claim\)/);
-  const runnerStart = source.indexOf('async function runMemoryReview(mode, args, queryText)');
-  const runnerEnd = source.indexOf('jQuery(async function ()', runnerStart);
+  const runnerStart = source.indexOf('async function executeMemoryReview(mode, args, queryText, expectedIdentity = null)');
+  const runnerEnd = source.indexOf('async function runMemoryReview(mode, args, queryText)', runnerStart);
   assert.ok(runnerStart >= 0 && runnerEnd > runnerStart);
   const runner = source.slice(runnerStart, runnerEnd);
   assert.match(runner, /structured_records/);
@@ -326,14 +350,14 @@ test('product slash commands do not read legacy stores', async () => {
 
 test('product search discards embedding results after a chat transition', async () => {
   const source = await readFile(resolve(root, 'index.js'), 'utf8');
-  const start = source.indexOf('async function runMemoryReview(mode, args, queryText)');
-  const end = source.indexOf('jQuery(async function ()', start);
+  const start = source.indexOf('async function executeMemoryReview(mode, args, queryText, expectedIdentity = null)');
+  const end = source.indexOf('async function runMemoryReview(mode, args, queryText)', start);
   assert.ok(start >= 0 && end > start);
   const block = source.slice(start, end);
-  assert.match(block, /const reviewGeneration = chatLoadId/);
-  assert.match(block, /const reviewMetadata = getContext\(\)\.chatMetadata/);
+  assert.match(block, /const reviewGeneration = expectedIdentity\?\.generation \?\? chatLoadId/);
+  assert.match(block, /const reviewMetadata = expectedIdentity\?\.metadata \?\? getContext\(\)\.chatMetadata/);
   assert.match(block, /const reviewStillCurrent = \(\) =>/);
-  assert.match(block, /const reviewResponder = currentProductResponder\(\)/);
+  assert.match(block, /const reviewResponder = expectedIdentity\?\.responder \?\? currentProductResponder\(\)/);
   assert.match(block, /currentProductResponder\(\) === reviewResponder/);
   assert.match(block, /await getEmbeddingBatch/);
   assert.match(block, /if \(!reviewStillCurrent\(\)\)/);
@@ -917,8 +941,8 @@ test('product operations revalidate the captured responder before writes and inj
 
 test('Product search fails closed before embedding when the chat is blocked', async () => {
   const source = await readFile(resolve(root, 'index.js'), 'utf8');
-  const start = source.indexOf('async function runMemoryReview(mode, args, queryText)');
-  const end = source.indexOf('jQuery(async function ()', start);
+  const start = source.indexOf('async function executeMemoryReview(mode, args, queryText, expectedIdentity = null)');
+  const end = source.indexOf('async function runMemoryReview(mode, args, queryText)', start);
   assert.ok(start >= 0 && end > start);
   const block = source.slice(start, end);
   assert.match(block, /const reviewStillCurrent = \(\) =>[\s\S]*isFreshStart\(\)/);

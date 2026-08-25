@@ -4,7 +4,9 @@ import {
   buildMemoryReview,
   classifyMemoryChallenge,
   isSpoilerMemoryRecord,
+  MEMORY_REVIEW_PHASES,
   MEMORY_REVIEW_STATUS,
+  memoryReviewProgress,
   splitMemoryReviewResults,
 } from '../memory-review.js';
 
@@ -17,6 +19,58 @@ test('spoiler epistemic records are separated from ordinary review results', () 
     visible: [visible],
     spoiler: [spoiler],
   });
+});
+
+test('review lifecycle gives acknowledgement, progress, and explicit completion messages', () => {
+  const acknowledged = memoryReviewProgress({
+    mode: 'challenge',
+    phase: MEMORY_REVIEW_PHASES.ACKNOWLEDGED,
+    query: 'The key was destroyed.',
+  });
+  assert.equal(acknowledged.busy, true);
+  assert.match(acknowledged.message, /Challenge received/i);
+
+  const inProgress = memoryReviewProgress({
+    mode: 'query',
+    phase: MEMORY_REVIEW_PHASES.IN_PROGRESS,
+    totalRecords: 12,
+  });
+  assert.equal(inProgress.busy, true);
+  assert.match(inProgress.message, /Query in progress/i);
+  assert.match(inProgress.message, /12/);
+
+  const completed = memoryReviewProgress({
+    mode: 'challenge',
+    phase: MEMORY_REVIEW_PHASES.COMPLETED,
+    resultCount: 2,
+    challenge: { label: 'Related evidence found' },
+  });
+  assert.equal(completed.busy, false);
+  assert.match(completed.message, /Challenge complete/i);
+  assert.match(completed.message, /no memory was changed/i);
+});
+
+test('review errors explain that the query did not change memory', () => {
+  const failed = memoryReviewProgress({
+    mode: 'query',
+    phase: MEMORY_REVIEW_PHASES.FAILED,
+  });
+
+  assert.equal(failed.busy, false);
+  assert.match(failed.message, /failed/i);
+  assert.match(failed.message, /no memory was changed/i);
+});
+
+test('empty completed queries still report an explicit outcome', () => {
+  const completed = memoryReviewProgress({
+    mode: 'query',
+    phase: MEMORY_REVIEW_PHASES.COMPLETED,
+    resultCount: 0,
+  });
+
+  assert.equal(completed.busy, false);
+  assert.match(completed.message, /found 0 matching records/i);
+  assert.match(completed.message, /no memory was changed/i);
 });
 
 test('challenge with no related records remains uncertain', () => {

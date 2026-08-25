@@ -647,6 +647,13 @@ Both `/sm-search` and `/sm-challenge` are also available in the settings panel u
 **Query & Challenge Memory**. Type a query or a claim and press **Query** or
 **Challenge** (or press Enter).
 
+The controls show the complete lifecycle:
+
+1. **Received** - Storyhold acknowledges the request and captures the current chat/branch.
+2. **In progress** - both controls are disabled while active records are searched.
+3. **Complete** - the review panel opens with the outcome, evidence, and next step.
+4. **Failed** - the status explains that no memory was changed, so you can retry safely.
+
 What the result panel shows:
 
 - Matching records for the current chat and branch, with type, score, and source range

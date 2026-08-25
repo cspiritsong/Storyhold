@@ -56,7 +56,7 @@ import {
   filterEpistemicRecordsForSubject,
   scopeProductStatus,
 } from './product-status.js';
-import { buildMemoryReview } from './memory-review.js';
+import { buildMemoryReview, memoryReviewProgress } from './memory-review.js';
 import {
   estimateTokens,
   MODULE_NAME,
@@ -451,8 +451,63 @@ function productModeActive() {
   return getSettings()?.single_extension_mode === true;
 }
 
+/**
+ * Renders the acknowledgement/progress/outcome state for a memory review.
+ * Both the panel buttons and slash-command runner use this same status line.
+ */
+export function setMemoryReviewStatus(progress = {}) {
+  const state = progress?.message && progress?.phase
+    ? progress
+    : memoryReviewProgress(progress);
+  const status = document.getElementById('sm_review_status');
+  const panel = document.getElementById('sm_memory_review');
+  const buttons = document.querySelectorAll('#sm_review_query, #sm_review_challenge');
+
+  if (status) {
+    status.textContent = state.message;
+    status.dataset.phase = state.phase;
+    status.dataset.severity = state.severity;
+    status.setAttribute('aria-busy', String(state.busy));
+    status.className = `sm_review_status sm_review_status_${state.phase}`;
+  }
+  if (panel) panel.setAttribute('aria-busy', String(state.busy));
+  for (const button of buttons) {
+    button.disabled = state.busy;
+    const label = button.querySelector('span');
+    if (!label) continue;
+    if (state.busy && state.mode === 'query' && button.id === 'sm_review_query') {
+      label.textContent = 'Querying…';
+    } else if (state.busy && state.mode === 'challenge' && button.id === 'sm_review_challenge') {
+      label.textContent = 'Challenging…';
+    } else {
+      label.textContent = button.id === 'sm_review_query' ? 'Query' : 'Challenge';
+    }
+  }
+  return state;
+}
+
+/** Resets the review console when its chat context changes. */
+export function clearMemoryReviewStatus() {
+  const status = document.getElementById('sm_review_status');
+  const panel = document.getElementById('sm_memory_review');
+  if (status) {
+    status.textContent = 'Ready — query or challenge is read-only.';
+    status.dataset.phase = 'ready';
+    status.dataset.severity = 'info';
+    status.setAttribute('aria-busy', 'false');
+    status.className = 'sm_review_status sm_review_status_ready';
+  }
+  if (panel) panel.setAttribute('aria-busy', 'false');
+  for (const button of document.querySelectorAll('#sm_review_query, #sm_review_challenge')) {
+    button.disabled = false;
+    const label = button.querySelector('span');
+    if (label) label.textContent = button.id === 'sm_review_query' ? 'Query' : 'Challenge';
+  }
+}
+
 /** Clears product-owned UI so one chat can never remain visible over another. */
 export function clearProductViews() {
+  clearMemoryReviewStatus();
   const panel = document.getElementById('sm_product_status_panel');
   if (panel) panel.style.display = 'none';
   const listIds = [
@@ -1000,6 +1055,44 @@ function appendMemoryReviewRows(card, review) {
   }
 }
 
+function appendMemoryReviewOutcome(card, review) {
+  const isChallenge = review.mode === 'challenge';
+  const count = review.results.length;
+  const outcome = document.createElement('div');
+  outcome.className = `sm_review_outcome ${isChallenge ? `sm_review_outcome_${review.challenge?.status ?? 'unknown'}` : ''}`;
+
+  const heading = document.createElement('strong');
+  heading.textContent = 'Outcome';
+  outcome.appendChild(heading);
+
+  const summary = document.createElement('div');
+  if (isChallenge) {
+    summary.textContent = `${review.challenge?.label ?? (count > 0 ? 'Related evidence found' : 'No related evidence found')}.`;
+  } else {
+    summary.textContent = count > 0
+      ? `${count} matching active record${count === 1 ? '' : 's'} found for this chat and branch.`
+      : 'No matching active records found for this chat and branch.';
+  }
+  outcome.appendChild(summary);
+
+  const next = document.createElement('div');
+  next.className = 'sm_review_next_step';
+  next.textContent = isChallenge
+    ? count > 0
+      ? 'Next step: review the evidence and source range. If the memory is wrong, edit or delete it in the relevant Storyhold list.'
+      : 'Next step: this is not proof that the claim is false. Try a more specific claim or lower the match threshold if needed.'
+    : count > 0
+      ? 'Next step: inspect the source ranges below. Query is read-only; no memory was changed.'
+      : 'Next step: try different wording or a lower match threshold. Query is read-only; no memory was changed.';
+  outcome.appendChild(next);
+
+  const unchanged = document.createElement('div');
+  unchanged.className = 'sm_review_unchanged';
+  unchanged.textContent = 'No memory was changed.';
+  outcome.appendChild(unchanged);
+  card.append(outcome);
+}
+
 /**
  * Displays a read-only memory review panel for a query or challenge.
  * Query mode lists matching records. Challenge mode adds an evidence
@@ -1030,6 +1123,7 @@ export function showMemoryReview(review) {
     card.append($banner);
   }
 
+  appendMemoryReviewOutcome(card, review);
   appendMemoryReviewRows(card, review);
 
   const $footer = $('<div class="sm_search_footer">');
