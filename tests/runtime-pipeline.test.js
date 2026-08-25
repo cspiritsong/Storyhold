@@ -98,3 +98,43 @@ test('quarantined runtime windows do not call any projection or summarizer', asy
   assert.equal(ingestStore.get(window.window_id).status, 'quarantined');
   assert.equal(narrativeStore.size, 0);
 });
+
+test('abort after narrative state load prevents model work and narrative saves', async () => {
+  let releaseLoad;
+  let loadStarted;
+  const loadGate = new Promise((resolve) => {
+    releaseLoad = resolve;
+  });
+  const started = new Promise((resolve) => {
+    loadStarted = resolve;
+  });
+  let aborted = false;
+  let summarizeCalls = 0;
+  let narrativeSaves = 0;
+  const pipeline = createRuntimePipeline({
+    loadIngest: () => null,
+    saveIngest: () => {},
+    loadNarrative: async () => {
+      loadStarted();
+      await loadGate;
+      return null;
+    },
+    saveNarrative: () => {
+      narrativeSaves++;
+    },
+    summarizeNarrative: async () => {
+      summarizeCalls++;
+      return 'should not run';
+    },
+    extractStructured: async () => [],
+  });
+
+  const pending = pipeline.ingest(makeWindow(), { shouldAbort: () => aborted });
+  await started;
+  aborted = true;
+  releaseLoad();
+
+  await assert.rejects(pending, /aborted/);
+  assert.equal(summarizeCalls, 0);
+  assert.equal(narrativeSaves, 0);
+});

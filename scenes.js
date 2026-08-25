@@ -53,7 +53,12 @@ import { getEmbeddingBatch, cosineSimilarity } from './embeddings.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 
 // Re-export so index.js can import directly from scenes.js as before.
 export { detectSceneBreakHeuristic };
@@ -131,23 +136,30 @@ export function loadSceneHistory() {
  * Persists the scene history array to chatMetadata.
  * @param {Array<{summary: string, ts: number}>} scenes
  */
-export async function saveSceneHistory(scenes) {
+export async function saveSceneHistory(scenes, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
+  if (abortCheck?.()) return false;
   context.chatMetadata[META_KEY].sceneHistory = scenes;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**
  * Empties scene history for the current chat.
  */
-export async function clearSceneHistory() {
+export async function clearSceneHistory(abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (context.chatMetadata?.[META_KEY]) {
     context.chatMetadata[META_KEY].sceneHistory = [];
+    if (abortCheck?.()) return false;
     await context.saveMetadata();
   }
+  return true;
 }
 
 /**
@@ -292,11 +304,12 @@ export async function processSceneBreak(
     ...(sourceMesIds.length > 0
       ? { source_mes_range: [Math.min(...sourceMesIds), Math.max(...sourceMesIds)] }
       : {}),
+    ...currentLineageRecordStamp(),
   });
   if (history.length > max) history.splice(0, history.length - max);
 
   if (abortCheck?.()) return false;
-  await saveSceneHistory(history);
+  await saveSceneHistory(history, abortCheck);
   return true;
 }
 
@@ -310,12 +323,18 @@ export async function processSceneBreak(
  * multiple extraction passes run against the same scene.
  *
  * @param {string[]} memoryIds - Ids of memories extracted during this scene.
+ * @param {Function|null} [abortCheck] - Optional zero-arg function; if it returns true the write is skipped.
  * @returns {Promise<void>}
  */
-export async function linkMemoriesToLastScene(memoryIds) {
-  if (!memoryIds || memoryIds.length === 0) return;
-  const history = loadSceneHistory();
-  if (history.length === 0) return;
+export async function linkMemoriesToLastScene(memoryIds, abortCheck = null) {
+  if (!memoryIds || memoryIds.length === 0 || abortCheck?.()) return;
+  const history = loadSceneHistory().map((scene) => ({
+    ...scene,
+    ...(Array.isArray(scene?.source_memory_ids)
+      ? { source_memory_ids: [...scene.source_memory_ids] }
+      : {}),
+  }));
+  if (history.length === 0 || abortCheck?.()) return;
 
   const last = history[history.length - 1];
   if (!Array.isArray(last.source_memory_ids)) last.source_memory_ids = [];
@@ -328,7 +347,7 @@ export async function linkMemoriesToLastScene(memoryIds) {
     }
   }
 
-  await saveSceneHistory(history);
+  await saveSceneHistory(history, abortCheck);
 }
 
 // ---- Injection ----------------------------------------------------------
@@ -339,14 +358,17 @@ export async function linkMemoriesToLastScene(memoryIds) {
  */
 export function injectSceneHistory() {
   const settings = extension_settings[MODULE_NAME];
-  if (isCurrentLineageQuarantined() || !settings.scene_enabled) {
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !settings.scene_enabled) {
     setMacroContent(MACRO_NAMES.scenes, '');
     setExtensionPrompt(PROMPT_KEY_SCENES, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_SCENES);
     return;
   }
 
-  const history = loadSceneHistory();
+  const history = filterCurrentChatRecords(loadSceneHistory(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  });
   if (history.length === 0) {
     setMacroContent(MACRO_NAMES.scenes, '');
     setExtensionPrompt(PROMPT_KEY_SCENES, '', extension_prompt_types.NONE, 0);

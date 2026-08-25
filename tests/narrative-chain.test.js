@@ -5,8 +5,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assembleNarrative,
+  assembleNarrativeScoped,
   createNarrativeState,
   inheritNarrativePrefix,
+  narrativeIdentityMatches,
   ingestNarrativeBatch,
   promoteNarrativeLayers,
   pruneNarrativeAtBranch,
@@ -172,6 +174,34 @@ test('failed merge promotion restores all snippets and does not mutate the input
   assert.deepEqual(state, before);
 });
 
+test('promotion failure surfaces as a real failure so the queue retries the window', async () => {
+  const base = createNarrativeState({
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
+    snippetsPerLayer: 1,
+    snippetsPerPromotion: 1,
+    maxLayers: 3,
+  });
+  const summarize = async (request) => {
+    if (request.promotion) throw new Error('merge failed');
+    return 'delta';
+  };
+  const windowArgs = (id, start, end) => ({
+    window_id: id,
+    source_range: { kind: 'mesId', start, end },
+    fingerprint: `fp-${id}`,
+    story_text: `window ${id}`,
+    chat_uid: 'chat-a',
+    branch_uid: 'branch-a',
+  });
+  const first = await ingestNarrativeBatch(base, { ...windowArgs('w1', 1, 1), summarize });
+  const second = await ingestNarrativeBatch(first.state, { ...windowArgs('w2', 2, 2), summarize });
+  const third = await ingestNarrativeBatch(second.state, { ...windowArgs('w3', 3, 3), summarize });
+
+  assert.equal(third.failed, true);
+  assert.equal(third.promotion_failed, true);
+});
+
 test('assembled narrative places deeper layers before layer zero', () => {
   const state = newState();
   state.layers = [
@@ -207,6 +237,7 @@ test('verified narrative prefix inheritance excludes divergent and provenance-le
 
   const child = inheritNarrativePrefix(parent, {
     parentChatUid: 'parent-chat',
+    parentBranchUid: 'parent-branch',
     branchChatUid: 'child-chat',
     branchUid: 'child-branch',
     parentPrefixEnd: 3,
@@ -239,6 +270,40 @@ test('narrative branch pruning removes tail layers and rolls watermark back', ()
   assert.deepEqual(state.layers[0].map((snippet) => snippet.id), ['prefix', 'tail']);
 });
 
+test('narrative branch pruning reports progress-only invalidation', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: 'branch-a' });
+  state.layers = [[{ id: 'prefix', text: 'prefix', source_range: { kind: 'mesId', start: 1, end: 3 } }]];
+  state.processed_windows = [{
+    window_id: 'tail-window',
+    source_range: { kind: 'mesId', start: 4, end: 5 },
+    fingerprint: 'tail',
+  }];
+  state.watermark = state.processed_windows[0];
+
+  const result = pruneNarrativeAtBranch(state, { branchPointMesId: 3 });
+
+  assert.equal(result.removed, 0);
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.state.processed_windows, []);
+  assert.equal(result.state.watermark, null);
+});
+
+test('narrative branch pruning removes sparse index-range tails', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: 'branch-a' });
+  state.layers = [[
+    { id: 'prefix', text: 'prefix', source_range: { kind: 'index', start: 0, end: 1 } },
+    { id: 'tail', text: 'tail', source_range: { kind: 'index', start: 2, end: 4 } },
+  ]];
+
+  const result = pruneNarrativeAtBranch(state, {
+    branchPointMesId: 20,
+    branchPointIndex: 1,
+  });
+
+  assert.deepEqual(result.state.layers[0].map((snippet) => snippet.id), ['prefix']);
+  assert.equal(result.removed, 1);
+});
+
 test('renaming a narrative store preserves its layers while updating stable scope', () => {
   const state = createNarrativeState({ chatUid: 'old-chat', branchUid: 'old-branch' });
   state.layers = [[{
@@ -259,6 +324,103 @@ test('renaming a narrative store preserves its layers while updating stable scop
     chat_uid: 'renamed-chat',
     branch_uid: 'renamed-branch',
   });
+});
+
+test('narrative rename retags every explicit nested identity field', () => {
+  const state = createNarrativeState({ chatUid: 'old-chat', branchUid: 'old-branch' });
+  state.layers = [[{
+    id: 'one',
+    text: 'event',
+    chat_uid: 'old-chat',
+    source_chat_uid: 'old-chat',
+    _source_chat_uid: 'old-chat',
+    lineage_epoch: 'old-branch',
+    _lineage_epoch: 'old-branch',
+    scope: {
+      chat_uid: 'old-chat',
+      source_chat_uid: 'old-chat',
+      _source_chat_uid: 'old-chat',
+      branch_uid: 'old-branch',
+      lineage_epoch: 'old-branch',
+    },
+    provenance: {
+      chat_uid: 'old-chat',
+      source_chat_uid: 'old-chat',
+      _source_chat_uid: 'old-chat',
+      branch_uid: 'old-branch',
+      lineage_epoch: 'old-branch',
+    },
+    source_range: { kind: 'mesId', start: 1, end: 1 },
+  }]];
+
+  const renamed = retagNarrativeChatUid(state, {
+    chatUid: 'renamed-chat',
+    branchUid: 'renamed-branch',
+  });
+  const snippet = renamed.layers[0][0];
+
+  assert.equal(snippet.chat_uid, 'renamed-chat');
+  assert.equal(snippet.source_chat_uid, 'renamed-chat');
+  assert.equal(snippet._source_chat_uid, 'renamed-chat');
+  assert.equal(snippet.lineage_epoch, 'renamed-branch');
+  assert.equal(snippet._lineage_epoch, 'renamed-branch');
+  assert.equal(snippet.scope.source_chat_uid, 'renamed-chat');
+  assert.equal(snippet.scope._source_chat_uid, 'renamed-chat');
+  assert.equal(snippet.scope.lineage_epoch, 'renamed-branch');
+  assert.equal(snippet.provenance.chat_uid, 'renamed-chat');
+  assert.equal(snippet.provenance._source_chat_uid, 'renamed-chat');
+  assert.equal(snippet.provenance.lineage_epoch, 'renamed-branch');
+});
+
+test('narrative identity rejects a foreign nested snippet', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: 'branch-a' });
+  state.layers = [[
+    {
+      id: 'foreign',
+      text: 'foreign',
+      scope: { chat_uid: 'chat-b', branch_uid: 'branch-b' },
+    },
+  ]];
+
+  assert.equal(
+    narrativeIdentityMatches(state, {
+      chatUid: 'chat-a',
+      branchUid: 'branch-a',
+      requireChat: true,
+      requireBranch: true,
+    }),
+    false,
+  );
+});
+
+test('narrative identity rejects foreign nested source variants', () => {
+  const state = createNarrativeState({ chatUid: 'uid-a', branchUid: 'branch-a' });
+  state.layers = [[{
+    id: 'mixed',
+    text: 'Mixed narrative provenance.',
+    scope: {
+      chat_uid: 'uid-a',
+      _source_chat_uid: 'uid-a',
+      _source_chat_id: 'chat-b',
+      branch_uid: 'branch-a',
+    },
+    provenance: {
+      source_chat_uid: 'uid-a',
+      _source_chat_uid: 'uid-b',
+      chat_id: 'chat-a',
+    },
+  }]];
+
+  assert.equal(
+    narrativeIdentityMatches(state, {
+      chatUid: 'uid-a',
+      chatId: 'chat-a',
+      branchUid: 'branch-a',
+      requireChat: true,
+      requireBranch: true,
+    }),
+    false,
+  );
 });
 
 test('mesId-less or missing provenance is not inherited automatically', () => {
@@ -292,4 +454,129 @@ test('rebuild processes raw windows into a fresh narrative chain', async () => {
   assert.equal(result.failed, false);
   assert.equal(result.state.layers[0].length, 2);
   assert.equal(result.state.watermark.window_id, 'rebuild-2');
+});
+
+test('scoped narrative assembly excludes foreign snippet provenance', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: 'branch-a' });
+  state.layers = [[
+    {
+      id: 'current',
+      text: 'Mira takes the key.',
+      source_range: { kind: 'mesId', start: 1, end: 1 },
+      scope: { chat_uid: 'chat-a', branch_uid: 'branch-a' },
+      provenance: { source_chat_uid: 'chat-a' },
+    },
+    {
+      id: 'foreign-scope',
+      text: 'Foreign scope.',
+      source_range: { kind: 'mesId', start: 2, end: 2 },
+      scope: { chat_uid: 'chat-b', branch_uid: 'branch-b' },
+    },
+    {
+      id: 'mixed-provenance',
+      text: 'Mixed provenance.',
+      source_range: { kind: 'mesId', start: 3, end: 3 },
+      scope: { chat_uid: 'chat-a' },
+      provenance: { source_chat_uid: 'chat-b' },
+    },
+  ]];
+
+  const text = assembleNarrativeScoped(state, {
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
+  });
+
+  assert.match(text, /Mira takes the key/);
+  assert.doesNotMatch(text, /Foreign scope/);
+  assert.doesNotMatch(text, /Mixed provenance/);
+});
+
+test('scoped narrative assembly rejects strict branch mode without an expected branch', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: null });
+  state.layers = [[
+    {
+      id: 'unscoped',
+      text: 'Should not be admitted.',
+      chat_uid: 'chat-a',
+    },
+  ]];
+
+  assert.equal(
+    assembleNarrativeScoped(state, {
+      chatUid: 'chat-a',
+      branchUid: null,
+      requireChat: true,
+      requireBranch: true,
+    }),
+    '',
+  );
+});
+
+test('narrative identity rejects explicit branch provenance without an expected branch', () => {
+  const state = createNarrativeState({ chatUid: 'chat-a', branchUid: null });
+  state.layers = [[{
+    id: 'sibling',
+    text: 'Sibling branch narrative.',
+    chat_uid: 'chat-a',
+    branch_uid: 'sibling-branch',
+  }]];
+
+  assert.equal(
+    narrativeIdentityMatches(state, {
+      chatUid: 'chat-a',
+      branchUid: null,
+      requireChat: true,
+    }),
+    false,
+  );
+});
+
+test('plain assembly keeps unscoped snippets for legacy compatibility', () => {
+  const state = createNarrativeState();
+  state.layers = [[
+    { id: 'unscoped', text: 'Legacy snippet.', source_range: { kind: 'mesId', start: 1, end: 1 } },
+  ]];
+
+  assert.match(assembleNarrative(state), /Legacy snippet/);
+});
+
+test('narrative prefix inheritance excludes foreign snippet provenance', () => {
+  const parent = createNarrativeState({ chatUid: 'parent-chat', branchUid: 'parent-branch' });
+  parent.layers = [[
+    {
+      id: 'current',
+      text: 'current remains',
+      source_range: { kind: 'mesId', start: 1, end: 2 },
+      scope: { chat_uid: 'parent-chat', branch_uid: 'parent-branch' },
+      provenance: { source_chat_uid: 'parent-chat' },
+    },
+    {
+      id: 'foreign-scope',
+      text: 'foreign scope',
+      source_range: { kind: 'mesId', start: 1, end: 2 },
+      scope: { chat_uid: 'chat-b', branch_uid: 'branch-b' },
+    },
+    {
+      id: 'mixed-provenance',
+      text: 'mixed provenance',
+      source_range: { kind: 'mesId', start: 1, end: 2 },
+      scope: { chat_uid: 'parent-chat', branch_uid: 'parent-branch' },
+      provenance: { source_chat_uid: 'chat-b' },
+    },
+  ]];
+  const child = inheritNarrativePrefix(parent, {
+    parentChatUid: 'parent-chat',
+    parentBranchUid: 'parent-branch',
+    branchChatUid: 'child-chat',
+    branchUid: 'child-branch',
+    parentPrefixEnd: 2,
+    requireMesIds: true,
+  });
+
+  assert.deepEqual(child.layers.flat().map((snippet) => snippet.id), ['current']);
+  assert.equal(child.layers[0][0].chat_uid, 'child-chat');
+  assert.equal(child.layers[0][0].scope.chat_uid, 'child-chat');
+  assert.equal(child.layers[0][0].provenance.source_chat_uid, 'child-chat');
+  assert.equal(child.layers[0][0].branch_uid, 'child-branch');
+  assert.equal(child.layers[0][0].provenance.branch_uid, 'child-branch');
 });

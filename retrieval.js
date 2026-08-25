@@ -19,6 +19,7 @@ export const RETRIEVAL_STAGE = Object.freeze({
 
 const ACTIVE_VALIDITY = new Set(['active', 'uncertain']);
 const STRUCTURED_KINDS = new Set(['state', 'relationship', 'arc', 'epistemic']);
+const EPISTEMIC_TYPES = new Set(['knows', 'suspects', 'unaware', 'believes', 'hiding']);
 
 function normalized(value) {
   return String(value ?? '')
@@ -37,18 +38,53 @@ function queryObject(query) {
   };
 }
 
-function sourceChatUid(record) {
-  return (
-    record?.scope?.chat_uid ??
-    record?.provenance?.source_chat_uid ??
-    record?.source_chat_uid ??
-    record?.source_chat_id ??
-    null
-  );
+function explicitValues(values) {
+  return values.map(normalized).filter(Boolean);
 }
 
-function sourceBranchUid(record) {
-  return record?.scope?.branch_uid ?? record?.branch_uid ?? record?.lineage_epoch ?? null;
+function explicitChatUids(record) {
+  return explicitValues([
+    record?.scope?.chat_uid,
+    record?.scope?.source_chat_uid,
+    record?.scope?._source_chat_uid,
+    record?._source_chat_uid,
+    record?.provenance?.source_chat_uid,
+    record?.provenance?.chat_uid,
+    record?.provenance?._source_chat_uid,
+    record?.source_chat_uid,
+    record?.chat_uid,
+  ]);
+}
+
+function explicitChatIds(record) {
+  return explicitValues([
+    record?.source_chat_id,
+    record?._source_chat_id,
+    record?.scope?.chat_id,
+    record?.scope?.source_chat_id,
+    record?.scope?._source_chat_id,
+    record?.provenance?.source_chat_id,
+    record?.provenance?._source_chat_id,
+    record?.provenance?.chat_id,
+    record?.chat_id,
+  ]);
+}
+
+function explicitBranchUids(record) {
+  return explicitValues([
+    record?.scope?.branch_uid,
+    record?.scope?._branch_uid,
+    record?.scope?.lineage_epoch,
+    record?.scope?._lineage_epoch,
+    record?.provenance?.branch_uid,
+    record?.provenance?._branch_uid,
+    record?.branch_uid,
+    record?._branch_uid,
+    record?.lineage_epoch,
+    record?._lineage_epoch,
+    record?.provenance?.lineage_epoch,
+    record?.provenance?._lineage_epoch,
+  ]);
 }
 
 function witnesses(record) {
@@ -72,6 +108,7 @@ export function filterRetrievalRecords(
     povMode = 'allow-secondhand',
     lineage = null,
     allowLegacy = true,
+    includeInactive = false,
   } = {},
 ) {
   if (lineage?.quarantined) return [];
@@ -81,25 +118,40 @@ export function filterRetrievalRecords(
   return (Array.isArray(records) ? records : [])
     .filter((record) => {
       if (!record || typeof record !== 'object') return false;
-      if (record.superseded_by) return false;
+      if (!includeInactive && record.superseded_by) return false;
       const validity = record.validity?.status ?? record.status ?? 'active';
-      if (!ACTIVE_VALIDITY.has(validity)) return false;
+      if (!includeInactive && !ACTIVE_VALIDITY.has(validity)) return false;
 
-      const actualChat = normalized(sourceChatUid(record));
-      if (!actualChat) return allowLegacy === true && record.legacy === true;
-      if (actualChat !== expectedChat) return false;
-
-      const actualBranch = sourceBranchUid(record);
-      if (
-        branchUid != null &&
-        actualBranch != null &&
-        normalized(actualBranch) !== normalized(branchUid)
-      ) {
-        return false;
+      const chatUids = explicitChatUids(record);
+      const chatIds = explicitChatIds(record);
+      if (chatUids.length === 0 && chatIds.length === 0) {
+        return branchUid == null && allowLegacy === true && record.legacy === true;
       }
+      // A mutable chat filename is not enough to establish Product identity.
+      // Any record carrying a chat-id variant must also carry the stable UID.
+      if (chatIds.length > 0 && chatUids.length === 0) return false;
+      if (chatUids.some((value) => value !== expectedChat)) return false;
+      const allowedChatIds = new Set([
+        expectedChat,
+        normalized(lineage?.chatId),
+        ...(lineage?.legacyChatIds ?? []).map(normalized),
+      ].filter(Boolean));
+      if (chatIds.some((value) => !allowedChatIds.has(value))) return false;
+
+      const branchUids = explicitBranchUids(record);
+      if (
+        (branchUid == null && branchUids.length > 0) ||
+        (branchUid != null &&
+          (branchUids.length === 0 || branchUids.some((value) => value !== normalized(branchUid))))
+      ) return false;
 
       const currentCharacter = normalized(respondingCharacter);
       const knownWitnesses = witnesses(record);
+      if (record.kind === 'epistemic' && !EPISTEMIC_TYPES.has(normalized(record.type))) return false;
+      if (record.kind === 'epistemic' && currentCharacter) {
+        const subject = normalized(record.subject);
+        if (!subject || subject !== currentCharacter) return false;
+      }
       if (
         currentCharacter &&
         knownWitnesses.length > 0 &&

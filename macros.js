@@ -40,7 +40,8 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { macros as stMacros } from '../../../../scripts/macros/macro-system.js';
 import { MacrosParser } from '../../../../scripts/macros.js';
 import { power_user } from '../../../../scripts/power-user.js';
-import { MODULE_NAME } from './constants.js';
+import { MODULE_NAME, META_KEY } from './constants.js';
+import { isCurrentLineageQuarantined } from './lineage-runtime.js';
 
 /**
  * Canonical macro names for all 11 macros (10 individual tiers + unified block).
@@ -61,6 +62,23 @@ export const MACRO_NAMES = {
   unified: 'smartmemory-unified',
 };
 
+// Individual macros must fail closed independently of prompt-slot cleanup. A
+// card/instruct template can invoke a macro after its injector has stopped
+// running, so the read path itself must honor the category toggle.
+const MACRO_ENABLE_SETTINGS = Object.freeze({
+  [MACRO_NAMES.shortterm]: 'compaction_enabled',
+  [MACRO_NAMES.longterm]: 'longterm_enabled',
+  [MACRO_NAMES.session]: 'session_enabled',
+  [MACRO_NAMES.scenes]: 'scene_enabled',
+  [MACRO_NAMES.arcs]: 'arcs_enabled',
+  [MACRO_NAMES.relationships]: 'relationships_enabled',
+  [MACRO_NAMES.canon]: 'canon_enabled',
+  [MACRO_NAMES.profiles]: 'profiles_enabled',
+  [MACRO_NAMES.epistemic]: 'epistemic_enabled',
+  [MACRO_NAMES.state_ledger]: 'state_ledger_enabled',
+  [MACRO_NAMES.triggered]: 'longterm_enabled',
+});
+
 // Content cache keyed by macro name. Updated by inject functions so the macro
 // handler always returns the latest formatted output without an extra model call.
 const contentCache = new Map();
@@ -74,6 +92,23 @@ const contentCache = new Map();
  */
 export function setMacroContent(macroName, content) {
   contentCache.set(macroName, content ?? '');
+}
+
+export function clearAllMacroContent() {
+  contentCache.clear();
+}
+
+function macroContent(macroName) {
+  const settings = extension_settings[MODULE_NAME];
+  const meta = getContext().chatMetadata?.[META_KEY];
+  const isUnifiedMacro = macroName === MACRO_NAMES.unified;
+  const enabledSetting = MACRO_ENABLE_SETTINGS[macroName];
+  if (!settings?.enabled || meta?.freshStart === true || isCurrentLineageQuarantined()) return '';
+  if (!isUnifiedMacro && enabledSetting && settings[enabledSetting] === false) return '';
+  if (isUnifiedMacro && !settings.unified_injection) return '';
+  if (!isUnifiedMacro && settings.unified_injection) return '';
+  if (settings.single_extension_mode && !isUnifiedMacro) return '';
+  return contentCache.get(macroName) ?? '';
 }
 
 // Character card fields that ST renders through substituteParams, which resolves
@@ -99,7 +134,11 @@ const CARD_FIELDS = ['system_prompt', 'description', 'personality', 'scenario', 
  */
 export function isMacroActive(macroName) {
   const settings = extension_settings[MODULE_NAME];
+  if (!settings?.enabled) return false;
   const isUnifiedMacro = macroName === MACRO_NAMES.unified;
+  const enabledSetting = MACRO_ENABLE_SETTINGS[macroName];
+  if (!isUnifiedMacro && enabledSetting && settings[enabledSetting] === false) return false;
+  if (settings.single_extension_mode && !isUnifiedMacro) return false;
   // The unified macro requires unified injection to be on. Force macro mode does
   // not override this - if unified injection is off there is no merged block to inject.
   if (isUnifiedMacro && !settings?.unified_injection) return false;
@@ -133,12 +172,12 @@ export function registerSmartMemoryMacros() {
         category: stMacros.category.MISC,
         description: `Storyhold: ${tierKey} tier content`,
         returns: 'Formatted memory tier content, empty string if tier is disabled or has no data',
-        handler: () => contentCache.get(macroName) ?? '',
+        handler: () => macroContent(macroName),
       });
     } else {
       MacrosParser.registerMacro(
         macroName,
-        () => contentCache.get(macroName) ?? '',
+        () => macroContent(macroName),
         `Storyhold: ${tierKey} tier content`,
       );
     }

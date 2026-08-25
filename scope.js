@@ -25,6 +25,7 @@ export {
   MEMORY_SCOPE_CHAT,
   pinChatScope,
   unpinChatScope,
+  invalidateChatScopePin,
 } from './scope-core.js';
 
 /**
@@ -52,7 +53,8 @@ export function isPerChatScope() {
  */
 export function getChatScopeId() {
   const stableChatUid = getContext()?.chatMetadata?.[META_KEY]?.chat_uid ?? null;
-  return resolveChatScopeId(stableChatUid ?? getCurrentChatId());
+  if (stableChatUid == null || String(stableChatUid).trim() === '') return null;
+  return resolveChatScopeId(stableChatUid);
 }
 
 /**
@@ -77,6 +79,8 @@ function ensureStore() {
  */
 export function getCharacterContainer(characterName) {
   const s = ensureStore();
+  const context = getContext();
+  const stableChatUid = context?.chatMetadata?.[META_KEY]?.chat_uid ?? null;
   const chatId = getChatScopeId();
   if (chatId == null) return null;
   return getScopedContainer(
@@ -85,6 +89,7 @@ export function getCharacterContainer(characterName) {
     chatId,
     MEMORY_SCOPE_CHAT,
     SCHEMA_VERSION,
+    { chat_uid: stableChatUid, chat_id: getCurrentChatId() },
   );
 }
 
@@ -113,12 +118,14 @@ export function getGroupContainer(groupId) {
   }
   const chatId = getChatScopeId();
   if (chatId == null) return null;
+  const stableChatUid = getContext()?.chatMetadata?.[META_KEY]?.chat_uid ?? null;
   return getScopedContainer(
     extension_settings[MODULE_NAME].group_arcs,
     groupId,
     chatId,
     MEMORY_SCOPE_CHAT,
     SCHEMA_VERSION,
+    { chat_uid: stableChatUid, chat_id: getCurrentChatId() },
   );
 }
 

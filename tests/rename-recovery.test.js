@@ -140,6 +140,84 @@ test('relink copies the namespace, stamps the new identity, and leaves source fo
   assert.equal(store['old-name'].memories[0].content, 'private fact');
 });
 
+test('relink retags nested provenance and scope identity fields', () => {
+  const source = {
+    chat_id: 'old-name',
+    transcript_fingerprint: 'fp',
+    memories: [{
+      id: 'm1',
+      content: 'private fact',
+      source_chat_id: 'old-name',
+      source_chat_uid: 'old-name',
+      _source_chat_id: 'old-name',
+      _source_chat_uid: 'old-name',
+      chat_uid: 'old-name',
+      scope: {
+        chat_uid: 'old-name',
+        source_chat_uid: 'old-name',
+        source_chat_id: 'old-name',
+      },
+      provenance: {
+        source_chat_uid: 'old-name',
+        source_chat_id: 'old-name',
+        chat_uid: 'old-name',
+      },
+    }],
+  };
+  const store = { 'old-name': source };
+  const result = relinkNamespace(store, 'old-name', 'uid-new', {
+    chat_id: 'renamed',
+    transcript_fingerprint: 'fp',
+  });
+
+  assert.equal(result.ok, true);
+  const record = store['uid-new'].memories[0];
+  assert.equal(record.source_chat_id, 'renamed');
+  assert.equal(record.source_chat_uid, 'uid-new');
+  assert.equal(record._source_chat_id, 'renamed');
+  assert.equal(record._source_chat_uid, 'uid-new');
+  assert.equal(record.chat_uid, 'uid-new');
+  assert.deepEqual(record.scope, {
+    chat_uid: 'uid-new',
+    source_chat_uid: 'uid-new',
+    source_chat_id: 'renamed',
+  });
+  assert.deepEqual(record.provenance, {
+    source_chat_uid: 'uid-new',
+    source_chat_id: 'renamed',
+    chat_uid: 'uid-new',
+  });
+});
+
+test('relink retags nested fields when source stable uid differs from filename', () => {
+  const store = {
+    'old-name': {
+      chat_id: 'old-name',
+      chat_uid: 'source-uid',
+      transcript_fingerprint: 'fp',
+      memories: [{
+        id: 'm1',
+        source_chat_id: 'old-name',
+        source_chat_uid: 'source-uid',
+        scope: { chat_uid: 'source-uid', source_chat_uid: 'source-uid' },
+        provenance: { chat_uid: 'source-uid', source_chat_uid: 'source-uid' },
+      }],
+    },
+  };
+
+  relinkNamespace(store, 'old-name', 'target-uid', {
+    chat_id: 'new-name',
+    transcript_fingerprint: 'fp',
+  });
+
+  const record = store['target-uid'].memories[0];
+  assert.equal(record.source_chat_uid, 'target-uid');
+  assert.equal(record.scope.chat_uid, 'target-uid');
+  assert.equal(record.scope.source_chat_uid, 'target-uid');
+  assert.equal(record.provenance.chat_uid, 'target-uid');
+  assert.equal(record.provenance.source_chat_uid, 'target-uid');
+});
+
 test('archive moves an orphaned namespace out of active chats but preserves rollback data', () => {
   const store = {
     orphan: { memories: [{ id: 'm1', content: 'private fact' }] },
@@ -218,4 +296,24 @@ test('legacy candidate requires explicit manual confirmation before relink', () 
   assert.equal(canRelinkCandidate({ confidence: 'legacy' }, { manual: true }), true);
   assert.equal(canRelinkCandidate({ confidence: 'high' }), true);
   assert.equal(canRelinkCandidate({ confidence: 'none' }, { manual: true }), false);
+});
+
+test('manual relink stamps imported records with the manual branch epoch', () => {
+  const store = {
+    'old-name': {
+      chat_id: 'old-name',
+      chat_uid: 'source-uid',
+      transcript_fingerprint: 'fp',
+      memories: [{ id: 'memory', source_chat_id: 'old-name', source_chat_uid: 'source-uid' }],
+    },
+  };
+
+  const result = relinkNamespace(store, 'old-name', 'target-uid', {
+    chat_id: 'renamed',
+    transcript_fingerprint: 'fp',
+    branch_uid: 'manual-epoch',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(store['target-uid'].memories[0].lineage_epoch, 'manual-epoch');
 });

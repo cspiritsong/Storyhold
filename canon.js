@@ -51,7 +51,12 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { getCharacterContainer } from './scope.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 
 // ---- Storage ------------------------------------------------------------
 
@@ -77,7 +82,7 @@ export function saveCanon(characterName, text) {
   if (!characterName || !text) return;
   const container = getCharacterContainer(characterName);
   if (!container) return;
-  container.canon = { text, ts: Date.now() };
+  container.canon = { text, ts: Date.now(), ...currentLineageRecordStamp() };
   saveSettingsDebounced();
 }
 
@@ -110,11 +115,14 @@ export function clearCanon(characterName) {
  * @param {string} characterName
  * @returns {Promise<string|null>} The generated canon text, or null on failure.
  */
-export async function generateCanon(characterName) {
-  if (!characterName) return null;
+export async function generateCanon(characterName, abortCheck = null) {
+  if (!characterName || abortCheck?.()) return null;
 
   const settings = extension_settings[MODULE_NAME];
-  const arcSummaries = loadArcSummaries();
+  const arcSummaries = filterCurrentChatRecords(loadArcSummaries(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  });
   if (arcSummaries.length === 0) {
     smLog('[SmartMemory] Canon generation skipped - no arc summaries available.');
     return null;
@@ -122,7 +130,10 @@ export async function generateCanon(characterName) {
 
   // Use high-importance (importance >= 2) long-term memories as the foundation.
   // Cap at 30 to keep the prompt cost manageable on local hardware.
-  const memories = loadCharacterMemories(characterName)
+  const memories = filterCurrentChatRecords(loadCharacterMemories(characterName), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  })
     .filter((m) => !m.superseded_by && (m.importance ?? 1) >= 2)
     .slice(0, 30);
   const memoriesText = memories.map((m) => `[${m.type}] ${m.content}`).join('\n');
@@ -134,9 +145,11 @@ export async function generateCanon(characterName) {
     responseLength: settings.canon_response_length ?? 600,
   });
 
+  if (abortCheck?.()) return null;
   if (!response?.trim()) return null;
 
   const text = response.trim();
+  if (abortCheck?.()) return null;
   saveCanon(characterName, text);
   smLog(
     `[SmartMemory] Canon summary generated for "${characterName}" (${estimateTokens(text)} tokens).`,
@@ -156,7 +169,7 @@ export async function generateCanon(characterName) {
 export function injectCanon(characterName) {
   const settings = extension_settings[MODULE_NAME];
 
-  if (isCurrentLineageQuarantined() || !(settings.canon_enabled ?? true)) {
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !(settings.canon_enabled ?? true)) {
     setMacroContent(MACRO_NAMES.canon, '');
     setExtensionPrompt(PROMPT_KEY_CANON, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_CANON);
@@ -164,7 +177,13 @@ export function injectCanon(characterName) {
   }
 
   const canon = loadCanon(characterName);
-  if (!canon) {
+  const scopedCanon = canon
+    ? filterCurrentChatRecords([canon], {
+        requireExplicitChat: true,
+        requireStableChatUid: true,
+      })[0]
+    : null;
+  if (!scopedCanon) {
     setMacroContent(MACRO_NAMES.canon, '');
     setExtensionPrompt(PROMPT_KEY_CANON, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_CANON);
@@ -173,7 +192,7 @@ export function injectCanon(characterName) {
 
   // Trim to the canon token budget.
   const budget = settings.canon_inject_budget ?? 800;
-  let text = canon.text;
+  let text = scopedCanon.text;
   const fullTokens = estimateTokens(text);
   while (estimateTokens(text) > budget) {
     const lastPeriod = text.lastIndexOf('.', text.length - 2);

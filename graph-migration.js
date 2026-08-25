@@ -141,12 +141,15 @@ export function loadSessionEntityRegistry() {
  * @param {Array<Object>} entities
  * @returns {Promise<void>}
  */
-export async function saveSessionEntityRegistry(entities) {
+export async function saveSessionEntityRegistry(entities, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
   context.chatMetadata[META_KEY].sessionEntities = entities;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**

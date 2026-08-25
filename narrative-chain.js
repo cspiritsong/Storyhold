@@ -102,6 +102,157 @@ export function assembleNarrative(state) {
   return parts.join(' ');
 }
 
+function normalizedIdentity(value) {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  return normalized === '' ? null : normalized;
+}
+
+function explicitIdentityValues(snippet, variant) {
+  const values = [];
+  if (variant === 'chat_uid') {
+    values.push(
+      snippet?.scope?.chat_uid,
+      snippet?.scope?.source_chat_uid,
+      snippet?.scope?._source_chat_uid,
+      snippet?._source_chat_uid,
+      snippet?.provenance?.source_chat_uid,
+      snippet?.provenance?.chat_uid,
+      snippet?.provenance?._source_chat_uid,
+      snippet?.source_chat_uid,
+      snippet?.chat_uid,
+    );
+  } else if (variant === 'chat_id') {
+    values.push(
+      snippet?.source_chat_id,
+      snippet?._source_chat_id,
+      snippet?.chat_id,
+      snippet?.scope?.source_chat_id,
+      snippet?.scope?._source_chat_id,
+      snippet?.scope?.chat_id,
+      snippet?.provenance?.source_chat_id,
+      snippet?.provenance?._source_chat_id,
+      snippet?.provenance?.chat_id,
+    );
+  } else {
+    values.push(
+      snippet?.scope?.branch_uid,
+      snippet?.scope?._branch_uid,
+      snippet?.scope?.lineage_epoch,
+      snippet?.scope?._lineage_epoch,
+      snippet?.provenance?.branch_uid,
+      snippet?.provenance?._branch_uid,
+      snippet?.provenance?.lineage_epoch,
+      snippet?.provenance?._lineage_epoch,
+      snippet?.branch_uid,
+      snippet?._branch_uid,
+      snippet?.lineage_epoch,
+      snippet?._lineage_epoch,
+      snippet?.provenance?.lineage_epoch,
+    );
+  }
+  return values.map(normalizedIdentity).filter(Boolean);
+}
+
+function branchIdentityMatches(snippet, branchUid, requireBranch) {
+  const expected = normalizedIdentity(branchUid);
+  const values = explicitIdentityValues(snippet, 'branch_uid');
+  if (expected === null) return !requireBranch && values.length === 0;
+  if (requireBranch && values.length === 0) return false;
+  return values.every((value) => value === expected);
+}
+
+function chatIdentityMatches(snippet, chatUid, chatId, requireChat) {
+  const expectedUid = normalizedIdentity(chatUid);
+  const uidValues = explicitIdentityValues(snippet, 'chat_uid');
+  if (requireChat && uidValues.length === 0) return false;
+  if (uidValues.some((value) => value !== expectedUid)) return false;
+  const idValues = explicitIdentityValues(snippet, 'chat_id');
+  const expectedId = normalizedIdentity(chatId);
+  if (expectedId === null) return idValues.length === 0;
+  return idValues.every((value) => value === expectedId);
+}
+
+function snippetMatchesIdentity(
+  snippet,
+  chatUid,
+  branchUid,
+  { chatId = null, requireChat = false, requireBranch = false } = {},
+) {
+  return (
+    chatIdentityMatches(snippet, chatUid, chatId, requireChat) &&
+    branchIdentityMatches(snippet, branchUid, requireBranch)
+  );
+}
+
+function stateMatchesIdentity(
+  state,
+  chatUid,
+  branchUid,
+  { chatId = null, requireChat = false, requireBranch = false } = {},
+) {
+  return (
+    chatIdentityMatches(state, chatUid, chatId, requireChat) &&
+    branchIdentityMatches(state, branchUid, requireBranch)
+  );
+}
+
+/** Returns a cloned narrative state containing only matching snippets. */
+export function filterNarrativeStateForIdentity(
+  inputState,
+  { chatUid = null, chatId = null, branchUid = null, requireChat = false, requireBranch = false } = {},
+) {
+  const resolved = ensureState(inputState);
+  if (!stateMatchesIdentity(resolved, chatUid, branchUid, { chatId, requireChat, requireBranch })) return null;
+  const state = clone(resolved);
+  state.layers = state.layers.map((layer) =>
+    (layer ?? []).filter((snippet) =>
+      snippetMatchesIdentity(snippet, chatUid, branchUid, { chatId, requireChat, requireBranch }),
+    ),
+  );
+  return state;
+}
+
+/** Returns false when any explicit narrative identity is foreign or mixed. */
+export function narrativeIdentityMatches(
+  inputState,
+  { chatUid = null, chatId = null, branchUid = null, requireChat = false, requireBranch = false } = {},
+) {
+  const resolved = ensureState(inputState);
+  if (!stateMatchesIdentity(resolved, chatUid, branchUid, { chatId, requireChat, requireBranch })) {
+    return false;
+  }
+  return resolved.layers.every((layer) =>
+    (layer ?? []).every((snippet) =>
+      snippetMatchesIdentity(snippet, chatUid, branchUid, { chatId, requireChat, requireBranch }),
+    ),
+  );
+}
+
+/**
+ * Assembles only snippets whose explicit provenance matches the requested
+ * chat/branch identity. Snippets without explicit identity remain admissible
+ * for compatibility; any explicit foreign or mixed identity is excluded.
+ */
+export function assembleNarrativeScoped(
+  state,
+  { chatUid = null, chatId = null, branchUid = undefined, requireChat = false, requireBranch = false } = {},
+) {
+  const resolved = ensureState(state);
+  if (resolved.chat_uid != null && chatUid == null) chatUid = resolved.chat_uid;
+  if (resolved.branch_uid != null && branchUid === undefined) branchUid = resolved.branch_uid;
+  const scoped = filterNarrativeStateForIdentity(resolved, {
+    chatUid,
+    chatId,
+    branchUid,
+    requireChat,
+    requireBranch,
+  });
+  if (!scoped) return '';
+  const parts = layerTexts(scoped, 0);
+  return parts.join(' ');
+}
+
 function normalizeWindow({
   window_id,
   source_range,
@@ -312,12 +463,13 @@ export async function ingestNarrativeBatch(
 
   const promotion = await promoteNarrativeLayers(state, { summarize, now });
   if (promotion.failed) {
-    // The new layer-0 delta is still valid. Preserve it and report that only
-    // the optional compression cascade failed; no source information is lost.
+    // A failed compression cascade means the window is incomplete. Surface it
+    // as a real failure so the runtime queue marks the window failed and
+    // retries instead of reporting a partial projection as complete.
     return {
-      state,
-      changed: true,
-      failed: false,
+      state: original,
+      changed: false,
+      failed: true,
       promotion_failed: true,
       skipped: false,
       reason: promotion.reason ?? 'promotion-failed',
@@ -342,26 +494,31 @@ function snippetRanges(snippet) {
   return snippet?.source_range ? [snippet.source_range] : [];
 }
 
-function rangeWithinPrefix(range, prefixEnd, requireMesIds = false) {
-  if (!range || !Number.isInteger(prefixEnd) || prefixEnd < 0) return false;
+function rangeWithinPrefix(range, prefixEnd, requireMesIds = false, prefixIndexEnd = null) {
+  if (!range) return false;
   if (requireMesIds && range.kind !== 'mesId') return false;
+  const boundary = range.kind === 'index' ? prefixIndexEnd : prefixEnd;
+  const minimumBoundary = range.kind === 'index' ? -1 : 0;
+  if (!Number.isInteger(boundary) || boundary < minimumBoundary) return false;
   return (
     (range.kind === 'mesId' || range.kind === 'index') &&
     Number.isInteger(range.start) &&
     Number.isInteger(range.end) &&
     range.start >= 0 &&
     range.end >= range.start &&
-    range.end <= prefixEnd
+    range.end <= boundary
   );
 }
 
-function snippetWithinPrefix(snippet, prefixEnd, requireMesIds = false) {
+function snippetWithinPrefix(snippet, prefixEnd, requireMesIds = false, prefixIndexEnd = null) {
   const ranges = snippetRanges(snippet);
-  return ranges.length > 0 && ranges.every((range) => rangeWithinPrefix(range, prefixEnd, requireMesIds));
+  return ranges.length > 0 && ranges.every((range) =>
+    rangeWithinPrefix(range, prefixEnd, requireMesIds, prefixIndexEnd),
+  );
 }
 
-function windowWithinPrefix(window, prefixEnd, requireMesIds = false) {
-  return snippetWithinPrefix({ source_range: window?.source_range }, prefixEnd, requireMesIds);
+function windowWithinPrefix(window, prefixEnd, requireMesIds = false, prefixIndexEnd = null) {
+  return snippetWithinPrefix({ source_range: window?.source_range }, prefixEnd, requireMesIds, prefixIndexEnd);
 }
 
 /** Copies only narrative layers wholly inside a verified parent prefix. */
@@ -369,6 +526,7 @@ export function inheritNarrativePrefix(
   inputState,
   {
     parentChatUid = null,
+    parentBranchUid = null,
     branchChatUid,
     branchUid = null,
     parentPrefixEnd,
@@ -381,17 +539,54 @@ export function inheritNarrativePrefix(
   state.branch_uid = branchUid ?? state.branch_uid;
   state.layers = state.layers.map((layer) =>
     (layer ?? [])
-      .filter((snippet) => snippetWithinPrefix(snippet, parentPrefixEnd, requireMesIds))
-      .map((snippet) => ({
-        ...clone(snippet),
-        scope: {
-          ...(snippet.scope ?? {}),
-          ...(branchChatUid != null ? { chat_uid: String(branchChatUid) } : {}),
-          ...(branchUid != null ? { branch_uid: String(branchUid) } : {}),
-        },
-        inherited: true,
-        origin_chat_uid: parentChatUid ?? original.chat_uid ?? null,
-      })),
+      .filter((snippet) =>
+        snippetWithinPrefix(snippet, parentPrefixEnd, requireMesIds) &&
+        snippetMatchesIdentity(snippet, parentChatUid, parentBranchUid, {
+          requireChat: false,
+          requireBranch: parentBranchUid != null,
+        }),
+      )
+      .map((snippet) => {
+        const copy = clone(snippet);
+        if (branchChatUid != null) {
+          copy.chat_uid = String(branchChatUid);
+          copy.source_chat_uid = String(branchChatUid);
+          if (copy._source_chat_uid != null) copy._source_chat_uid = String(branchChatUid);
+          copy.scope = {
+            ...(copy.scope ?? {}),
+            chat_uid: String(branchChatUid),
+          };
+          if (copy.scope.source_chat_uid != null) copy.scope.source_chat_uid = String(branchChatUid);
+          if (copy.scope._source_chat_uid != null) copy.scope._source_chat_uid = String(branchChatUid);
+          copy.provenance = {
+            ...(copy.provenance ?? {}),
+            source_chat_uid: String(branchChatUid),
+            ...(copy.provenance?.chat_uid != null ? { chat_uid: String(branchChatUid) } : {}),
+          };
+          if (copy.provenance._source_chat_uid != null) {
+            copy.provenance._source_chat_uid = String(branchChatUid);
+          }
+        }
+        if (branchUid != null) {
+          const branch = String(branchUid);
+          copy.branch_uid = branch;
+          copy.lineage_epoch = branch;
+          if (copy._branch_uid != null) copy._branch_uid = branch;
+          if (copy._lineage_epoch != null) copy._lineage_epoch = branch;
+          for (const key of ['scope', 'provenance']) {
+            if (!copy[key] || typeof copy[key] !== 'object') continue;
+            for (const field of ['branch_uid', '_branch_uid', 'lineage_epoch', '_lineage_epoch']) {
+              if (copy[key][field] != null) copy[key][field] = branch;
+            }
+            copy[key].branch_uid = branch;
+          }
+        }
+        return {
+          ...copy,
+          inherited: true,
+          origin_chat_uid: parentChatUid ?? original.chat_uid ?? null,
+        };
+      }),
   );
   state.processed_windows = state.processed_windows.filter((window) =>
     windowWithinPrefix(window, parentPrefixEnd, requireMesIds),
@@ -405,25 +600,41 @@ export function inheritNarrativePrefix(
 /** Removes narrative snippets sourced from a discarded branch tail. */
 export function pruneNarrativeAtBranch(
   inputState,
-  { branchPointMesId, requireMesIds = true } = {},
+  { branchPointMesId, branchPointIndex = null, requireMesIds = true } = {},
 ) {
   const original = ensureState(inputState);
   const state = clone(original);
+  const allowIndexRanges = Number.isInteger(branchPointIndex);
+  const prefixRequiresMesIds = allowIndexRanges ? false : requireMesIds;
   let removed = 0;
   state.layers = state.layers.map((layer) => {
     const kept = (layer ?? []).filter((snippet) =>
-      snippetWithinPrefix(snippet, branchPointMesId, requireMesIds),
+      snippetWithinPrefix(snippet, branchPointMesId, prefixRequiresMesIds, branchPointIndex),
     );
     removed += (layer ?? []).length - kept.length;
     return kept;
   });
+  const originalWindows = state.processed_windows;
   state.processed_windows = state.processed_windows.filter((window) =>
-    windowWithinPrefix(window, branchPointMesId, requireMesIds),
+    windowWithinPrefix(window, branchPointMesId, prefixRequiresMesIds, branchPointIndex),
   );
-  if (!windowWithinPrefix(state.watermark, branchPointMesId, requireMesIds)) {
+  const hadWatermark = state.watermark != null;
+  const watermarkWasValid =
+    !hadWatermark ||
+    windowWithinPrefix(
+      state.watermark,
+      branchPointMesId,
+      prefixRequiresMesIds,
+      branchPointIndex,
+    );
+  if (!watermarkWasValid) {
     state.watermark = null;
   }
-  return { state, removed, changed: removed > 0 };
+  const changed =
+    removed > 0 ||
+    state.processed_windows.length !== originalWindows.length ||
+    !watermarkWasValid;
+  return { state, removed, changed };
 }
 
 /** Retags a narrative store after a verified chat rename. */
@@ -433,14 +644,43 @@ export function retagNarrativeChatUid(inputState, { chatUid, branchUid = null } 
   next.chat_uid = chatUid == null ? next.chat_uid : String(chatUid);
   next.branch_uid = branchUid == null ? next.branch_uid : String(branchUid);
   next.layers = next.layers.map((layer) =>
-    (layer ?? []).map((snippet) => ({
-      ...snippet,
-      scope: {
-        ...(snippet.scope ?? {}),
-        ...(next.chat_uid != null ? { chat_uid: next.chat_uid } : {}),
-        ...(next.branch_uid != null ? { branch_uid: next.branch_uid } : {}),
-      },
-    })),
+    (layer ?? []).map((snippet) => {
+      const copy = clone(snippet);
+      if (next.chat_uid != null) {
+        copy.chat_uid = next.chat_uid;
+        copy.source_chat_uid = next.chat_uid;
+        if (copy._source_chat_uid != null) copy._source_chat_uid = next.chat_uid;
+        copy.scope = {
+          ...(copy.scope ?? {}),
+          chat_uid: next.chat_uid,
+        };
+        if (copy.scope.source_chat_uid != null) copy.scope.source_chat_uid = next.chat_uid;
+        if (copy.scope._source_chat_uid != null) copy.scope._source_chat_uid = next.chat_uid;
+        copy.provenance = {
+          ...(copy.provenance ?? {}),
+          source_chat_uid: next.chat_uid,
+          ...(copy.provenance?.chat_uid != null ? { chat_uid: next.chat_uid } : {}),
+        };
+        if (copy.provenance._source_chat_uid != null) {
+          copy.provenance._source_chat_uid = next.chat_uid;
+        }
+      }
+      if (next.branch_uid != null) {
+        const branch = next.branch_uid;
+        copy.branch_uid = branch;
+        copy.lineage_epoch = branch;
+        if (copy._branch_uid != null) copy._branch_uid = branch;
+        if (copy._lineage_epoch != null) copy._lineage_epoch = branch;
+        for (const key of ['scope', 'provenance']) {
+          if (!copy[key] || typeof copy[key] !== 'object') continue;
+          for (const field of ['branch_uid', '_branch_uid', 'lineage_epoch', '_lineage_epoch']) {
+            if (copy[key][field] != null) copy[key][field] = branch;
+          }
+          copy[key].branch_uid = branch;
+        }
+      }
+      return copy;
+    }),
   );
   return next;
 }

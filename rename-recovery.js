@@ -190,28 +190,91 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function retagRecord(record, sourceChatId, targetChatId, targetUid) {
+function retagRecord(
+  record,
+  sourceChatId,
+  targetChatId,
+  targetUid,
+  sourceChatUid = sourceChatId,
+  targetBranchUid = null,
+) {
   if (!record || typeof record !== 'object') return record;
   const copied = deepClone(record);
-  if (copied.source_chat_id != null && String(copied.source_chat_id) === String(sourceChatId)) {
+  const sourceIdMatches = (value) => value != null && String(value) === String(sourceChatId);
+  const sourceUidMatches = (value) =>
+    value != null &&
+    (String(value) === String(sourceChatUid) || String(value) === String(sourceChatId));
+
+  const retagIdentityObject = (object) => {
+    if (!object || typeof object !== 'object') return;
+    let sourceIdWasPresent = false;
+    for (const field of ['source_chat_id', '_source_chat_id', 'chat_id']) {
+      if (object[field] == null) continue;
+      if (sourceIdMatches(object[field])) {
+        object[field] = String(targetChatId);
+        sourceIdWasPresent = true;
+      }
+    }
+    for (const field of ['source_chat_uid', '_source_chat_uid', 'chat_uid']) {
+      if (object[field] != null && sourceUidMatches(object[field])) {
+        object[field] = String(targetUid);
+      }
+    }
+    if (sourceIdWasPresent && object.source_chat_uid == null) {
+      object.source_chat_uid = String(targetUid);
+    }
+  };
+
+  retagIdentityObject(copied);
+  retagIdentityObject(copied.scope);
+  retagIdentityObject(copied.provenance);
+  if (targetBranchUid != null && String(targetBranchUid).trim() !== '') {
     copied.source_chat_id = String(targetChatId);
     copied.source_chat_uid = String(targetUid);
-  }
-  if (copied._source_chat_id != null && String(copied._source_chat_id) === String(sourceChatId)) {
-    copied._source_chat_id = String(targetChatId);
-    copied._source_chat_uid = String(targetUid);
+    for (const object of [copied, copied.scope, copied.provenance]) {
+      if (!object || typeof object !== 'object') continue;
+      for (const field of ['branch_uid', '_branch_uid', 'lineage_epoch', '_lineage_epoch']) {
+        if (object[field] != null) object[field] = String(targetBranchUid);
+      }
+    }
+    copied.lineage_epoch = String(targetBranchUid);
   }
   return copied;
 }
 
-function retagNamespace(container, sourceChatId, targetChatId, targetUid) {
+function retagNamespace(
+  container,
+  sourceChatId,
+  targetChatId,
+  targetUid,
+  sourceChatUid = sourceChatId,
+  targetBranchUid = null,
+) {
   const copied = deepClone(container);
   for (const key of ['memories', 'epistemic_knowledge', 'persistent_arcs', 'entities']) {
     if (Array.isArray(copied[key])) {
       copied[key] = copied[key].map((record) =>
-        retagRecord(record, sourceChatId, targetChatId, targetUid),
+        retagRecord(record, sourceChatId, targetChatId, targetUid, sourceChatUid, targetBranchUid),
       );
     }
+  }
+  if (copied.relationship_history && typeof copied.relationship_history === 'object') {
+    copied.relationship_history = Object.fromEntries(
+      Object.entries(copied.relationship_history).map(([key, state]) => [
+        key,
+        retagRecord(state, sourceChatId, targetChatId, targetUid, sourceChatUid, targetBranchUid),
+      ]),
+    );
+  }
+  if (copied.canon && typeof copied.canon === 'object') {
+    copied.canon = retagRecord(
+      copied.canon,
+      sourceChatId,
+      targetChatId,
+      targetUid,
+      sourceChatUid,
+      targetBranchUid,
+    );
   }
   return copied;
 }
@@ -220,12 +283,19 @@ function retagNamespace(container, sourceChatId, targetChatId, targetUid) {
  * Retags derived chat metadata after an exact namespace relink without
  * modifying the raw message array or parent-chat metadata.
  */
-export function retagChatMetadata(metadata = {}, sourceChatId, targetChatId, targetUid) {
+export function retagChatMetadata(
+  metadata = {},
+  sourceChatId,
+  targetChatId,
+  targetUid,
+  sourceChatUid = metadata?.chat_uid ?? sourceChatId,
+  targetBranchUid = null,
+) {
   const copied = deepClone(metadata);
-  for (const key of ['sessionMemories', 'storyArcs', 'sceneHistory']) {
+  for (const key of ['sessionMemories', 'storyArcs', 'sceneHistory', 'arcSummaries']) {
     if (Array.isArray(copied[key])) {
       copied[key] = copied[key].map((record) =>
-        retagRecord(record, sourceChatId, targetChatId, targetUid),
+        retagRecord(record, sourceChatId, targetChatId, targetUid, sourceChatUid, targetBranchUid),
       );
     }
   }
@@ -233,7 +303,7 @@ export function retagChatMetadata(metadata = {}, sourceChatId, targetChatId, tar
     copied.profiles = Object.fromEntries(
       Object.entries(copied.profiles).map(([name, profile]) => [
         name,
-        retagRecord(profile, sourceChatId, targetChatId, targetUid),
+        retagRecord(profile, sourceChatId, targetChatId, targetUid, sourceChatUid, targetBranchUid),
       ]),
     );
   }
@@ -241,12 +311,16 @@ export function retagChatMetadata(metadata = {}, sourceChatId, targetChatId, tar
     copied.state_ledger = Object.fromEntries(
       Object.entries(copied.state_ledger).map(([name, fields]) => [
         name,
-        retagRecord(fields, sourceChatId, targetChatId, targetUid),
+        retagRecord(fields, sourceChatId, targetChatId, targetUid, sourceChatUid, targetBranchUid),
       ]),
     );
   }
   if (String(copied.summary_source_chat_id ?? '') === String(sourceChatId)) {
     copied.summary_source_chat_id = String(targetChatId);
+  }
+  if (targetBranchUid != null && String(targetBranchUid).trim() !== '') {
+    copied.summary_source_chat_uid = String(targetUid);
+    copied.summary_lineage_epoch = String(targetBranchUid);
   }
   if (String(copied.chat_id ?? '') === String(sourceChatId)) copied.chat_id = String(targetChatId);
   if (String(copied.lineage?.chat_id ?? '') === String(sourceChatId)) {
@@ -271,6 +345,8 @@ export function relinkNamespace(store, sourceKey, targetKey, identity = {}) {
     source.chat_id ?? sourceKey,
     identity.chat_id ?? source.chat_id ?? sourceKey,
     targetKey,
+    source.chat_uid ?? sourceKey,
+    identity.branch_uid ?? null,
   );
   copied.chat_uid = String(targetKey);
   copied.chat_id = identity.chat_id == null ? null : String(identity.chat_id);

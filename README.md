@@ -300,11 +300,13 @@ You are the judge. The hint on each tier tells you what to expect; the raw outpu
 
 ## Manual Operations
 
-Already have a chat that predates Storyhold? **Memorize Chat** reads through that chat and builds its own memories, scene history, arcs, and summary. Run it separately in each chat you want to process; memories do not accumulate across chats.
+The product pipeline runs one bounded window at a time. Each window writes two product projections: the recursive narrative chain and one combined structured response. The Product Memory panel in the settings shows the resulting narrative layers and typed record counts/previews. The legacy per-tier prompt slots remain empty because the broker owns the only product injection; they are not separate writers.
+
+Already have a chat that predates Storyhold? **Memorize Chat** reads through that chat and builds its product narrative chain and combined structured records. Run it separately in each chat you want to process; memories do not accumulate across chats.
 
 ### Memorize Chat
 
-Reads the full current chat and builds memories from it - long-term facts, session details, scene history, story arcs, summary, and profiles. All resulting data belongs to the current chat namespace. Other chats with the same character do not read it.
+Reads the full current chat through the canonical product pipeline. It writes the narrative chain for long-form continuity plus combined structured records for long-term facts, relationship history, session evidence, current state, active story arcs, and Perspectives & Secrets. All resulting data belongs to the current chat namespace. Other chats with the same character do not read it.
 
 In group chats, Memorize Chat processes all active group members from the current chat. Each character gets their own projection within that chat.
 

@@ -47,7 +47,14 @@ import { loadSessionMemories } from './session.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import { fingerprintMessages } from './projections.js';
+import { sourceRangeMatchesLiveChat } from './branch-detection.js';
+import {
+  currentLineageRecordStamp,
+  getCurrentLineage,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 
 /**
  * Counts tokens across all non-system chat messages.
@@ -108,8 +115,9 @@ export async function shouldCompact() {
  * rather than rewriting it from scratch.
  * @returns {Promise<string|null>} The formatted summary, or null on failure.
  */
-export async function runCompaction({ includeLastMessage = false } = {}) {
+export async function runCompaction({ includeLastMessage = false, abortCheck = null } = {}) {
   const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.()) return null;
   const context = getContext();
 
   try {
@@ -201,17 +209,20 @@ export async function runCompaction({ includeLastMessage = false } = {}) {
         // so sending the full chat as priorMessages would duplicate the new messages.
         chatMessages: [],
       });
+      if (abortCheck?.()) return null;
     } else {
       // Full compaction: first time or fresh chat with no existing summary.
       raw = await generateMemorySummarize(buildSummaryPrompt(storedMemories), {
         responseLength: settings.compaction_response_length || 2000,
         includeLastMessage,
       });
+      if (abortCheck?.()) return null;
     }
 
     if (!raw || raw.trim() === '') return null;
 
     const summary = formatSummary(raw);
+    if (abortCheck?.()) return null;
 
     if (!context.chatMetadata) context.chatMetadata = {};
     if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
@@ -229,6 +240,13 @@ export async function runCompaction({ includeLastMessage = false } = {}) {
         : context.chat.length;
     context.chatMetadata[META_KEY].summaryEnd = newSummaryEnd;
     context.chatMetadata[META_KEY].summary_source_chat_id = getCurrentChatId() ?? null;
+    const summaryStamp = currentLineageRecordStamp();
+    if (summaryStamp.source_chat_uid != null) {
+      context.chatMetadata[META_KEY].summary_source_chat_uid = summaryStamp.source_chat_uid;
+    }
+    if (summaryStamp.lineage_epoch != null) {
+      context.chatMetadata[META_KEY].summary_lineage_epoch = summaryStamp.lineage_epoch;
+    }
     const summaryMesIds = context.chat
       .slice(0, newSummaryEnd)
       .filter((message) => typeof message?.mesId === 'number')
@@ -241,6 +259,17 @@ export async function runCompaction({ includeLastMessage = false } = {}) {
     } else {
       delete context.chatMetadata[META_KEY].summary_source_mes_range;
     }
+    const summarySourceRange = newSummaryEnd > 0 ? [0, newSummaryEnd - 1] : null;
+    if (summarySourceRange) {
+      context.chatMetadata[META_KEY].summary_source_message_range = summarySourceRange;
+      context.chatMetadata[META_KEY].summary_source_fingerprint = fingerprintMessages(
+        context.chat.slice(summarySourceRange[0], summarySourceRange[1] + 1),
+      );
+    } else {
+      delete context.chatMetadata[META_KEY].summary_source_message_range;
+      delete context.chatMetadata[META_KEY].summary_source_fingerprint;
+    }
+    if (abortCheck?.()) return null;
     await context.saveMetadata();
 
     return summary;
@@ -257,14 +286,65 @@ export async function runCompaction({ includeLastMessage = false } = {}) {
  */
 export function injectSummary(summary) {
   const settings = extension_settings[MODULE_NAME];
-  const storedSourceChatId = getContext().chatMetadata?.[META_KEY]?.summary_source_chat_id;
-  const sourceMatches =
-    storedSourceChatId == null || String(storedSourceChatId) === String(getCurrentChatId());
+  const context = getContext();
+  const summaryMeta = context.chatMetadata?.[META_KEY] ?? {};
+  const storedSourceChatId = summaryMeta.summary_source_chat_id;
+  const lineage = getCurrentLineage();
+  const expectedBranch = lineage?.epoch_id ?? lineage?.epochId ?? null;
+  const sourceUid = summaryMeta.summary_source_chat_uid ?? null;
+  const sourceBranch = summaryMeta.summary_lineage_epoch ?? null;
+  const allowedChatIds = new Set(
+    [getCurrentChatId(), ...(lineage?.legacyChatIds ?? [])]
+      .filter((value) => value !== null && value !== undefined && value !== '')
+      .map(String),
+  );
+  const sourceIdentityMatches =
+    storedSourceChatId != null && allowedChatIds.has(String(storedSourceChatId)) &&
+    sourceUid != null && lineage?.chatUid != null && String(sourceUid) === String(lineage.chatUid);
+  const branchMatches =
+    expectedBranch == null
+      ? sourceBranch == null
+      : sourceBranch != null && String(sourceBranch) === String(expectedBranch);
+  const sourceRange = summaryMeta.summary_source_message_range;
+  const sourceMesRange = summaryMeta.summary_source_mes_range;
+  const sourceFingerprint = summaryMeta.summary_source_fingerprint;
+  let sourceRangeMatches = false;
   if (
+    Array.isArray(sourceRange) &&
+    sourceRange.length >= 2 &&
+    Number.isInteger(sourceRange[0]) &&
+    Number.isInteger(sourceRange[1]) &&
+    typeof sourceFingerprint === 'string'
+  ) {
+    sourceRangeMatches = sourceRangeMatchesLiveChat(
+      context.chat,
+      { kind: 'index', start: sourceRange[0], end: sourceRange[1] },
+      sourceFingerprint,
+      null,
+      sourceRange[1],
+    );
+  } else if (
+    Array.isArray(sourceMesRange) &&
+    sourceMesRange.length >= 2 &&
+    Number.isInteger(sourceMesRange[0]) &&
+    Number.isInteger(sourceMesRange[1]) &&
+    typeof sourceFingerprint === 'string'
+  ) {
+    sourceRangeMatches = sourceRangeMatchesLiveChat(
+      context.chat,
+      { kind: 'mesId', start: sourceMesRange[0], end: sourceMesRange[1] },
+      sourceFingerprint,
+    );
+  }
+  if (
+    settings.enabled === false ||
+    isFreshStartActive() ||
     isCurrentLineageQuarantined() ||
     !settings.compaction_enabled ||
     !summary ||
-    !sourceMatches
+    !sourceIdentityMatches ||
+    !branchMatches ||
+    !sourceRangeMatches
   ) {
     setMacroContent(MACRO_NAMES.shortterm, '');
     setExtensionPrompt(PROMPT_KEY_SHORT, '', extension_prompt_types.NONE, 0);
@@ -319,6 +399,13 @@ export function injectSummary(summary) {
 export function loadAndInjectSummary() {
   const context = getContext();
   const meta = context.chatMetadata?.[META_KEY];
+  const settings = extension_settings[MODULE_NAME];
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined()) {
+    setMacroContent(MACRO_NAMES.shortterm, '');
+    setExtensionPrompt(PROMPT_KEY_SHORT, '', extension_prompt_types.NONE, 0);
+    invalidateUnifiedCache(PROMPT_KEY_SHORT);
+    return null;
+  }
   const summary = meta?.summary;
   if (summary) {
     injectSummary(summary);

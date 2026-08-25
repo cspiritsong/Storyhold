@@ -38,6 +38,24 @@
  * the regression harness can unit-test them directly.
  */
 
+import { fingerprintMessages } from './projections.js';
+
+/** Persists a fingerprinted proof of the processed legacy chat prefix. */
+export function updateLegacySourceProof(meta, chat, cutoffExclusive) {
+  if (!meta || !Array.isArray(chat) || !Number.isInteger(cutoffExclusive) || cutoffExclusive <= 0) {
+    return;
+  }
+  const processed = chat.slice(0, cutoffExclusive);
+  const numericIds = processed.map((message) => message?.mesId);
+  const allNumeric =
+    processed.length > 0 && numericIds.every((mesId) => typeof mesId === 'number');
+  meta.lastExtractSourceRange = allNumeric
+    ? { kind: 'mesId', start: Math.min(...numericIds), end: Math.max(...numericIds) }
+    : { kind: 'index', start: 0, end: cutoffExclusive - 1 };
+  meta.lastExtractFingerprint = fingerprintMessages(processed);
+  meta.lastExtractEndIndex = cutoffExclusive - 1;
+}
+
 /**
  * Returns the stable mesId of a message, or a fallback value when the message
  * has none (e.g. imported chats). SillyTavern always assigns numeric mesIds to
@@ -129,9 +147,9 @@ export function detectTruncation(chat, watermarkMesId) {
   const ids = chatMesIdSet(chat);
   if (ids.has(watermarkMesId)) return { truncated: false, branchPointMesId: null };
 
-  let branchPoint = 0;
+  let branchPoint = null;
   for (const id of ids) {
-    if (id < watermarkMesId && id > branchPoint) branchPoint = id;
+    if (id < watermarkMesId && (branchPoint === null || id > branchPoint)) branchPoint = id;
   }
   return { truncated: true, branchPointMesId: branchPoint };
 }
@@ -146,10 +164,20 @@ export function detectTruncation(chat, watermarkMesId) {
  */
 export function firstIndexAfterMesId(chat, mesId) {
   if (!Array.isArray(chat)) return -1;
+  let earliestUnprovable = -1;
+  let firstRealAfter = -1;
   for (let i = 0; i < chat.length; i++) {
-    if (getMessageMesId(chat[i], i + 1) > mesId) return i;
+    const real = typeof chat[i]?.mesId === 'number' ? chat[i].mesId : null;
+    if (real === null) {
+      if (earliestUnprovable === -1) earliestUnprovable = i;
+    } else if (real > mesId) {
+      firstRealAfter = i;
+      break;
+    }
   }
-  return -1;
+  if (firstRealAfter === -1) return earliestUnprovable;
+  if (earliestUnprovable !== -1 && earliestUnprovable < firstRealAfter) return earliestUnprovable;
+  return firstRealAfter;
 }
 
 /**
@@ -174,13 +202,7 @@ export function getMesIdWindow(chat, watermarkMesId, extractEvery, maxWindow) {
   if (watermarkMesId == null) {
     start = Math.max(0, cutoff - maxWindow);
   } else {
-    let newStart = -1;
-    for (let i = 0; i < cutoff; i++) {
-      if (getMessageMesId(chat[i], i + 1) > watermarkMesId) {
-        newStart = i;
-        break;
-      }
-    }
+    const newStart = firstIndexAfterMesId(chat.slice(0, cutoff), watermarkMesId);
     // Nothing past the watermark (e.g. a swipe re-render without new content):
     // return an empty window so the caller skips extraction instead of
     // re-processing already-seen context.
@@ -227,7 +249,12 @@ export function watermarkFromChat(chat, cutoffIndex) {
  * @param {number} branchPointMesId - Highest surviving mesId of the kept timeline.
  * @returns {{ kept: Array, removed: Array }}
  */
-export function pruneMemoriesByBranchPoint(memories, branchPointMesId) {
+export function pruneMemoriesByBranchPoint(
+  memories,
+  branchPointMesId,
+  branchPointIndex = null,
+  { dropUnverifiable = false } = {},
+) {
   if (!Array.isArray(memories) || memories.length === 0) {
     return { kept: Array.isArray(memories) ? memories : [], removed: [] };
   }
@@ -237,13 +264,40 @@ export function pruneMemoriesByBranchPoint(memories, branchPointMesId) {
   const removed = [];
 
   for (const mem of memories) {
-    const range = mem?.source_mes_range;
-    const beyond =
-      Array.isArray(range) &&
-      range.length >= 2 &&
-      typeof range[1] === 'number' &&
-      range[1] > branchPointMesId;
-    if (beyond) {
+    const ranges = [];
+    const mesRange = mem?.source_mes_range;
+    if (Array.isArray(mesRange) && mesRange.length >= 2) {
+      ranges.push({ kind: 'mesId', start: mesRange[0], end: mesRange[1] });
+    }
+    for (const source of [mem?.source_message_range, mem?._source_message_range]) {
+      if (Array.isArray(source) && source.length >= 2) {
+        ranges.push({ kind: 'index', start: source[0], end: source[1] });
+      }
+    }
+    if (Array.isArray(mem?.source_messages)) {
+      for (const source of mem.source_messages) {
+        if (Array.isArray(source) && source.length >= 2) {
+          ranges.push({ kind: 'index', start: source[0], end: source[1] });
+        }
+      }
+    }
+    if (mem?.source_range && typeof mem.source_range === 'object') ranges.push(mem.source_range);
+    const hasUsableRange = ranges.some(
+      (range) =>
+        ['mesId', 'index'].includes(range?.kind) &&
+        Number.isInteger(range.start) &&
+        Number.isInteger(range.end) &&
+        range.end >= range.start,
+    );
+    const beyond = ranges.some((range) =>
+      range.kind === 'mesId'
+        ? Number.isInteger(range.end) &&
+          (branchPointMesId == null || range.end > branchPointMesId)
+        : range.kind === 'index' &&
+          Number.isInteger(branchPointIndex) &&
+          range.end > branchPointIndex,
+    );
+    if (beyond || (dropUnverifiable && !hasUsableRange)) {
       if (mem?.id) removedIds.add(mem.id);
       removed.push(mem);
     } else {
@@ -264,24 +318,68 @@ export function pruneMemoriesByBranchPoint(memories, branchPointMesId) {
 }
 
 /**
- * Filters the state ledger map down to cards last updated at or before the
- * branch point. Cards stamped with `_updated_mes_id` beyond the branch point
- * reflect state derived from the discarded timeline and are removed. Cards
- * without a stamp are kept (conservative - provenance unknown).
+ * Filters the state ledger map down to cards whose last update is inside the
+ * surviving branch. Both numeric mesId and array-index source ranges are
+ * supported because SillyTavern branches may contain no mesId values.
  *
  * @param {Object} ledger - state_ledger map: `name|type` -> card fields.
- * @param {number} branchPointMesId - Highest surviving mesId of the kept timeline.
+ * @param {number|null} branchPointMesId - Highest surviving mesId, when known.
+ * @param {number|null} branchPointIndex - Highest surviving array index, when known.
+ * @param {Object} options
+ * @param {boolean} [options.dropUnverifiable=false] - Remove cards without
+ *   provenance usable for the selected branch boundary.
  * @returns {{ kept: Object, removed: Array<{key: string, card: Object}> }}
  */
-export function pruneStateLedgerByBranchPoint(ledger, branchPointMesId) {
+export function pruneStateLedgerByBranchPoint(
+  ledger,
+  branchPointMesId,
+  branchPointIndex = null,
+  { dropUnverifiable = false } = {},
+) {
   const kept = {};
   const removed = [];
   for (const [key, card] of Object.entries(ledger ?? {})) {
-    if (
-      card &&
-      typeof card._updated_mes_id === 'number' &&
-      card._updated_mes_id > branchPointMesId
-    ) {
+    const mesRanges = [];
+    const indexRanges = [];
+    const collect = (value, target) => {
+      if (Array.isArray(value) && value.length >= 2) {
+        const [start, end] = value;
+        if (Number.isInteger(start) && Number.isInteger(end) && end >= start) {
+          target.push([start, end]);
+        }
+      }
+    };
+    for (const value of [card?._source_mes_range, card?.source_mes_range]) {
+      collect(value, mesRanges);
+    }
+    for (const value of [
+      card?._source_message_range,
+      card?.source_message_range,
+      card?.scope?._source_message_range,
+      card?.scope?.source_message_range,
+      card?.provenance?._source_message_range,
+      card?.provenance?.source_message_range,
+    ]) {
+      collect(value, indexRanges);
+    }
+    const updatedMesId = Number.isInteger(card?._updated_mes_id) ? card._updated_mes_id : null;
+    const hasMesProof = mesRanges.length > 0 || updatedMesId !== null;
+    const hasIndexProof = indexRanges.length > 0;
+    const numericBoundary = Number.isInteger(branchPointMesId);
+    const indexBoundary = Number.isInteger(branchPointIndex);
+    const relevantProof =
+      (numericBoundary && hasMesProof) ||
+      (indexBoundary && hasIndexProof) ||
+      (!numericBoundary && !indexBoundary && hasMesProof);
+    const beyondMes =
+      numericBoundary &&
+      ((updatedMesId !== null && updatedMesId > branchPointMesId) ||
+        mesRanges.some(([, end]) => end > branchPointMesId));
+    const beyondIndex = indexBoundary && indexRanges.some(([, end]) => end > branchPointIndex);
+    // With no numeric boundary, the historical behavior treated any numeric
+    // update watermark as belonging to an unproven/discarded numeric tail.
+    const unboundedNumericUpdate = !numericBoundary && !indexBoundary && updatedMesId !== null;
+    if (beyondMes || beyondIndex || unboundedNumericUpdate || (dropUnverifiable && !relevantProof)) {
       removed.push({ key, card });
     } else {
       kept[key] = card;

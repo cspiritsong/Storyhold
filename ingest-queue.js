@@ -13,10 +13,31 @@ export const INGEST_STATUS = Object.freeze({
   PARTIAL: 'partial',
   COMPLETED: 'completed',
   QUARANTINED: 'quarantined',
+  CANCELLED: 'cancelled',
 });
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function reportProgress(callback, event) {
+  if (typeof callback !== 'function') return;
+  try {
+    const result = callback(event);
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => {
+        console.warn('[Storyhold] Progress callback failed:', error);
+      });
+    }
+  } catch (error) {
+    console.warn('[Storyhold] Progress callback failed:', error);
+  }
+}
+
+function assertNotAborted(context) {
+  if (typeof context?.shouldAbort === 'function' && context.shouldAbort()) {
+    throw new Error('ingest aborted');
+  }
 }
 
 function resultRecords(result) {
@@ -30,6 +51,8 @@ function initialState(window, now) {
     window_id: window.window_id,
     chat_uid: window.chat_uid,
     branch_uid: window.branch_uid ?? null,
+    start_index: window.start_index ?? null,
+    end_index: window.end_index ?? null,
     source_range: window.source_range,
     fingerprint: window.fingerprint,
     status: INGEST_STATUS.RUNNING,
@@ -51,12 +74,20 @@ function allProjectorsCompleted(state, names) {
   return names.every((name) => state.projections[name]?.status === 'completed');
 }
 
-export function pruneIngestWindowsAtBranch(windows = {}, { branchPointMesId } = {}) {
+export function pruneIngestWindowsAtBranch(
+  windows = {},
+  { branchPointMesId, branchPointIndex = null } = {},
+) {
   const kept = {};
   const removed = [];
   for (const [windowId, state] of Object.entries(windows ?? {})) {
     const range = state?.source_range;
-    if (range?.kind === 'mesId' && Number.isInteger(range.end) && range.end > branchPointMesId) {
+    const isTail =
+      (range?.kind === 'mesId' &&
+        (!Number.isInteger(branchPointMesId) ||
+          (Number.isInteger(range.end) && range.end > branchPointMesId))) ||
+      (range?.kind === 'index' && Number.isInteger(branchPointIndex) && range.end > branchPointIndex);
+    if (isTail) {
       removed.push({ window_id: windowId, state: structuredClone(state) });
     } else {
       kept[windowId] = structuredClone(state);
@@ -76,11 +107,14 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
   const names = entries.map(([name]) => name);
 
   const ingestWindow = async (window, context = {}) => {
+      const onProgress = context.onProgress;
       if (!window?.window_id || !window.chat_uid || !window.source_range) {
         throw new TypeError('ingest requires a canonical window');
       }
+      assertNotAborted(context);
 
       const prior = (await load(window.window_id)) ?? null;
+      assertNotAborted(context);
       if (window.quarantined || window.lineage?.quarantined) {
         const quarantined = {
           ...(prior ?? initialState(window, now)),
@@ -88,11 +122,25 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
           injectable_record_ids: [],
           updated_at: now(),
         };
+        assertNotAborted(context);
         await save(window.window_id, quarantined);
+        reportProgress(onProgress, {
+          phase: 'window_complete',
+          windowId: window.window_id,
+          status: INGEST_STATUS.QUARANTINED,
+          recordCount: 0,
+        });
         return { ...quarantined, record_ids: [], replayed: false };
       }
 
       if (prior && prior.status === INGEST_STATUS.COMPLETED && allProjectorsCompleted(prior, names)) {
+        reportProgress(onProgress, {
+          phase: 'window_complete',
+          windowId: window.window_id,
+          status: INGEST_STATUS.COMPLETED,
+          recordCount: prior.records?.length ?? 0,
+          replayed: true,
+        });
         return {
           ...prior,
           record_ids: (prior.records ?? []).map((record) => record.id),
@@ -105,6 +153,8 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
         window_id: window.window_id,
         chat_uid: window.chat_uid,
         branch_uid: window.branch_uid ?? null,
+        start_index: window.start_index ?? null,
+        end_index: window.end_index ?? null,
         source_range: window.source_range,
         fingerprint: window.fingerprint,
         status: INGEST_STATUS.RUNNING,
@@ -123,10 +173,18 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
           updated_at: now(),
         };
         state.updated_at = now();
+        assertNotAborted(context);
         await save(window.window_id, state);
+        reportProgress(onProgress, {
+          phase: 'projection_start',
+          windowId: window.window_id,
+          projection: name,
+          attempt: previousAttempts + 1,
+        });
 
         try {
           const rawResult = await projector(window, context);
+          assertNotAborted(context);
           const normalized = resultRecords(rawResult).map((record) =>
             normalizeDerivedRecord(record, window),
           );
@@ -137,7 +195,39 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
             record_ids: normalized.map((record) => record.id),
             updated_at: now(),
           };
+          assertNotAborted(context);
         } catch (error) {
+          if (context.isCancelled?.() === true) {
+            state.projections[name] = {
+              status: INGEST_STATUS.CANCELLED,
+              attempts: previousAttempts + 1,
+              error: errorMessage(error),
+              updated_at: now(),
+            };
+            state.status = INGEST_STATUS.CANCELLED;
+            state.cancelled = true;
+            state.cancel_reason = errorMessage(error);
+            state.record_ids = (state.records ?? []).map((record) => record.id);
+            state.updated_at = now();
+            if (typeof context.saveCancelled !== 'function') throw error;
+            await context.saveCancelled(window.window_id, state);
+            reportProgress(onProgress, {
+              phase: 'projection_cancelled',
+              windowId: window.window_id,
+              projection: name,
+              status: state.status,
+              recordCount: state.records?.length ?? 0,
+              error: state.cancel_reason,
+            });
+            reportProgress(onProgress, {
+              phase: 'window_complete',
+              windowId: window.window_id,
+              status: state.status,
+              recordCount: state.records?.length ?? 0,
+              cancelled: true,
+            });
+            return { ...state, replayed: false };
+          }
           state.projections[name] = {
             status: 'failed',
             attempts: previousAttempts + 1,
@@ -151,14 +241,32 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
           });
         }
         state.updated_at = now();
+        assertNotAborted(context);
         await save(window.window_id, state);
+        const projection = state.projections[name];
+        reportProgress(onProgress, {
+          phase: projection.status === 'completed' ? 'projection_complete' : 'projection_failed',
+          windowId: window.window_id,
+          projection: name,
+          status: projection.status,
+          recordCount: projection.record_ids?.length ?? 0,
+          error: projection.error ?? null,
+        });
       }
 
       const failed = names.some((name) => state.projections[name]?.status === 'failed');
       state.status = failed ? INGEST_STATUS.PARTIAL : INGEST_STATUS.COMPLETED;
       state.record_ids = (state.records ?? []).map((record) => record.id);
       state.updated_at = now();
+      assertNotAborted(context);
       await save(window.window_id, state);
+      reportProgress(onProgress, {
+        phase: 'window_complete',
+        windowId: window.window_id,
+        status: state.status,
+        recordCount: state.records?.length ?? 0,
+        replayed: false,
+      });
       return { ...state, replayed: false };
   };
 

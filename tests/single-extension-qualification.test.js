@@ -130,6 +130,7 @@ test('qualification branch and rename operations fail closed or retag without ch
   ]];
   const branch = inheritNarrativePrefix(parent, {
     parentChatUid: 'parent-chat',
+    parentBranchUid: 'parent-branch',
     branchChatUid: 'child-chat',
     branchUid: 'child-branch',
     parentPrefixEnd: 2,

@@ -67,7 +67,12 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { getCharacterContainer } from './scope.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 
 // ---- Per-chat budget override -----------------------------------------------
 
@@ -261,8 +266,14 @@ export async function extractEpistemicKnowledge(
   sceneMessages,
   characterName,
   _characterCardExcerpt = '',
+  abortCheck = null,
 ) {
-  if (isCurrentLineageQuarantined() || !isEpistemicEnabled() || !characterName) return 0;
+  if (
+    abortCheck?.() ||
+    isCurrentLineageQuarantined() ||
+    !isEpistemicEnabled() ||
+    !characterName
+  ) return 0;
 
   const settings = extension_settings[MODULE_NAME];
 
@@ -286,6 +297,7 @@ export async function extractEpistemicKnowledge(
     const response = await generateMemoryExtract(prompt, {
       responseLength: settings.epistemic_response_length ?? 400,
     });
+    if (abortCheck?.()) return 0;
 
     smLog('[SmartMemory] Epistemic raw response:', response);
 
@@ -316,10 +328,12 @@ export async function extractEpistemicKnowledge(
     const chatLen = context.chat?.length ?? 1;
     const windowEnd = Math.max(0, chatLen - 2);
     const windowStart = Math.max(0, windowEnd - sceneMessages.length + 1);
+    const recordStamp = currentLineageRecordStamp();
     for (const entry of parsed) {
       entry.id = generateMemoryId();
       entry.ts = Date.now();
       entry.source_messages = [windowStart, windowEnd];
+      Object.assign(entry, recordStamp);
     }
 
     // Fetch embeddings for all content strings in one batch when possible.
@@ -329,6 +343,7 @@ export async function extractEpistemicKnowledge(
       if (texts.length > 0) {
         embeddings = await getEmbeddingBatch(texts);
       }
+      if (abortCheck?.()) return 0;
     } catch {
       // Embedding fetch failed - fall back to Jaccard inside isEpistemicDuplicate.
     }
@@ -350,6 +365,7 @@ export async function extractEpistemicKnowledge(
       return 0;
     }
 
+    if (abortCheck?.()) return 0;
     saveEpistemicKnowledge(characterName, [...survivingExisting, ...newEntries]);
     smLog(
       `[SmartMemory] Epistemic: added ${newEntries.length} new entries, retired ${retiredCount} for "${characterName}".`,
@@ -453,12 +469,15 @@ export function injectEpistemicKnowledge(
     if (updateTelemetry) updateEpistemicTelemetry(0);
   };
 
-  if (isCurrentLineageQuarantined() || !isEpistemicEnabled() || !characterName || !respondingCharName) {
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !isEpistemicEnabled() || !characterName || !respondingCharName) {
     clear();
     return;
   }
 
-  const entries = loadEpistemicKnowledge(characterName);
+  const entries = filterCurrentChatRecords(loadEpistemicKnowledge(characterName), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  });
   if (entries.length === 0) {
     clear();
     return;

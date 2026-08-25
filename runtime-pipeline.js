@@ -56,6 +56,7 @@ export function createRuntimePipeline({
   extractStructured,
   applyStructured = null,
   narrativeSettings = null,
+  saveCancelledIngest = null,
   now = () => Date.now(),
 } = {}) {
   if (
@@ -81,6 +82,7 @@ export function createRuntimePipeline({
       const prior = (await loadNarrative(window)) ?? createNarrativeState(
         context.narrativeSettings ?? narrativeSettings,
       );
+      if (context.shouldAbort?.()) throw new Error('runtime pipeline aborted');
       const result = await ingestNarrativeBatch(prior, {
         window_id: window.window_id,
         source_range: window.source_range,
@@ -88,8 +90,16 @@ export function createRuntimePipeline({
         chat_uid: window.chat_uid,
         branch_uid: window.branch_uid,
         story_text: context.narrativeText ?? narrativeText(window),
-        summarize: async (request) =>
-          summarizeNarrative({ ...request, sourceWindowId: window.window_id, window }),
+        summarize: async (request) => {
+          if (context.shouldAbort?.()) throw new Error('runtime pipeline aborted');
+          const summary = await summarizeNarrative({
+            ...request,
+            sourceWindowId: window.window_id,
+            window,
+          });
+          if (context.shouldAbort?.()) throw new Error('runtime pipeline aborted');
+          return summary;
+        },
         now,
       });
       if (result.failed) throw new Error(result.error ?? result.reason ?? 'narrative ingest failed');
@@ -99,6 +109,7 @@ export function createRuntimePipeline({
     },
 
     structured: async (window, context = {}) => {
+      if (context.shouldAbort?.()) throw new Error('runtime pipeline aborted');
       const extracted = await extractStructured({
         window,
         priorState: context.structuredState ?? null,
@@ -108,6 +119,7 @@ export function createRuntimePipeline({
       const applied = applyStructured
         ? await applyStructured(extracted, { window, context })
         : extracted;
+      if (context.shouldAbort?.()) throw new Error('runtime pipeline aborted');
       return resultRecords(applied);
     },
   };
@@ -115,6 +127,7 @@ export function createRuntimePipeline({
   const queue = createIngestQueue({
     load: loadIngest,
     save: saveIngest,
+    saveCancelled: saveCancelledIngest,
     projectors,
     now,
   });
@@ -124,6 +137,9 @@ export function createRuntimePipeline({
       return queue.ingest(window, {
         ...context,
         narrativeText: context.narrativeText ?? narrativeText(window),
+        ...(context.saveCancelled === undefined && saveCancelledIngest
+          ? { saveCancelled: saveCancelledIngest }
+          : {}),
       });
     },
   };

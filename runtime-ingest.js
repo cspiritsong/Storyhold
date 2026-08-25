@@ -33,6 +33,7 @@ export function createMetadataIngestStore({
   metaKey = DEFAULT_META_KEY,
   queueKey = DEFAULT_QUEUE_KEY,
   saveMetadata = async () => {},
+  saveCancelledMetadata = null,
 } = {}) {
   assertMetadata(metadata);
   if (typeof saveMetadata !== 'function') throw new TypeError('saveMetadata must be a function');
@@ -51,6 +52,14 @@ export function createMetadataIngestStore({
       windows[windowId] = clone(state);
       await saveMetadata();
     },
+    ...(typeof saveCancelledMetadata === 'function'
+      ? {
+          async saveCancelled(windowId, state) {
+            windows[windowId] = clone(state);
+            await saveCancelledMetadata();
+          },
+        }
+      : {}),
   };
 }
 
@@ -105,13 +114,18 @@ export function buildWindowFromChat({
     ? { kind: 'mesId', start: Math.min(...mesIds), end: Math.max(...mesIds) }
     : { kind: 'index', start: startIndex, end: endIndex };
 
-  return buildIngestWindow({
+  const window = buildIngestWindow({
     chatUid,
     branchUid,
     messages,
     sourceRange,
     lineage,
   });
+  return {
+    ...window,
+    start_index: startIndex,
+    end_index: endIndex,
+  };
 }
 
 /** Creates a queue whose state is persisted in the supplied chat metadata. */

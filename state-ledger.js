@@ -54,7 +54,12 @@ import { smLog } from './logging.js';
 import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { filterCurrentStateLedger, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  filterCurrentStateLedger,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 
 // ---- Field schema -----------------------------------------------------------
 
@@ -114,12 +119,15 @@ export function loadStateLedger() {
  * @param {Object} ledger
  * @returns {Promise<void>}
  */
-export async function saveStateLedger(ledger) {
+export async function saveStateLedger(ledger, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
   context.chatMetadata[META_KEY].state_ledger = ledger;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**
@@ -143,11 +151,17 @@ export function getStateCard(name, type) {
  * @param {Object} fields - Partial or full field object for this entity type.
  * @returns {Promise<void>}
  */
-export async function setStateCard(name, type, fields) {
+export async function setStateCard(name, type, fields, abortCheck = null) {
+  const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.() || settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined()) return false;
   const ledger = loadStateLedger();
   const key = ledgerKey(name, type);
-  ledger[key] = { ...(ledger[key] ?? {}), ...fields };
-  await saveStateLedger(ledger);
+  ledger[key] = {
+    ...(ledger[key] ?? {}),
+    ...fields,
+    ...currentLineageRecordStamp(),
+  };
+  return saveStateLedger(ledger, abortCheck);
 }
 
 /**
@@ -158,12 +172,14 @@ export async function setStateCard(name, type, fields) {
  * @param {string} type
  * @returns {Promise<void>}
  */
-export async function deleteStateCard(name, type) {
+export async function deleteStateCard(name, type, abortCheck = null) {
+  const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.() || settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined()) return false;
   const ledger = loadStateLedger();
   const key = ledgerKey(name, type);
-  if (!(key in ledger)) return;
+  if (!(key in ledger)) return false;
   delete ledger[key];
-  await saveStateLedger(ledger);
+  return saveStateLedger(ledger, abortCheck);
 }
 
 /**
@@ -176,10 +192,12 @@ export async function deleteStateCard(name, type) {
  * @param {string} newType
  * @returns {Promise<void>}
  */
-export async function migrateStateLedgerKey(name, oldType, newType) {
+export async function migrateStateLedgerKey(name, oldType, newType, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const ledger = loadStateLedger();
   const oldKey = ledgerKey(name, oldType);
-  if (!(oldKey in ledger)) return;
+  if (!(oldKey in ledger)) return false;
+  if (abortCheck?.()) return false;
   // If the new type is not a state-card type (e.g. 'concept', 'unknown'),
   // discard the card rather than storing it under an unreachable key.
   if (!STATE_CARD_TYPES.has(newType)) {
@@ -189,7 +207,7 @@ export async function migrateStateLedgerKey(name, oldType, newType) {
     ledger[newKey] = ledger[oldKey];
     delete ledger[oldKey];
   }
-  await saveStateLedger(ledger);
+  return saveStateLedger(ledger, abortCheck);
 }
 
 /**
@@ -197,8 +215,8 @@ export async function migrateStateLedgerKey(name, oldType, newType) {
  *
  * @returns {Promise<void>}
  */
-export async function clearStateLedger() {
-  await saveStateLedger({});
+export async function clearStateLedger(abortCheck = null) {
+  return saveStateLedger({}, abortCheck);
 }
 
 // ---- Extraction -------------------------------------------------------------
@@ -279,18 +297,20 @@ export async function runStateCardExtraction(characterName, messages, abortCheck
             Math.min(...messages.filter((m) => typeof m?.mesId === 'number').map((m) => m.mesId)),
             maxWindowMesId,
           ];
+    const recordStamp = currentLineageRecordStamp();
     for (const [key, fields] of updates) {
       ledger[key] = { ...(ledger[key] ?? {}), ...fields };
       const timeline = getContext().chatMetadata?.[META_KEY]?.timeline;
       ledger[key]._source_chat_id = sourceChatId;
+      if (recordStamp.source_chat_uid != null) ledger[key]._source_chat_uid = recordStamp.source_chat_uid;
       ledger[key]._source_message_range = sourceMessageRange;
-      ledger[key]._lineage_epoch = timeline?.story_epoch ?? null;
+      ledger[key]._lineage_epoch = recordStamp.lineage_epoch ?? timeline?.story_epoch ?? null;
       ledger[key]._valid_from = timeline?.current_anchor ?? null;
       if (maxWindowMesId !== null) ledger[key]._updated_mes_id = maxWindowMesId;
       if (sourceMesRange) ledger[key]._source_mes_range = sourceMesRange;
       count++;
     }
-    await saveStateLedger(ledger);
+    await saveStateLedger(ledger, abortCheck);
 
     smLog(`[SmartMemory] State ledger: updated ${count} entity cards.`);
     return count;
@@ -352,7 +372,7 @@ export function injectStateLedger(updateTelemetry = false) {
     if (updateTelemetry) updateStateLedgerTelemetry(0);
   };
 
-  if (isCurrentLineageQuarantined() || !isStateLedgerEnabled()) {
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !isStateLedgerEnabled()) {
     clear();
     return;
   }

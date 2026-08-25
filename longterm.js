@@ -104,7 +104,12 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { getSceneParticipants } from './scenes.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { filterCurrentChatRecords, isCurrentLineageQuarantined } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  currentLineageEpochStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+} from './lineage-runtime.js';
 
 // Maximum new entries accepted per type per extraction pass.
 // Profile B (hosted) uses a higher cap because hosted models extract more
@@ -428,8 +433,14 @@ function mergeMemories(existing, incoming, maxTotal) {
  * @param {Array} recentMessages - Last N message objects from context.chat.
  * @returns {Promise<number>} Count of new memories added (0 on failure or nothing found).
  */
-export async function extractAndStoreMemories(characterName, recentMessages, statusFn = null) {
+export async function extractAndStoreMemories(
+  characterName,
+  recentMessages,
+  statusFn = null,
+  abortCheck = null,
+) {
   const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.()) return 0;
   if (isCurrentLineageQuarantined() || !settings.longterm_enabled || !characterName) return 0;
 
   try {
@@ -457,6 +468,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
         responseLength: settings.longterm_response_length || 600,
       },
     );
+    if (abortCheck?.()) return 0;
 
     smLog(`[SmartMemory] Raw extraction response for "${characterName}":`, response);
 
@@ -473,6 +485,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
       superseded: supersessionMap,
       confirmed: confirmedIds,
     } = await verifyLongtermCandidates(parsed, activeMemories);
+    if (abortCheck?.()) return 0;
     if (newMemories.length === 0) {
       smLog(
         `[SmartMemory] All ${parsed.length} extracted candidates were duplicates of existing memories.`,
@@ -498,10 +511,14 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
     const windowMesIds = hasRealMesIds
       ? recentMessages.map((m, i) => (typeof m.mesId === 'number' ? m.mesId : windowStart + i))
       : null;
+    const epochStamp = currentLineageEpochStamp();
+    const recordStamp = currentLineageRecordStamp();
     for (const mem of newMemories) {
       mem.source_messages = [[windowStart, windowEnd]];
       mem.source_chat_id = sourceChatId;
       mem.witnessed_by = witnessedBy;
+      if (epochStamp) mem.lineage_epoch = epochStamp.lineage_epoch;
+      Object.assign(mem, recordStamp);
       if (windowMesIds) {
         mem.source_mes_range = [Math.min(...windowMesIds), Math.max(...windowMesIds)];
       }
@@ -606,6 +623,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
           const triggerResponse = await generateMemoryExtract(triggerPrompt, {
             responseLength: 60,
           });
+          if (abortCheck?.()) return 0;
           const raw = parseTriggerResponse(triggerResponse, mem.content);
           mem.triggers = filterTriggersByFrequency(raw, finalActive);
           smLog(
@@ -623,6 +641,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
     // Sequential like trigger generation to avoid OOM on limited VRAM.
     {
       const relHistory = loadRelationshipHistory(characterName);
+      const relationshipStamp = currentLineageRecordStamp();
 
       // Build the current-state string from stored history for the prompt baseline.
       // Format: "pair: word(magnitude), word(magnitude)" so the model sees existing magnitudes.
@@ -644,6 +663,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
         if (statusFn) statusFn(`Extracting relationship history for ${characterName}...`);
         const relPrompt = buildRelationshipDeltaPrompt(chatHistory, stateLines, cardExcerpt);
         const relResponse = await generateMemoryExtract(relPrompt, { responseLength: 300 });
+        if (abortCheck?.()) return 0;
         const deltas = parseRelationshipDeltaResponse(relResponse);
 
         // Only store pairs where the character is one of the parties.
@@ -677,8 +697,10 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
                 magnitude,
               })),
               updatedAt: Date.now(),
+              ...relationshipStamp,
             };
           }
+          if (abortCheck?.()) return 0;
           saveRelationshipHistory(characterName, relHistory);
           smLog(`[SmartMemory] Relationship deltas applied: ${deltas.length} pair(s)`);
         }
@@ -703,6 +725,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
     // consolidation cycle (which may never come for small memory sets).
     if (entityRegistry.length > 0) {
       reconcileEntityRegistry(entityRegistry, finalActive);
+      if (abortCheck?.()) return 0;
       saveCharacterEntityRegistry(characterName, entityRegistry);
     }
 
@@ -722,6 +745,7 @@ export async function extractAndStoreMemories(characterName, recentMessages, sta
     const added = finalActive.filter((m) => !existingKeys.has(`${m.type}|${m.content}`)).length;
 
     // Save: final active set + all retired memories (history is preserved).
+    if (abortCheck?.()) return 0;
     saveCharacterMemories(characterName, [...finalActive, ...updatedRetired]);
 
     smLog(
@@ -786,8 +810,9 @@ function getConsolidationThresholds(settings) {
  *   to hit the threshold during per-chunk consolidation.
  * @returns {Promise<number>} Number of memories removed by consolidation (0 on no change or failure).
  */
-export async function consolidateMemories(characterName, force = false) {
+export async function consolidateMemories(characterName, force = false, abortCheck = null) {
   const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.()) return 0;
   if (!settings.consolidation_enabled || !characterName) return 0;
   const thresholds = getConsolidationThresholds(settings);
 
@@ -796,6 +821,7 @@ export async function consolidateMemories(characterName, force = false) {
   let dirty = false;
 
   for (const type of MEMORY_TYPES) {
+    if (abortCheck?.()) return totalRemoved;
     // Exclude retired memories from consolidation - they've already been
     // replaced and should not be re-evaluated or re-injected.
     const base = memories.filter((m) => m.type === type && m.consolidated && !m.superseded_by);
@@ -815,11 +841,13 @@ export async function consolidateMemories(characterName, force = false) {
         buildLongtermConsolidationPrompt(type, baseText, batchText),
         { responseLength: Math.max(400, (base.length + unprocessed.length) * 60) },
       );
+      if (abortCheck?.()) return totalRemoved;
 
       smLog(`[SmartMemory] Consolidation response for [${type}]:`, response);
 
       if (!response || response.trim().toUpperCase() === 'NONE') {
         // Model found nothing to add - mark unprocessed as consolidated as-is.
+        if (abortCheck?.()) return totalRemoved;
         unprocessed.forEach((m) => (m.consolidated = true));
         dirty = true;
         continue;
@@ -840,12 +868,14 @@ export async function consolidateMemories(characterName, force = false) {
         [...base, ...unprocessed],
         getEmbeddingBatch,
       );
+      if (abortCheck?.()) return totalRemoved;
 
       // Carry source provenance forward: for each reconciled entry that matches
       // a pre-consolidation memory by ID, inherit its source_messages and
       // source_chat_id. Synthesized composite entries get the most recent range
       // from the unprocessed batch they were derived from.
       const allInputs = [...base, ...unprocessed];
+      const recordStamp = currentLineageRecordStamp();
       const mostRecentSource = unprocessed.reduce((best, m) => {
         const ranges = m.source_messages;
         if (!Array.isArray(ranges) || ranges.length === 0) return best;
@@ -860,13 +890,16 @@ export async function consolidateMemories(characterName, force = false) {
         if (match && Array.isArray(match.source_messages) && match.source_messages.length > 0) {
           entry.source_messages = match.source_messages;
           entry.source_chat_id = match.source_chat_id ?? null;
+          if (match.source_chat_uid != null) entry.source_chat_uid = match.source_chat_uid;
         } else if (!entry.source_messages?.length && mostRecentSource) {
           entry.source_messages = [mostRecentSource];
           entry.source_chat_id = mostRecentChatId;
         }
+        Object.assign(entry, recordStamp);
       }
 
       // Replace this type's entries. Other types are untouched.
+      if (abortCheck?.()) return totalRemoved;
       const otherTypes = memories.filter((m) => m.type !== type);
       memories.splice(0, memories.length, ...otherTypes, ...reconciledType);
 
@@ -883,6 +916,7 @@ export async function consolidateMemories(characterName, force = false) {
       console.error(`[SmartMemory] Consolidation failed for type [${type}]:`, err);
       // On failure, mark unprocessed as consolidated so they don't block future passes.
       // Set dirty before the forEach so a mid-loop error still triggers the save.
+      if (abortCheck?.()) return totalRemoved;
       dirty = true;
       unprocessed.forEach((m) => (m.consolidated = true));
     }
@@ -891,15 +925,18 @@ export async function consolidateMemories(characterName, force = false) {
   const maxMemories = settings.longterm_max_memories || 25;
   const finalMemories = sortByTimeline(trimByPriority(memories, maxMemories));
   if (dirty || finalMemories.length !== memories.length) {
+    if (abortCheck?.()) return totalRemoved;
     // Repair entity registry links after consolidation - consolidation replaces
     // memories with new IDs, leaving the registry with stale memory_id refs.
     // reconcileEntityRegistry prunes those stale IDs and re-links by name match.
     const entityRegistry = loadCharacterEntityRegistry(characterName);
     if (entityRegistry.length > 0) {
       reconcileEntityRegistry(entityRegistry, finalMemories);
+      if (abortCheck?.()) return totalRemoved;
       saveCharacterEntityRegistry(characterName, entityRegistry);
     }
 
+    if (abortCheck?.()) return totalRemoved;
     saveCharacterMemories(characterName, finalMemories);
   }
 
@@ -937,10 +974,15 @@ function shouldInjectMemory(memory, respondingChar) {
   return 'secondhand';
 }
 
-export async function injectMemories(characterName, updateTelemetry = false) {
+export async function injectMemories(
+  characterName,
+  updateTelemetry = false,
+  abortCheck = null,
+) {
   const settings = extension_settings[MODULE_NAME];
+  if (abortCheck?.()) return;
 
-  if (isCurrentLineageQuarantined() || !settings.longterm_enabled || !characterName) {
+  if (settings.enabled === false || isFreshStart() || isCurrentLineageQuarantined() || !settings.longterm_enabled || !characterName) {
     setMacroContent(MACRO_NAMES.longterm, '');
     setMacroContent(MACRO_NAMES.triggered, '');
     setExtensionPrompt(PROMPT_KEY_LONG, '', extension_prompt_types.NONE, 0);
@@ -951,7 +993,10 @@ export async function injectMemories(characterName, updateTelemetry = false) {
 
   // Only inject active memories - retired ones (superseded_by set) are kept in
   // storage for history but must not appear in the prompt.
-  const memories = filterCurrentChatRecords(loadCharacterMemories(characterName)).filter(
+  const memories = filterCurrentChatRecords(loadCharacterMemories(characterName), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  }).filter(
     (m) => !m.superseded_by,
   );
   if (memories.length === 0) {
@@ -992,7 +1037,8 @@ export async function injectMemories(characterName, updateTelemetry = false) {
       lastTurnText: lastMessages[lastMessages.length - 1]?.mes ?? '',
       w5: getHardwareProfile() === 'b' ? 0.6 : 0.2,
       recentText: recentTextForScorer,
-    });
+      });
+      if (abortCheck?.()) return;
   } else {
     trimmed = prioritizeMemories(memories);
   }
@@ -1037,6 +1083,7 @@ export async function injectMemories(characterName, updateTelemetry = false) {
   // filtered 'memories' variable only contains active entries and saving it
   // would permanently delete the retired pool.
   if (updateTelemetry) {
+    if (abortCheck?.()) return;
     const recalled = new Set(trimmed.map((m) => `${m.type}|${m.content}`));
     const allMemories = loadCharacterMemories(characterName);
     const updated = allMemories.map((m) => {
@@ -1104,6 +1151,8 @@ export async function injectMemories(characterName, updateTelemetry = false) {
   }
   const memoryText = memoryLines.join('\n');
   const content = template.replace('{{memories}}', memoryText);
+
+  if (abortCheck?.()) return;
 
   reportTierTrimStats(PROMPT_KEY_LONG, estimateTokens(content), fullTokens);
   setMacroContent(MACRO_NAMES.longterm, content);
@@ -1182,13 +1231,21 @@ export function injectRelationshipHistory(characterName, updateTelemetry = false
   const clear = () => {
     setMacroContent(MACRO_NAMES.relationships, '');
     setExtensionPrompt(PROMPT_KEY_RELATIONSHIPS, '', extension_prompt_types.NONE, 0);
+    invalidateUnifiedCache(PROMPT_KEY_RELATIONSHIPS);
     if (updateTelemetry) updateRelationshipTelemetry(0);
   };
 
-  if (isCurrentLineageQuarantined() || !settings.relationships_enabled || !characterName)
+  if (settings.enabled === false || isFreshStart() || isCurrentLineageQuarantined() || !settings.relationships_enabled || !characterName)
     return clear();
 
-  const history = loadRelationshipHistory(characterName);
+  const history = Object.fromEntries(
+    Object.entries(loadRelationshipHistory(characterName)).filter(([, state]) =>
+      filterCurrentChatRecords([state], {
+        requireExplicitChat: true,
+        requireStableChatUid: true,
+      }).length > 0,
+    ),
+  );
   const pairs = Object.entries(history);
   if (pairs.length === 0) return clear();
 

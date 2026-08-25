@@ -33,7 +33,7 @@ fail-soft by the extension itself.
 |---|---|---|
 | Smart-Memory host | The single extension runtime and event shell | Only installed memory product |
 | Embedded narrative chain | Summaryception's absorbed recursive-layer algorithm under `chatMetadata.smartMemory.narrative` | Chronological narrative continuity |
-| Smart-Memory structured projections | Facts, relationships, active arcs, epistemic/POV, current entity state | Current structured meaning |
+| Smart-Memory structured projections | Facts, relationships, session evidence, active arcs, epistemic/POV, current entity state | Current structured meaning |
 | Native SillyTavern Vector Storage adapter | Optional semantic evidence lookup | Historical evidence only |
 | Lorebook / World Info | Curated static world canon | Activated world rules/lore |
 | Raw chat JSONL | Complete chronological evidence | Recovery and rebuild source |
@@ -68,7 +68,7 @@ as a structured boundary signal; it must not create a second narrative injection
 Every new derived record must include:
 
 - `id`: stable record identifier;
-- `kind`: typed projection such as `fact`, `state`, `relationship`, `arc`, `epistemic`,
+- `kind`: typed projection such as `fact`, `session`, `state`, `relationship`, `arc`, `epistemic`,
   or `narrative_delta`;
 - `scope.chat_uid`: stable chat identity;
 - `scope.branch_uid`: branch/lineage identity when available;
@@ -101,7 +101,9 @@ The product ingest path must be:
 5. quarantine-safe: an unverifiable branch produces no injectable derived records;
 6. fail-soft: an extractor failure does not wipe good records or mix chats;
 7. raw-preserving: the source transcript is never replaced by a derived summary;
-8. single-runtime: every projection is owned by this extension, not a companion extension.
+8. single-runtime: every projection is owned by this extension, not a companion extension;
+9. operation-serialized: automatic and manual product runs share one in-flight gate;
+10. status-visible: `product_status` records the latest started, completed, cancelled, or failed operation.
 
 One ingest pass may fan out into multiple typed projections. It must not mean that several
 independent runtimes each read the same window and establish separate watermarks.

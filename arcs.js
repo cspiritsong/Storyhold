@@ -66,7 +66,13 @@ import { invalidateUnifiedCache } from './unified-inject.js';
 import { getCharacterContainer, getGroupContainer } from './scope.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { reportTierTrimStats } from './trim-stats.js';
-import { isCurrentLineageQuarantined, filterCurrentChatRecords } from './lineage-runtime.js';
+import {
+  currentLineageRecordStamp,
+  currentLineageEpochStamp,
+  filterCurrentChatRecords,
+  isCurrentLineageQuarantined,
+  isFreshStartActive,
+} from './lineage-runtime.js';
 
 // ---- Deduplication ------------------------------------------------------
 
@@ -182,12 +188,15 @@ export function loadArcs() {
  * Persists the story arc array to chatMetadata.
  * @param {Array<{content: string, ts: number}>} arcs
  */
-export async function saveArcs(arcs) {
+export async function saveArcs(arcs, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
   context.chatMetadata[META_KEY].storyArcs = arcs;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**
@@ -197,35 +206,43 @@ export async function saveArcs(arcs) {
  * @param {number} index
  * @param {string|null} [characterName]
  */
-export async function deleteArc(index, characterName = null) {
+export async function deleteArc(index, characterName = null, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const arcs = loadArcs();
   const arc = arcs[index];
-  if (!arc) return;
+  if (!arc) return false;
 
   if (arc.persistent && characterName) {
     const persistent = loadPersistentArcs(characterName);
     const filtered = [];
     for (const p of persistent) {
+      if (abortCheck?.()) return false;
       if (!(await arcIsDuplicate(p.content, arc.content))) filtered.push(p);
     }
     if (filtered.length !== persistent.length) {
+      if (abortCheck?.()) return false;
       savePersistentArcs(characterName, filtered);
     }
   }
 
+  if (abortCheck?.()) return false;
   arcs.splice(index, 1);
-  await saveArcs(arcs);
+  const saved = await saveArcs(arcs, abortCheck);
+  return saved !== false && !abortCheck?.();
 }
 
 /**
  * Empties all story arcs for the current chat.
  */
-export async function clearArcs() {
+export async function clearArcs(abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (context.chatMetadata?.[META_KEY]) {
     context.chatMetadata[META_KEY].storyArcs = [];
+    if (abortCheck?.()) return false;
     await context.saveMetadata();
   }
+  return true;
 }
 
 // ---- Arc summary storage ------------------------------------------------
@@ -245,23 +262,29 @@ export function loadArcSummaries() {
  * Persists the arc summaries array to chatMetadata.
  * @param {Array} summaries
  */
-export async function saveArcSummaries(summaries) {
+export async function saveArcSummaries(summaries, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (!context.chatMetadata) context.chatMetadata = {};
   if (!context.chatMetadata[META_KEY]) context.chatMetadata[META_KEY] = {};
   context.chatMetadata[META_KEY].arcSummaries = summaries;
+  if (abortCheck?.()) return false;
   await context.saveMetadata();
+  return true;
 }
 
 /**
  * Empties all arc summaries for the current chat.
  */
-export async function clearArcSummaries() {
+export async function clearArcSummaries(abortCheck = null) {
+  if (abortCheck?.()) return false;
   const context = getContext();
   if (context.chatMetadata?.[META_KEY]) {
     context.chatMetadata[META_KEY].arcSummaries = [];
+    if (abortCheck?.()) return false;
     await context.saveMetadata();
   }
+  return true;
 }
 
 // ---- Pinned arcs (current-chat only) -----------------------------------
@@ -340,30 +363,35 @@ export function pruneOrphanedGroupArcs() {
  * @param {string|null} characterName
  * @param {string|null} [groupId]
  */
-export async function promoteArc(index, characterName, groupId = null) {
-  if (!characterName && !groupId) return;
+export async function promoteArc(index, characterName, groupId = null, abortCheck = null) {
+  if (abortCheck?.() || (!characterName && !groupId)) return false;
   const arcs = loadArcs();
-  if (!arcs[index]) return;
-  arcs[index].persistent = true;
-  await saveArcs(arcs);
+  if (!arcs[index]) return false;
+  arcs[index] = { ...arcs[index], persistent: true, ...currentLineageRecordStamp() };
+  await saveArcs(arcs, abortCheck);
+  if (abortCheck?.()) return false;
 
   const persistent = groupId ? loadGroupPersistentArcs(groupId) : loadPersistentArcs(characterName);
   let already = false;
   for (const p of persistent) {
+    if (abortCheck?.()) return false;
     if (await arcIsDuplicate(p.content, arcs[index].content)) {
       already = true;
       break;
     }
   }
   if (!already) {
+    if (abortCheck?.()) return false;
     persistent.push({
       content: arcs[index].content,
       ts: arcs[index].ts ?? Date.now(),
       persistent: true,
+      ...currentLineageRecordStamp(),
     });
     if (groupId) saveGroupPersistentArcs(groupId, persistent);
     else savePersistentArcs(characterName, persistent);
   }
+  return true;
 }
 
 /**
@@ -374,23 +402,27 @@ export async function promoteArc(index, characterName, groupId = null) {
  * @param {string|null} characterName
  * @param {string|null} [groupId]
  */
-export async function demoteArc(index, characterName, groupId = null) {
-  if (!characterName && !groupId) return;
+export async function demoteArc(index, characterName, groupId = null, abortCheck = null) {
+  if (abortCheck?.() || (!characterName && !groupId)) return false;
   const arcs = loadArcs();
-  if (!arcs[index]) return;
+  if (!arcs[index]) return false;
   const content = arcs[index].content;
   delete arcs[index].persistent;
-  await saveArcs(arcs);
+  await saveArcs(arcs, abortCheck);
+  if (abortCheck?.()) return false;
 
   const persistent = groupId ? loadGroupPersistentArcs(groupId) : loadPersistentArcs(characterName);
   const filtered = [];
   for (const p of persistent) {
+    if (abortCheck?.()) return false;
     if (!(await arcIsDuplicate(p.content, content))) filtered.push(p);
   }
   if (filtered.length !== persistent.length) {
+    if (abortCheck?.()) return false;
     if (groupId) saveGroupPersistentArcs(groupId, filtered);
     else savePersistentArcs(characterName, filtered);
   }
+  return true;
 }
 
 /**
@@ -403,15 +435,17 @@ export async function demoteArc(index, characterName, groupId = null) {
  * @param {string|null} characterName
  * @param {string|null} [groupId]
  */
-export async function resolveArc(index, characterName = null, groupId = null) {
+export async function resolveArc(index, characterName = null, groupId = null, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const arcs = loadArcs();
   const arc = arcs[index];
-  if (!arc) return;
+  if (!arc) return false;
 
   arcs[index] = { ...arc, resolved: true };
-  await saveArcs(arcs);
+  await saveArcs(arcs, abortCheck);
+  if (abortCheck?.()) return false;
 
-  if (!arc.persistent) return;
+  if (!arc.persistent) return true;
 
   if (groupId) {
     const gP = loadGroupPersistentArcs(groupId);
@@ -424,6 +458,7 @@ export async function resolveArc(index, characterName = null, groupId = null) {
     if (match) match.resolved = true;
     savePersistentArcs(characterName, cP);
   }
+  return true;
 }
 
 /**
@@ -436,16 +471,18 @@ export async function resolveArc(index, characterName = null, groupId = null) {
  * @param {string|null} [groupId]
  * @returns {Promise<boolean>}
  */
-export async function resolveArcWithSummary(index, characterName = null, groupId = null) {
+export async function resolveArcWithSummary(index, characterName = null, groupId = null, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const arcs = loadArcs();
   const arc = arcs[index];
   if (!arc) return false;
 
   const content = arc.content;
-  await resolveArc(index, characterName, groupId);
+  if (!await resolveArc(index, characterName, groupId, abortCheck)) return false;
 
   try {
-    const result = await generateArcSummary(content);
+    const result = await generateArcSummary(content, abortCheck);
+    if (abortCheck?.()) return false;
     if (!result) return false;
     const summaries = loadArcSummaries();
     summaries.push({
@@ -454,8 +491,11 @@ export async function resolveArcWithSummary(index, characterName = null, groupId
       ts: Date.now(),
       source_scene_ids: result.sourceSceneTs,
       source_memory_ids: result.sourceMemoryIds,
+      ...currentLineageRecordStamp(),
     });
-    await saveArcSummaries(summaries);
+    if (abortCheck?.()) return false;
+    await saveArcSummaries(summaries, abortCheck);
+    if (abortCheck?.()) return false;
     return true;
   } catch (err) {
     console.error('[SmartMemory] Arc summary generation failed:', err);
@@ -472,18 +512,22 @@ export async function resolveArcWithSummary(index, characterName = null, groupId
  * @param {string|null} characterName
  * @param {string|null} [groupId]
  */
-export async function reopenArc(index, characterName, groupId = null) {
+export async function reopenArc(index, characterName, groupId = null, abortCheck = null) {
+  if (abortCheck?.()) return false;
   const arcs = loadArcs();
-  if (!arcs[index]) return;
+  if (!arcs[index]) return false;
   const arcContent = arcs[index].content;
 
   // Check for a duplicate among currently active arcs. If one exists, the
   // thread is already being tracked - just discard this resolved copy.
   const activeArcs = arcs.filter((a, i) => !a.resolved && i !== index);
   for (const active of activeArcs) {
+    if (abortCheck?.()) return false;
     if (await arcIsDuplicate(arcContent, active.content)) {
+      if (abortCheck?.()) return false;
       arcs.splice(index, 1);
-      await saveArcs(arcs);
+      await saveArcs(arcs, abortCheck);
+      if (abortCheck?.()) return false;
       if (groupId) {
         const gP = loadGroupPersistentArcs(groupId);
         saveGroupPersistentArcs(
@@ -497,13 +541,16 @@ export async function reopenArc(index, characterName, groupId = null) {
           cP.filter((p) => p.content !== arcContent),
         );
       }
-      return;
+      return true;
     }
   }
 
   // No duplicate active arc - strip the resolved flag and reactivate.
+  if (abortCheck?.()) return false;
+  arcs[index] = { ...arcs[index], ...currentLineageRecordStamp() };
   delete arcs[index].resolved;
-  await saveArcs(arcs);
+  await saveArcs(arcs, abortCheck);
+  if (abortCheck?.()) return false;
 
   if (groupId) {
     const gP = loadGroupPersistentArcs(groupId);
@@ -520,6 +567,7 @@ export async function reopenArc(index, characterName, groupId = null) {
       savePersistentArcs(characterName, cP);
     }
   }
+  return true;
 }
 
 // ---- Extraction ---------------------------------------------------------
@@ -536,29 +584,38 @@ export async function reopenArc(index, characterName, groupId = null) {
  * @param {string} arcContent - The resolved arc's content string.
  * @returns {Promise<{summary: string, sourceSceneTs: number[], sourceMemoryIds: string[]}|null>}
  */
-export async function generateArcSummary(arcContent) {
+export async function generateArcSummary(arcContent, abortCheck = null) {
+  if (abortCheck?.()) return null;
   const settings = extension_settings[MODULE_NAME];
 
   // Use only the most recent scenes as context. The arc being summarized was
   // active and resolved in the recent portion of the chat; attributing it to
   // scenes from much earlier in the chat inflates source provenance and adds
   // noise to canon generation.
-  const sceneHistory = loadSceneHistory().slice(-5);
+  const sceneHistory = filterCurrentChatRecords(loadSceneHistory(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  }).slice(-5);
   const sceneSummaries = sceneHistory.map((s, i) => `Scene ${i + 1}: ${s.summary}`).join('\n');
 
   // Gather source_memory_ids from these scenes (deduplicated).
   const allMemoryIds = new Set(sceneHistory.flatMap((s) => s.source_memory_ids ?? []));
-  const sessionMemories = loadSessionMemories();
+  const sessionMemories = filterCurrentChatRecords(loadSessionMemories(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  });
   const linkedMemories = sessionMemories
     .filter((m) => m.id && allMemoryIds.has(m.id) && !m.superseded_by)
     .slice(0, 20); // cap to keep prompt cost manageable on local hardware
   const memoriesText = linkedMemories.map((m) => `[${m.type}] ${m.content}`).join('\n');
 
   const prompt = buildArcSummaryPrompt(arcContent, sceneSummaries, memoriesText);
+  if (abortCheck?.()) return null;
   const response = await generateMemoryExtract(prompt, {
     responseLength: settings.arc_summary_response_length ?? 300,
   });
 
+  if (abortCheck?.()) return null;
   if (!response?.trim()) return null;
   return {
     summary: response.trim(),
@@ -627,6 +684,8 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
     const sourceMetadata = {
       source_chat_id: sourceChatId,
       source_messages: [[sourceWindowStart, sourceWindowEnd]],
+      ...(currentLineageEpochStamp() ?? {}),
+      ...currentLineageRecordStamp(),
       ...(sourceMesIds.length > 0
         ? { source_mes_range: [Math.min(...sourceMesIds), Math.max(...sourceMesIds)] }
         : {}),
@@ -678,7 +737,8 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
       const arcSummaries = loadArcSummaries();
       for (const resolved of resolvedArcObjects) {
         try {
-          const result = await generateArcSummary(resolved.content);
+          const result = await generateArcSummary(resolved.content, abortCheck);
+          if (abortCheck?.()) return 0;
           if (result) {
             arcSummaries.push({
               summary: result.summary,
@@ -686,6 +746,7 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
               source_scene_ids: result.sourceSceneTs,
               source_memory_ids: result.sourceMemoryIds,
               ts: Date.now(),
+              ...currentLineageRecordStamp(),
             });
             smLog(`[SmartMemory] Arc summary generated for: "${resolved.content.slice(0, 60)}"`);
           }
@@ -695,7 +756,7 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
         }
       }
       if (abortCheck?.()) return 0;
-      await saveArcSummaries(arcSummaries);
+      await saveArcSummaries(arcSummaries, abortCheck);
     }
 
     // For persistent arcs that were resolved, mark them as resolved in
@@ -783,7 +844,7 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
     const merged = [...finalActive, ...finalNew].slice(-max);
 
     if (abortCheck?.()) return 0;
-    await saveArcs([...merged, ...finalResolved]);
+    await saveArcs([...merged, ...finalResolved], abortCheck);
     return dedupedAdd.length;
   } catch (err) {
     console.error('[SmartMemory] Arc extraction failed:', err);
@@ -799,14 +860,17 @@ export async function extractArcs(messages, characterName = null, abortCheck = n
  */
 export function injectArcs() {
   const settings = extension_settings[MODULE_NAME];
-  if (isCurrentLineageQuarantined() || !settings.arcs_enabled) {
+  if (settings.enabled === false || isFreshStartActive() || isCurrentLineageQuarantined() || !settings.arcs_enabled) {
     setMacroContent(MACRO_NAMES.arcs, '');
     setExtensionPrompt(PROMPT_KEY_ARCS, '', extension_prompt_types.NONE, 0);
     invalidateUnifiedCache(PROMPT_KEY_ARCS);
     return;
   }
 
-  const arcs = filterCurrentChatRecords(loadArcs()).filter((a) => !a.resolved);
+  const arcs = filterCurrentChatRecords(loadArcs(), {
+    requireExplicitChat: true,
+    requireStableChatUid: true,
+  }).filter((a) => !a.resolved);
   if (arcs.length === 0) {
     setMacroContent(MACRO_NAMES.arcs, '');
     setExtensionPrompt(PROMPT_KEY_ARCS, '', extension_prompt_types.NONE, 0);

@@ -6,7 +6,13 @@
  * runtime can test them without SillyTavern or a provider.
  */
 
-import { buildDerivedRecord, defaultSourceMessages, PROJECTION_KINDS, PROJECTION_OWNERS } from './projections.js';
+import {
+  buildDerivedRecord,
+  defaultSourceMessages,
+  PROJECTION_KINDS,
+  PROJECTION_OWNERS,
+  stripIdentityVariants,
+} from './projections.js';
 import { hash32 } from './identity.js';
 import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './timeline.js';
 
@@ -16,6 +22,7 @@ const EMPTY_RESPONSE = Object.freeze({
   state: [],
   arcs: [],
   epistemic: [],
+  session: [],
 });
 
 const RESPONSE_KEYS = Object.keys(EMPTY_RESPONSE);
@@ -51,7 +58,7 @@ function commonFields(item, kind, index, window) {
     owner: PROJECTION_OWNERS.STRUCTURED,
     content: text(item?.content),
     scope: {
-      ...(item?.scope ?? {}),
+      ...stripIdentityVariants(item?.scope),
       chat_uid: window.chat_uid,
       ...(window.branch_uid != null ? { branch_uid: window.branch_uid } : {}),
     },
@@ -65,7 +72,7 @@ function commonFields(item, kind, index, window) {
     },
     confidence: confidence(item?.confidence),
     provenance: {
-      ...(item?.provenance ?? {}),
+      ...stripIdentityVariants(item?.provenance),
       source_chat_uid: window.chat_uid,
       source_messages: item?.provenance?.source_messages ?? defaultSourceMessages(window.source_range),
       source_kind: 'raw-jsonl',
@@ -157,13 +164,14 @@ export function buildStructuredExtractionPrompt({
     }));
   return [
     'Extract only meaningful changes from the current roleplay passage.',
-    'Return JSON only with exactly these optional arrays: facts, relationships, state, arcs, epistemic.',
+    'Return JSON only with exactly these optional arrays: facts, relationships, state, arcs, epistemic, session.',
     'Do not repeat unchanged information. Use null or omit unknown values; never invent dates.',
     'facts: [{content, confidence, supersedes}]',
     'relationships: [{subject, target, content, descriptors, conflict_key, confidence}]',
     'state: [{entity, entity_type, content, fields, conflict_key, confidence}]',
     'arcs: [{content, status, confidence}]',
     'epistemic: [{subject, target, type, content, witnessed_by, confidence}]',
+    'session: [{type, content, confidence}]',
     `Responding character: ${text(respondingCharacter) || '(unknown)'}`,
     ...(Array.isArray(enabledKinds)
       ? [
@@ -224,6 +232,7 @@ export function normalizeStructuredRecords(
   append(parsed.state, PROJECTION_KINDS.STATE, buildStateContent);
   append(parsed.arcs, PROJECTION_KINDS.ARC, (item) => item?.content);
   append(parsed.epistemic, PROJECTION_KINDS.EPISTEMIC, buildEpistemicContent);
+  append(parsed.session, PROJECTION_KINDS.SESSION, (item) => item?.content);
   return records;
 }
 
@@ -315,13 +324,19 @@ function sourceRanges(record) {
   return ranges;
 }
 
-function hasMesIdTail(record, branchPointMesId) {
-  return sourceRanges(record).some(
-    (range) =>
-      range?.kind === 'mesId' &&
-      Number.isInteger(range.end) &&
-      range.end > branchPointMesId,
-  );
+function hasTailRange(range, branchPointMesId, branchPointIndex = null) {
+  if (range?.kind === 'mesId') {
+    return !Number.isInteger(branchPointMesId) ||
+      (Number.isInteger(range.end) && range.end > branchPointMesId);
+  }
+  return range?.kind === 'index' &&
+    Number.isInteger(branchPointIndex) &&
+    Number.isInteger(range.end) &&
+    range.end > branchPointIndex;
+}
+
+function hasMesIdTail(record, branchPointMesId, branchPointIndex = null) {
+  return sourceRanges(record).some((range) => hasTailRange(range, branchPointMesId, branchPointIndex));
 }
 
 function fullyWithinMesIdPrefix(record, parentPrefixEnd) {
@@ -343,14 +358,14 @@ function fullyWithinMesIdPrefix(record, parentPrefixEnd) {
 /** Prunes product records sourced from a discarded in-file branch tail. */
 export function pruneStructuredRecordsAtBranch(
   records = [],
-  { branchPointMesId } = {},
+  { branchPointMesId, branchPointIndex = null } = {},
 ) {
   const original = list(records);
   const removedIds = new Set();
   const kept = [];
   const removed = [];
   for (const record of original) {
-    if (hasMesIdTail(record, branchPointMesId)) {
+    if (hasMesIdTail(record, branchPointMesId, branchPointIndex)) {
       removed.push(record);
       if (record?.id) removedIds.add(String(record.id));
     } else {
@@ -372,24 +387,122 @@ export function pruneStructuredRecordsAtBranch(
 /** Inherits only fully mesId-proven structured records from a parent prefix. */
 export function inheritStructuredRecordsPrefix(
   records = [],
-  { parentChatUid, branchChatUid, branchUid = null, parentPrefixEnd } = {},
+  {
+    parentChatUid,
+    parentChatId = null,
+    parentBranchUid = null,
+    branchChatUid,
+    branchChatId = null,
+    branchUid = null,
+    parentPrefixEnd,
+  } = {},
 ) {
   const parent = text(parentChatUid);
+  const parentId = text(parentChatId);
   const branch = text(branchChatUid);
+  const branchId = text(branchChatId);
   if (!parent || !branch || !Number.isInteger(parentPrefixEnd) || parentPrefixEnd < 0) return [];
   return list(records)
     .filter((record) => {
-      const sourceChat = text(record?.provenance?.source_chat_uid ?? record?.scope?.chat_uid);
-      return sourceChat === parent && fullyWithinMesIdPrefix(record, parentPrefixEnd);
+      const explicitUids = [
+        record?.scope?.chat_uid,
+        record?.scope?.source_chat_uid,
+        record?.scope?._source_chat_uid,
+        record?._source_chat_uid,
+        record?.provenance?.source_chat_uid,
+        record?.provenance?.chat_uid,
+        record?.provenance?._source_chat_uid,
+        record?.source_chat_uid,
+        record?.chat_uid,
+      ].map(text).filter(Boolean);
+      if (explicitUids.length === 0 || explicitUids.some((value) => value !== parent)) return false;
+      if (parentId) {
+        const explicitIds = [
+          record?.scope?.chat_id,
+          record?.scope?.source_chat_id,
+          record?.scope?._source_chat_id,
+          record?.provenance?.chat_id,
+          record?.provenance?.source_chat_id,
+          record?.provenance?._source_chat_id,
+          record?.source_chat_id,
+          record?._source_chat_id,
+          record?.chat_id,
+        ].map(text).filter(Boolean);
+        if (explicitIds.some((value) => value !== parentId)) return false;
+      }
+      const explicitBranchUids = [
+        record?.scope?.branch_uid,
+        record?.scope?._branch_uid,
+        record?.scope?.lineage_epoch,
+        record?.scope?._lineage_epoch,
+        record?.provenance?.branch_uid,
+        record?.provenance?._branch_uid,
+        record?.provenance?.lineage_epoch,
+        record?.provenance?._lineage_epoch,
+        record?.branch_uid,
+        record?._branch_uid,
+        record?.lineage_epoch,
+        record?._lineage_epoch,
+      ].map(text).filter(Boolean);
+      if (parentBranchUid == null) {
+        if (explicitBranchUids.length > 0) return false;
+      } else {
+        if (
+          explicitBranchUids.length === 0 ||
+          explicitBranchUids.some((value) => value !== text(parentBranchUid))
+        ) return false;
+      }
+      return fullyWithinMesIdPrefix(record, parentPrefixEnd);
     })
     .map((record) => {
       const copy = cloneRecord(record);
+      const targetBranch = branchUid == null ? null : String(branchUid);
       copy.scope = { ...(copy.scope ?? {}), chat_uid: branch };
-      if (branchUid != null) copy.scope.branch_uid = String(branchUid);
+      if (branchId) {
+        if (copy.scope.source_chat_id != null) copy.scope.source_chat_id = branchId;
+        if (copy.scope._source_chat_id != null) copy.scope._source_chat_id = branchId;
+        if (copy.scope.chat_id != null) copy.scope.chat_id = branchId;
+      }
+      if (copy.scope.source_chat_uid != null) copy.scope.source_chat_uid = branch;
+      if (copy.scope._source_chat_uid != null) copy.scope._source_chat_uid = branch;
+      if (targetBranch != null) {
+        for (const field of ['branch_uid', '_branch_uid', 'lineage_epoch', '_lineage_epoch']) {
+          if (copy.scope[field] != null) copy.scope[field] = targetBranch;
+        }
+        copy.scope.branch_uid = targetBranch;
+      }
+      if (branchId) {
+        if (copy.source_chat_id != null) copy.source_chat_id = branchId;
+        if (copy._source_chat_id != null) copy._source_chat_id = branchId;
+        if (copy.chat_id != null) copy.chat_id = branchId;
+      }
+      if (copy.source_chat_uid != null) copy.source_chat_uid = branch;
+      if (copy._source_chat_uid != null) copy._source_chat_uid = branch;
+      if (copy.chat_uid != null) copy.chat_uid = branch;
+      if (targetBranch != null) {
+        for (const field of ['branch_uid', '_branch_uid', 'lineage_epoch', '_lineage_epoch']) {
+          if (copy[field] != null) copy[field] = targetBranch;
+        }
+        copy.branch_uid = targetBranch;
+      }
       copy.provenance = {
         ...(copy.provenance ?? {}),
         source_chat_uid: branch,
       };
+      if (branchId) {
+        if (copy.provenance.source_chat_id != null) copy.provenance.source_chat_id = branchId;
+        if (copy.provenance._source_chat_id != null) copy.provenance._source_chat_id = branchId;
+        if (copy.provenance.chat_id != null) copy.provenance.chat_id = branchId;
+      }
+      if (copy.provenance.source_chat_uid != null) copy.provenance.source_chat_uid = branch;
+      if (copy.provenance._source_chat_uid != null) copy.provenance._source_chat_uid = branch;
+      if (copy.provenance.chat_uid != null) copy.provenance.chat_uid = branch;
+      if (targetBranch != null) {
+        for (const field of ['branch_uid', '_branch_uid', 'lineage_epoch', '_lineage_epoch']) {
+          if (copy.provenance[field] != null) copy.provenance[field] = targetBranch;
+        }
+        copy.provenance.branch_uid = targetBranch;
+      }
       copy.origin_chat_uid = copy.origin_chat_uid ?? parent;
       copy.inherited = true;
       return copy;

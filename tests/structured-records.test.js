@@ -36,8 +36,8 @@ test('structured response parser accepts plain and fenced JSON', () => {
 });
 
 test('structured response parser rejects malformed or non-object output safely', () => {
-  assert.deepEqual(parseStructuredResponse('not json'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [] });
-  assert.deepEqual(parseStructuredResponse('null'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [] });
+  assert.deepEqual(parseStructuredResponse('not json'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
+  assert.deepEqual(parseStructuredResponse('null'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
 });
 
 test('one structured payload becomes typed records with shared scope and provenance', () => {
@@ -101,6 +101,17 @@ test('disabled structured kinds are omitted at the normalization boundary', () =
   );
 });
 
+test('combined structured payload can produce session evidence records', () => {
+  const records = normalizeStructuredRecords(
+    { session: [{ type: 'revelation', content: 'Mira reveals the priest lied.' }] },
+    window,
+  );
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].kind, 'session');
+  assert.equal(records[0].type, 'revelation');
+  assert.match(buildStructuredExtractionPrompt({}), /session/i);
+});
 
 test('merge deduplicates incoming records and retires explicitly superseded state', () => {
   const existing = [{
@@ -132,4 +143,26 @@ test('merge deduplicates incoming records and retires explicitly superseded stat
   assert.equal(result.find((record) => record.id === 'old-state').validity.status, 'superseded');
   assert.equal(result.filter((record) => record.content === 'Mira is healed.').length, 1);
   assert.equal(existing[0].superseded_by, undefined);
+});
+
+test('structured normalization removes foreign nested identity variants from model metadata', () => {
+  const records = normalizeStructuredRecords(
+    {
+      facts: [
+        {
+          content: 'The key opens the door.',
+          scope: { _source_chat_uid: 'foreign-chat', _lineage_epoch: 'foreign-branch' },
+          provenance: { _source_chat_uid: 'foreign-chat', _lineage_epoch: 'foreign-branch' },
+        },
+      ],
+    },
+    window,
+  );
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].scope._source_chat_uid, undefined);
+  assert.equal(records[0].scope._lineage_epoch, undefined);
+  assert.equal(records[0].provenance._source_chat_uid, undefined);
+  assert.equal(records[0].provenance._lineage_epoch, undefined);
+  assert.equal(records[0].provenance.source_chat_uid, 'chat-uid-a');
 });
