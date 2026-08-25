@@ -118,7 +118,10 @@ import {
   clearEmbeddingFailed,
   saveEmbeddingApiKey,
   hasEmbeddingApiKey,
+  getEmbeddingModelForSource,
+  getEmbeddingApiKeyForSource,
 } from './embeddings.js';
+import { EMBEDDING_SOURCE_DEFINITIONS } from './embedding-providers.js';
 import { clearCanon, generateCanon, injectCanon, saveCanon } from './canon.js';
 import { clearSessionEntityRegistry } from './graph-migration.js';
 import {
@@ -217,8 +220,9 @@ export const defaultSettings = {
   // hits on cloud APIs. Chat history covers the gap for recent events.
   injection_refresh_period: 1,
 
-  // OpenAI Compatible embedding API key
+  // Provider API keys. The singular field is retained for older settings.
   embedding_api_key: '',
+  embedding_api_keys: {},
 
   // Short-term (compaction)
   compaction_enabled: true,
@@ -320,7 +324,13 @@ export const defaultSettings = {
   embedding_source: 'ollama',
   embedding_url: '',
   embedding_model: 'nomic-embed-text',
+  // Per-provider model selections. embedding_model remains for backward compatibility.
+  embedding_models: {},
   embedding_keep: false,
+  embedding_account_id: '',
+  embedding_vertex_region: 'us-central1',
+  embedding_vertex_project_id: '',
+  embedding_siliconflow_endpoint: 'global',
 
   // Character/world profiles
   profiles_enabled: true,
@@ -713,6 +723,48 @@ export function loadSettings() {
       current[key] = value;
     }
   }
+
+  // Migration: preserve the existing single embedding model when provider
+  // selections become source-specific. Invalid persisted maps are discarded,
+  // never interpreted as executable or provider configuration.
+  let embeddingSettingsChanged = false;
+  if (
+    !current.embedding_models ||
+    typeof current.embedding_models !== 'object' ||
+    Array.isArray(current.embedding_models) ||
+    current.embedding_models === defaultSettings.embedding_models
+  ) {
+    current.embedding_models = {};
+    embeddingSettingsChanged = true;
+  }
+  const activeEmbeddingSource = current.embedding_source ?? 'ollama';
+  if (
+    typeof current.embedding_model === 'string' &&
+    current.embedding_model.trim() &&
+    !Object.prototype.hasOwnProperty.call(current.embedding_models, activeEmbeddingSource)
+  ) {
+    current.embedding_models[activeEmbeddingSource] = current.embedding_model.trim();
+    embeddingSettingsChanged = true;
+  }
+  if (
+    !current.embedding_api_keys ||
+    typeof current.embedding_api_keys !== 'object' ||
+    Array.isArray(current.embedding_api_keys) ||
+    current.embedding_api_keys === defaultSettings.embedding_api_keys
+  ) {
+    current.embedding_api_keys = {};
+    embeddingSettingsChanged = true;
+  }
+  if (
+    typeof current.embedding_api_key === 'string' &&
+    current.embedding_api_key.trim() &&
+    !Object.prototype.hasOwnProperty.call(current.embedding_api_keys, activeEmbeddingSource)
+  ) {
+    current.embedding_api_keys[activeEmbeddingSource] = current.embedding_api_key;
+    embeddingSettingsChanged = true;
+  }
+  if (embeddingSettingsChanged) saveSettingsDebounced();
+
   // The runtime is intentionally chat-only. Migrate older selectable-scope
   // settings to the fixed chat boundary without deleting dormant legacy data.
   const scopeChanged = current.memory_scope !== MEMORY_SCOPE_CHAT;
@@ -1617,7 +1669,7 @@ export function bindSettingsUI(ctrl) {
         });
         const best = models.includes(prevModel) ? prevModel : models[0];
         $select.val(best);
-        extension_settings[MODULE_NAME].embedding_model = best;
+        saveEmbeddingModelForSource('ollama', best);
         clearEmbeddingFailed();
         updateEmbeddingNotice();
         saveSettingsDebounced();
@@ -4357,28 +4409,61 @@ export function bindSettingsUI(ctrl) {
 
   // ---- Embedding deduplication ----------------------------------------
 
+  const embeddingUrlSources = new Set([
+    'openai_compatible',
+    'ollama',
+    'extras',
+    'llamacpp',
+    'vllm',
+    'koboldcpp',
+  ]);
+  const embeddingModellessSources = new Set(['extras', 'llamacpp', 'koboldcpp', 'transformers']);
+  const embeddingApiKeySources = new Set(
+    EMBEDDING_SOURCE_DEFINITIONS.filter((source) => source.requiresApiKey).map((source) => source.id),
+  );
+
+  function saveEmbeddingModelForSource(source, value) {
+    const settings = extension_settings[MODULE_NAME];
+    const model = String(value ?? '').trim();
+    settings.embedding_model = model;
+    settings.embedding_models = {
+      ...(settings.embedding_models ?? {}),
+      [source]: model,
+    };
+  }
+
   /**
-   * Shows or hides source-specific UI elements based on the current embedding_source setting.
-   * Ollama shows the model dropdown + refresh button + keep-in-memory.
-   * OpenAI Compatible shows a plain model text field and hides Ollama-only controls.
+   * Shows or hides source-specific UI elements based on the current embedding source.
+   * The source list mirrors SillyTavern Vector Storage while keeping Storyhold's
+   * legacy OpenAI-compatible identifier available for existing installations.
    */
   function applyEmbeddingSourceUI() {
-    const src = extension_settings[MODULE_NAME].embedding_source ?? 'ollama';
+    const settings = extension_settings[MODULE_NAME];
+    const src = settings.embedding_source ?? 'ollama';
+    const definition = EMBEDDING_SOURCE_DEFINITIONS.find((source) => source.id === src);
     const isOllama = src === 'ollama';
+    const isRuntime = definition?.kind === 'runtime';
+    const isModelless = embeddingModellessSources.has(src);
+    const showApiKey = embeddingApiKeySources.has(src) || src === 'openai_compatible' || src === 'extras';
+
+    $('#sm_embedding_url_row').toggle(embeddingUrlSources.has(src));
     $('#sm_embedding_model_ollama_row').toggle(isOllama);
-    $('#sm_embedding_model_openai_row').toggle(!isOllama);
-    $('#sm_embedding_api_key_row').toggle(!isOllama);
+    $('#sm_embedding_model_openai_row').toggle(!isOllama && !isModelless);
+    $('#sm_embedding_api_key_row').toggle(showApiKey);
     $('#sm_embedding_keep_row').toggle(isOllama);
+    $('#sm_embedding_account_id_row').toggle(src === 'workers_ai');
+    $('#sm_embedding_vertex_settings').toggle(src === 'vertexai');
+    $('#sm_embedding_siliconflow_endpoint_row').toggle(src === 'siliconflow');
     $('#sm_embedding_install_hint_ollama').toggle(isOllama);
-    $('#sm_embedding_install_hint_openai').toggle(!isOllama);
-    if (!isOllama) {
-      // Sync the OpenAI model text field with the stored setting.
-      $('#sm_embedding_model_openai').val(extension_settings[MODULE_NAME].embedding_model ?? '');
-      // Show whether a key is stored - never populate the field with the actual value.
-      $('#sm_embedding_api_key')
-        .val('')
-        .attr('placeholder', hasEmbeddingApiKey() ? '(key stored)' : 'sk-...');
+    $('#sm_embedding_install_hint_provider').toggle(!isOllama && !isRuntime);
+    $('#sm_embedding_install_hint_runtime').toggle(isRuntime);
+
+    if (!isOllama && !isModelless) {
+      $('#sm_embedding_model_openai').val(getEmbeddingModelForSource(src, settings));
     }
+    $('#sm_embedding_api_key')
+      .val('')
+      .attr('placeholder', hasEmbeddingApiKey() ? '(key stored)' : 'Provider API key');
   }
 
   $('#sm_embedding_enabled')
@@ -4397,12 +4482,27 @@ export function bindSettingsUI(ctrl) {
   $('#sm_embedding_source')
     .val(s.embedding_source ?? 'ollama')
     .on('change', function () {
-      extension_settings[MODULE_NAME].embedding_source = $(this).val();
+      const settings = extension_settings[MODULE_NAME];
+      const previousSource = settings.embedding_source ?? 'ollama';
+      const previousModel = String(settings.embedding_model ?? '').trim();
+      if (previousModel) saveEmbeddingModelForSource(previousSource, previousModel);
+      const previousKey = getEmbeddingApiKeyForSource(previousSource, settings);
+      settings.embedding_api_keys = {
+        ...(settings.embedding_api_keys ?? {}),
+        [previousSource]: previousKey,
+      };
+
+      const nextSource = String($(this).val() ?? 'ollama');
+      const nextModel = getEmbeddingModelForSource(nextSource, settings);
+      const nextKey = settings.embedding_api_keys?.[nextSource] ?? '';
+      settings.embedding_source = nextSource;
+      settings.embedding_model = nextModel;
+      settings.embedding_api_key = nextKey;
       clearEmbeddingFailed();
       $('#sm_embedding_test_result').text('');
       applyEmbeddingSourceUI();
       saveSettingsDebounced();
-      if (extension_settings[MODULE_NAME].embedding_source === 'ollama') {
+      if (nextSource === 'ollama') {
         refreshEmbeddingModels();
       }
     });
@@ -4420,9 +4520,45 @@ export function bindSettingsUI(ctrl) {
       }
     });
 
+  $('#sm_embedding_account_id')
+    .val(s.embedding_account_id ?? '')
+    .on('input', function () {
+      extension_settings[MODULE_NAME].embedding_account_id = $(this).val().trim();
+      clearEmbeddingFailed();
+      $('#sm_embedding_test_result').text('');
+      saveSettingsDebounced();
+    });
+
+  $('#sm_embedding_vertex_region')
+    .val(s.embedding_vertex_region ?? 'us-central1')
+    .on('change', function () {
+      extension_settings[MODULE_NAME].embedding_vertex_region = $(this).val();
+      clearEmbeddingFailed();
+      $('#sm_embedding_test_result').text('');
+      saveSettingsDebounced();
+    });
+
+  $('#sm_embedding_vertex_project_id')
+    .val(s.embedding_vertex_project_id ?? '')
+    .on('input', function () {
+      extension_settings[MODULE_NAME].embedding_vertex_project_id = $(this).val().trim();
+      clearEmbeddingFailed();
+      $('#sm_embedding_test_result').text('');
+      saveSettingsDebounced();
+    });
+
+  $('#sm_embedding_siliconflow_endpoint')
+    .val(s.embedding_siliconflow_endpoint ?? 'global')
+    .on('change', function () {
+      extension_settings[MODULE_NAME].embedding_siliconflow_endpoint = $(this).val();
+      clearEmbeddingFailed();
+      $('#sm_embedding_test_result').text('');
+      saveSettingsDebounced();
+    });
+
   // Embedding model dropdown - saves on selection change.
   $('#sm_embedding_model').on('change', function () {
-    extension_settings[MODULE_NAME].embedding_model = $(this).val();
+    saveEmbeddingModelForSource('ollama', $(this).val());
     clearEmbeddingFailed();
     $('#sm_embedding_test_result').text('');
     updateEmbeddingNotice();
@@ -4431,29 +4567,31 @@ export function bindSettingsUI(ctrl) {
 
   // Manual text fallback - shown when Ollama is not reachable from the browser.
   $('#sm_embedding_model_manual').on('input', function () {
-    extension_settings[MODULE_NAME].embedding_model = $(this).val().trim();
+    saveEmbeddingModelForSource('ollama', $(this).val());
     clearEmbeddingFailed();
     $('#sm_embedding_test_result').text('');
     updateEmbeddingNotice();
     saveSettingsDebounced();
   });
 
-  // OpenAI Compatible model text field.
+  // Non-Ollama provider model field.
   $('#sm_embedding_model_openai').on('input', function () {
-    extension_settings[MODULE_NAME].embedding_model = $(this).val().trim();
+    const source = extension_settings[MODULE_NAME].embedding_source ?? 'ollama';
+    saveEmbeddingModelForSource(source, $(this).val());
     clearEmbeddingFailed();
     $('#sm_embedding_test_result').text('');
     updateEmbeddingNotice();
     saveSettingsDebounced();
   });
 
-  // OpenAI Compatible embedding API key field - stored in extension_settings.
+  // Provider API key field - stored in extension_settings.
   $('#sm_embedding_api_key').on('change', function () {
     const value = $(this).val().trim();
-    saveEmbeddingApiKey(value);
+    const source = extension_settings[MODULE_NAME].embedding_source ?? 'ollama';
+    saveEmbeddingApiKey(value, source);
     $(this)
       .val('')
-      .attr('placeholder', hasEmbeddingApiKey() ? '(key stored)' : 'sk-...');
+      .attr('placeholder', hasEmbeddingApiKey() ? '(key stored)' : 'Provider API key');
     clearEmbeddingFailed();
     $('#sm_embedding_test_result').text('');
   });
@@ -4491,7 +4629,7 @@ export function bindSettingsUI(ctrl) {
       }
     } catch {
       $result.html(
-        '<span style="color: var(--warning, #ca6)">Connection failed - is Ollama running?</span>',
+        '<span style="color: var(--warning, #ca6)">Connection failed - check the selected provider settings.</span>',
       );
     } finally {
       $btn.prop('disabled', false);

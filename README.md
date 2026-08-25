@@ -445,13 +445,39 @@ This helper model is tiny and runs on CPU - it does not compete with your main r
 
 If you do not have an embedding model set up, Storyhold falls back to keyword matching automatically. It works, but catches fewer paraphrased duplicates.
 
-| Setting                 | Default                         | Description                                                                                                               |
-| ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Use semantic embeddings | On                              | Use the helper model to compare memories by meaning rather than by shared words                                           |
-| Embedding source        | Ollama                          | Which server provides embeddings: Ollama or any OpenAI-compatible endpoint                                                |
-| Embedding URL           | _(blank, uses localhost:11434)_ | Base URL of your embedding server - only change if it is on a different port or host                                      |
-| Embedding model         | `nomic-embed-text`              | The model used for meaning comparison                                                                                     |
-| Keep model in memory    | Off                             | (Ollama only) Keeps the helper model loaded between calls - faster if Storyhold runs frequently                        |
+| Setting                 | Default                         | Description                                                                                                                                    |
+| ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Use semantic embeddings | On                              | Use the helper model to compare memories by meaning rather than by shared words                                                                |
+| Embedding source        | Ollama                          | Provider list mirrors SillyTavern Vector Storage: local/runtime, OpenAI-compatible, and provider-specific API sources                         |
+| Embedding URL           | _(blank, uses localhost:11434)_ | Server URL for Ollama, Extras, llama.cpp, vLLM, KoboldCpp, or the legacy OpenAI Compatible source                                              |
+| Embedding model         | `nomic-embed-text`              | Model exposed by the selected provider; Storyhold remembers a separate model selection for each provider                                       |
+| API key                 | _(blank)_                       | Provider key for cloud/API sources; stored in a separate Storyhold slot per provider and never put into a provider URL                                  |
+| Keep model in memory    | Off                             | (Ollama only) Keeps the helper model loaded between calls - faster if Storyhold runs frequently                                                 |
+
+The **Embedding source** menu contains the same 20 source identifiers as current SillyTavern Vector Storage:
+
+- Chutes
+- Cloudflare Workers AI (requires an account ID)
+- Cohere
+- Electron Hub
+- Extras (deprecated)
+- Google AI Studio
+- Google Vertex AI (API-key/Express mode)
+- KoboldCpp
+- llama.cpp
+- Local (Transformers)
+- MistralAI
+- NanoGPT
+- NomicAI
+- Ollama
+- OpenAI
+- OpenRouter
+- SiliconFlow
+- TogetherAI
+- vLLM
+- WebLLM Extension
+
+Storyhold also retains its older **OpenAI Compatible** option so existing configurations keep working. Cloud provider requests use the provider’s native embedding contract; OpenAI-compatible local servers use `/v1/embeddings`. Provider requests are made from the browser, so a provider must allow browser CORS or be reachable through a suitable local proxy.
 
 **Ollama:** The embedding model must be installed before enabling this. If you already use SillyTavern's built-in Vector Storage extension with Ollama, you likely have `nomic-embed-text` installed already. If not:
 
@@ -459,7 +485,7 @@ If you do not have an embedding model set up, Storyhold falls back to keyword ma
 ollama pull nomic-embed-text
 ```
 
-**OpenAI Compatible:** Set the embedding source to "OpenAI Compatible", enter the base URL of your server, and type the model name it exposes for embeddings. Works with any server that implements the `/v1/embeddings` endpoint. If your server requires an API key, enter it in the API key field - it is stored in extension settings alongside other Storyhold configuration.
+**Local/runtime sources:** WebLLM works when the WebLLM Extension is installed and exposes its embedding API. SillyTavern’s Local (Transformers) provider runs only inside SillyTavern’s server-side Vector Storage route and does not expose raw vectors to third-party extensions; selecting it therefore leaves Storyhold in its safe keyword-matching fallback.
 
 ### Long-term Memory
 

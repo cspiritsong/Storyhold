@@ -45,110 +45,262 @@
  */
 
 import { extension_settings } from '../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../script.js';
+import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { MODULE_NAME } from './constants.js';
+import {
+  getDefaultEmbeddingModel,
+  getEmbeddingSourceDefinition,
+  requestEmbeddingBatch,
+} from './embedding-providers.js';
 import { memory_sources } from './generate.js';
 import { cosineSimilarity, jaccardSimilarity, hasStateChangeMarker } from './similarity.js';
 
-// In-session embedding cache: normalized text -> vector.
-// Embeddings are deterministic for a given text + model, so caching within a
-// session avoids redundant API calls during catch-up mode. Cleared on chat change.
+// In-session embedding cache: provider/model/endpoint/input-type scope -> vector.
+// Embeddings are deterministic for a given text + embedding configuration, so
+// caching within a session avoids redundant API calls during catch-up mode.
+// Cleared on chat change.
 const embeddingCache = new Map();
 
 // Tracks whether the user has already been warned about an embedding failure
 // this session so we don't spam a toastr on every extraction pass.
 let embeddingWarnedThisSession = false;
 
+function normalizeEmbeddingText(value) {
+  return String(value || '').trim();
+}
+
+function isEmbeddingVector(value) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((number) => typeof number === 'number' && Number.isFinite(number))
+  );
+}
+
 /**
- * Fetches embedding vectors for a list of texts in a single API call.
- * Texts already in the cache are not re-fetched. Returns a Map from
- * normalized text to vector. Any text that fails (bad response, network
- * error) will be absent from the returned Map - callers fall back to Jaccard.
+ * Returns the active model for a provider, including the per-source model map
+ * introduced with provider parity. The legacy embedding_model field remains
+ * authoritative for the currently selected source when no map entry exists.
+ * @param {string} source
+ * @param {object} [settings]
+ * @returns {string}
+ */
+export function getEmbeddingModelForSource(
+  source,
+  settings = extension_settings[MODULE_NAME] ?? {},
+) {
+  const mapped = settings.embedding_models?.[source];
+  if (typeof mapped === 'string' && mapped.trim()) return mapped.trim();
+
+  const activeSource = settings.embedding_source ?? 'ollama';
+  if (source === activeSource && typeof settings.embedding_model === 'string') {
+    const activeModel = settings.embedding_model.trim();
+    if (activeModel) return activeModel;
+  }
+
+  return getDefaultEmbeddingModel(source);
+}
+
+/**
+ * Returns the API key for one provider without falling back to another
+ * provider's credential. The legacy field is used only for the active source
+ * so older installations remain compatible during migration.
+ * @param {string} source
+ * @param {object} [settings]
+ * @returns {string}
+ */
+export function getEmbeddingApiKeyForSource(
+  source,
+  settings = extension_settings[MODULE_NAME] ?? {},
+) {
+  const mapped = settings.embedding_api_keys?.[source];
+  if (typeof mapped === 'string' && mapped.trim()) return mapped.trim();
+
+  const activeSource = settings.embedding_source ?? 'ollama';
+  if (source === activeSource && typeof settings.embedding_api_key === 'string') {
+    return settings.embedding_api_key.trim();
+  }
+
+  return '';
+}
+
+function embeddingCacheKey(text, source, model, settings, inputType = '') {
+  return [
+    source,
+    model,
+    settings.embedding_url ?? '',
+    settings.embedding_account_id ?? '',
+    settings.embedding_vertex_region ?? '',
+    settings.embedding_vertex_project_id ?? '',
+    settings.embedding_siliconflow_endpoint ?? '',
+    inputType,
+    text,
+  ].join('\u001f');
+}
+
+async function getRuntimeEmbeddingBatch(source, texts, model) {
+  if (source === 'transformers') {
+    throw new Error(
+      'Local (Transformers) is server-side in SillyTavern and is not exposed to third-party extensions',
+    );
+  }
+
+  if (source !== 'webllm') {
+    throw new Error(`Unsupported runtime embedding source: ${source}`);
+  }
+
+  if (!model) throw new Error('WebLLM embedding model is not configured');
+
+  const llm = globalThis.SillyTavern?.llm;
+  if (!llm || typeof llm.getEngine !== 'function') {
+    throw new Error('WebLLM extension is not installed');
+  }
+
+  const engine = llm.getEngine();
+  if (
+    !engine ||
+    typeof engine.loadModel !== 'function' ||
+    typeof engine.generateEmbedding !== 'function'
+  ) {
+    throw new Error('Installed WebLLM extension does not support embeddings');
+  }
+
+  await engine.loadModel(model);
+  const vectors = await engine.generateEmbedding(texts);
+  if (!Array.isArray(vectors) || vectors.length !== texts.length) {
+    throw new Error('WebLLM returned an invalid embedding response');
+  }
+  return vectors;
+}
+
+function warnEmbeddingFailure(source, error) {
+  if (error?.message) console.warn(`[Storyhold] ${source} embedding failed: ${error.message}`);
+  if (embeddingWarnedThisSession) return;
+
+  embeddingWarnedThisSession = true;
+  const label = (() => {
+    try {
+      return getEmbeddingSourceDefinition(source).label;
+    } catch {
+      return 'Embedding provider';
+    }
+  })();
+  toastr?.warning(
+    `${label} unavailable - falling back to keyword matching. Check the provider settings.`,
+    'Storyhold',
+    { timeOut: 8000 },
+  );
+}
+
+/**
+ * Fetches embedding vectors for a list of texts in one or more provider calls.
+ * Texts already in the cache are not re-fetched. Returns a Map from normalized
+ * text to vector. Any text that fails (bad response, network error) is absent
+ * from the returned Map and callers fall back to Jaccard.
+ *
+ * Cohere receives separate query/document batches when queryTexts is supplied,
+ * matching SillyTavern Vector Storage's input_type contract.
+ *
  * @param {string[]} texts
+ * @param {{queryTexts?: string[]}} [options]
  * @returns {Promise<Map<string, number[]>>}
  */
-export async function getEmbeddingBatch(texts) {
-  const settings = extension_settings[MODULE_NAME];
+export async function getEmbeddingBatch(texts, { queryTexts = [] } = {}) {
+  const settings = extension_settings[MODULE_NAME] ?? {};
   const result = new Map();
 
   if (!settings.embedding_enabled || !Array.isArray(texts) || texts.length === 0) return result;
 
-  const normalized = texts.map((t) => String(t || '').trim()).filter(Boolean);
+  const normalized = texts.map(normalizeEmbeddingText).filter(Boolean);
   if (normalized.length === 0) return result;
 
-  // Populate from cache first - only fetch what is missing.
-  const uncached = [];
-  for (const text of normalized) {
-    if (embeddingCache.has(text)) {
-      result.set(text, embeddingCache.get(text));
-    } else {
-      uncached.push(text);
-    }
+  const source = settings.embedding_source ?? 'ollama';
+  const queryTextSet = new Set((Array.isArray(queryTexts) ? queryTexts : []).map(normalizeEmbeddingText));
+  let definition;
+  let model;
+  const apiKey = getEmbeddingApiKeyForSource(source, settings);
+  try {
+    definition = getEmbeddingSourceDefinition(source);
+    model = getEmbeddingModelForSource(source, settings);
+  } catch (error) {
+    warnEmbeddingFailure(source, error);
+    return result;
   }
 
-  if (uncached.length === 0) return result;
+  // Group uncached texts by Cohere's query/document mode. Other providers use
+  // one group because they accept the same request shape for both roles.
+  const groups = new Map();
+  for (const text of normalized) {
+    const inputType =
+      source === 'cohere'
+        ? queryTextSet.has(text)
+          ? 'search_query'
+          : 'search_document'
+        : '';
+    const cacheKey = embeddingCacheKey(text, source, model, settings, inputType);
+    if (embeddingCache.has(cacheKey)) {
+      result.set(text, embeddingCache.get(cacheKey));
+      continue;
+    }
 
-  const baseUrl = (settings.embedding_url || 'http://localhost:11434')
-    .replace(/\/$/, '')
-    .replace(/\/v1$/, '');
-  const model = settings.embedding_model || 'nomic-embed-text';
-  const keep = settings.embedding_keep ?? false;
-  const source = settings.embedding_source ?? 'ollama';
+    const groupKey = inputType || 'default';
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push({ text, cacheKey });
+  }
+
+  if (groups.size === 0) return result;
+
+  const customUrlSources = new Set([
+    'openai_compatible',
+    'ollama',
+    'extras',
+    'llamacpp',
+    'vllm',
+    'koboldcpp',
+  ]);
 
   try {
-    let vectors;
-    if (source === 'openai_compatible') {
-      // OpenAI-compatible endpoint: /v1/embeddings
-      // Response shape: { data: [{ embedding: [...] }, ...] }
-      const headers = { 'Content-Type': 'application/json' };
-      const apiKey = settings.embedding_api_key || '';
-      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-      const response = await fetch(`${baseUrl}/v1/embeddings`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ input: uncached, model }),
-      });
-      if (!response.ok) return result;
-      const data = await response.json();
-      if (!Array.isArray(data?.data)) return result;
-      vectors = data.data.map((entry) => entry?.embedding ?? null);
-    } else {
-      // Ollama endpoint: /api/embed
-      // Response shape: { embeddings: [[...], ...] }
-      const response = await fetch(`${baseUrl}/api/embed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input: uncached,
-          model,
-          keep_alive: keep ? -1 : undefined,
-          truncate: true,
-        }),
-      });
-      if (!response.ok) return result;
-      const data = await response.json();
-      if (!Array.isArray(data?.embeddings)) return result;
-      vectors = data.embeddings;
-    }
+    for (const [inputType, items] of groups) {
+      const groupTexts = items.map((item) => item.text);
+      const vectors =
+        definition.kind === 'runtime'
+          ? await getRuntimeEmbeddingBatch(source, groupTexts, model)
+          : await requestEmbeddingBatch(
+              source,
+              {
+                texts: groupTexts,
+                model,
+                url: customUrlSources.has(source) ? settings.embedding_url : '',
+                apiKey,
+                keep: settings.embedding_keep ?? false,
+                inputType: inputType || undefined,
+                accountId: settings.embedding_account_id,
+                vertexRegion: settings.embedding_vertex_region,
+                vertexProjectId: settings.embedding_vertex_project_id,
+                siliconflowEndpoint: settings.embedding_siliconflow_endpoint,
+                headers: source === 'koboldcpp' ? getRequestHeaders() : undefined,
+              },
+              fetch,
+            );
 
-    for (let i = 0; i < uncached.length; i++) {
-      const vector = vectors[i];
-      if (Array.isArray(vector) && vector.length > 0) {
-        embeddingCache.set(uncached[i], vector);
-        result.set(uncached[i], vector);
+      if (!Array.isArray(vectors) || vectors.length !== items.length) {
+        throw new Error(`${definition.label} returned an unexpected number of embeddings`);
+      }
+
+      for (let i = 0; i < items.length; i++) {
+        const vector = vectors[i];
+        if (!isEmbeddingVector(vector)) {
+          throw new Error(`${definition.label} returned an invalid embedding`);
+        }
+        embeddingCache.set(items[i].cacheKey, vector);
+        result.set(items[i].text, vector);
       }
     }
-  } catch {
-    // Network error, model not found, server not running - callers fall back to Jaccard.
-    // Warn once per session so the user knows deduplication quality is degraded.
-    if (!embeddingWarnedThisSession) {
-      embeddingWarnedThisSession = true;
-      toastr?.warning(
-        'Embedding model unreachable - falling back to keyword matching. Check your embedding URL and model name.',
-        'Storyhold',
-        { timeOut: 8000 },
-      );
-    }
+  } catch (error) {
+    // Network error, missing credentials, model not found, server not running -
+    // callers fall back to Jaccard. Warn once per session so the user knows
+    // deduplication quality is degraded.
+    warnEmbeddingFailure(source, error);
   }
 
   return result;
@@ -163,9 +315,19 @@ export { cosineSimilarity } from './similarity.js';
 /**
  * Writes the embedding API key to extension_settings.
  * @param {string} value
+ * @param {string} [source] Provider source to associate with the key
  */
-export function saveEmbeddingApiKey(value) {
-  extension_settings[MODULE_NAME].embedding_api_key = value;
+export function saveEmbeddingApiKey(
+  value,
+  source = extension_settings[MODULE_NAME]?.embedding_source ?? 'ollama',
+) {
+  const settings = extension_settings[MODULE_NAME];
+  const apiKey = String(value ?? '');
+  settings.embedding_api_key = apiKey;
+  settings.embedding_api_keys = {
+    ...(settings.embedding_api_keys ?? {}),
+    [source]: apiKey,
+  };
   saveSettingsDebounced();
 }
 
@@ -173,8 +335,8 @@ export function saveEmbeddingApiKey(value) {
  * Returns true when an embedding API key is configured.
  * @returns {boolean}
  */
-export function hasEmbeddingApiKey() {
-  return !!extension_settings[MODULE_NAME]?.embedding_api_key;
+export function hasEmbeddingApiKey(source = extension_settings[MODULE_NAME]?.embedding_source ?? 'ollama') {
+  return !!getEmbeddingApiKeyForSource(source);
 }
 
 /**

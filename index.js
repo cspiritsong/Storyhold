@@ -3802,7 +3802,7 @@ jQuery(async function () {
             .toLowerCase()
             .trim(),
         );
-        const vectorMap = await getEmbeddingBatch([qLower, ...memTexts]);
+        const vectorMap = await getEmbeddingBatch([qLower, ...memTexts], { queryTexts: [qLower] });
         if (!searchStillCurrent()) return 'Search cancelled because the active chat changed.';
         if (
           searchProductMode &&
