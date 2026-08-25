@@ -49,6 +49,7 @@ import {
   generateWebLlmChatPrompt,
   ConnectionManagerRequestService,
 } from '../../shared.js';
+import { effectiveMemoryResponseLength } from './generation-policy.js';
 
 /**
  * Returns the configured generation budget from settings, falling back to
@@ -132,6 +133,21 @@ function getSource() {
  */
 function getConnectionProfileId() {
   return extension_settings[MODULE_NAME]?.connection_profile_id ?? null;
+}
+
+function getMainMemoryResponseLength(responseLength) {
+  const context = getContext();
+  const chatSettings = context?.chatCompletionSettings ?? {};
+  const source = chatSettings.chat_completion_source ?? '';
+  const modelKey = {
+    makersuite: 'google_model',
+    vertexai: 'vertexai_model',
+  }[source];
+  return effectiveMemoryResponseLength(responseLength, {
+    generationBudget: getGenerationBudget(),
+    chatCompletionSource: source,
+    model: modelKey ? chatSettings[modelKey] : '',
+  });
 }
 
 /**
@@ -411,7 +427,12 @@ export async function generateMemoryExtract(prompt, { responseLength = 600 } = {
     // generateRaw parameter in SillyTavern. The parsers are also resilient -
     // they only match valid tagged lines and ignore everything else - so even
     // if this were silently ignored the output would still parse correctly.
-    raw = await generateRaw({ prompt, instruct: false, quietToLoud: false, responseLength });
+    raw = await generateRaw({
+      prompt,
+      instruct: false,
+      quietToLoud: false,
+      responseLength: getMainMemoryResponseLength(responseLength),
+    });
   }
 
   // Main API path: ST already strips reasoning blocks in its own pipeline.
@@ -551,7 +572,7 @@ export async function generateMemorySummarize(
     quietPrompt,
     quietToLoud: false,
     skipWIAN,
-    responseLength,
+    responseLength: getMainMemoryResponseLength(responseLength),
     removeReasoning: true,
   });
 }
