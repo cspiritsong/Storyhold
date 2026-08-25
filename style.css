@@ -1529,6 +1529,51 @@
   text-align: right;
 }
 
+/* Read-only review: provenance hint and challenge evidence banners. */
+.sm_search_provenance {
+  display: block;
+  width: 100%;
+  font-size: 0.72em;
+  opacity: 0.5;
+  margin-top: 2px;
+}
+
+.sm_search_item {
+  flex-wrap: wrap;
+}
+
+.sm_search_spoiler summary {
+  cursor: pointer;
+  color: var(--SmartThemeQuoteColor, #d2a1b8);
+  font-size: 0.86em;
+  padding: 4px 0;
+}
+
+.sm_challenge_banner {
+  border-left: 3px solid var(--SmartThemeBorderColor, #444);
+  background: rgba(128, 128, 128, 0.12);
+  padding: 8px 10px;
+  margin: 0 0 12px 0;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.sm_challenge_banner strong {
+  display: inline;
+}
+
+.sm_challenge_no-match {
+  border-left-color: #8a8a6a;
+}
+
+.sm_challenge_related {
+  border-left-color: #4a8fb5;
+}
+
+.sm_challenge_strong-match {
+  border-left-color: #6fa578;
+}
+
 /* Type badge colours reused in search overlay (same values as panel badges). */
 #sm_search_overlay .sm_type_fact {
   background: #4a6fa5;

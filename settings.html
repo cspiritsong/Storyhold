@@ -132,6 +132,31 @@
           <div id="sm_product_status_records" class="sm-product-status-records"></div>
         </div>
 
+        <!-- Read-only player query / challenge console -->
+        <div id="sm_memory_review" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
+          <p class="sm-section-title">Query &amp; Challenge Memory</p>
+          <div class="sm-muted">
+            Read-only. Similarity is evidence, never a truth verdict. Same results as
+            /sm-search and /sm-challenge.
+          </div>
+          <textarea
+            id="sm_review_text"
+            class="text_pole"
+            rows="2"
+            placeholder="Ask about a stored memory, or challenge a claim..."
+          ></textarea>
+          <div class="sm-btn-row">
+            <button id="sm_review_query" class="menu_button menu_button_icon" title="Show stored memories matching this text for the current chat and branch.">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <span>Query</span>
+            </button>
+            <button id="sm_review_challenge" class="menu_button menu_button_icon" title="Check this claim against stored memories. Nothing is modified and no verdict is rendered.">
+              <i class="fa-solid fa-scale-balanced"></i>
+              <span>Challenge</span>
+            </button>
+          </div>
+        </div>
+
         <div id="sm_rename_recovery" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
           <div class="sm-btn-row">
             <button id="sm_audit_chat_memory" class="menu_button menu_button_icon">

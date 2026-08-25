@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-25
+
+### Added
+
+- **Query & Challenge Memory console.** A read-only player console is now available both as slash commands (`/sm-search`, `/sm-challenge`) and as a settings-panel form. It searches stored memories for the current chat and branch and shows type, similarity score, and source range.
+- **Challenge evidence banners.** `/sm-challenge` classifies a player claim as *No related evidence found*, *Related evidence found*, or *Strongly related evidence found*. Similarity is presented as evidence only - Storyhold never declares a claim true or false and never modifies a record.
+- **Review spoiler partitioning.** Query and challenge results keep false-belief and hidden-secret perspective records collapsed behind an explicit spoiler warning.
+
+### Changed
+
+- `/sm-search` and the panel console share one read-only review path, so results and provenance labels are identical regardless of entry point.
+
 ## [1.10.6] - 2026-08-21
 
 ### Fixed

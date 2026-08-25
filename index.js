@@ -185,6 +185,7 @@ import {
 import { createOwnedProductControl } from './product-control.js';
 import { enabledProductKinds, filterProductRecords, shouldRunProductIngest } from './runtime-policy.js';
 import { filterRetrievalRecords } from './retrieval.js';
+import { buildMemoryReview, MEMORY_REVIEW_MODES } from './memory-review.js';
 import {
   setStatusMessage,
   updateProductStatusUI,
@@ -203,7 +204,7 @@ import {
   updateEntityPanel,
   updateEmbeddingNotice,
   setContinuityBadge,
-  showSearchResults,
+  showMemoryReview,
   initTooltips,
   initTypePickers,
 } from './ui.js';
@@ -3171,6 +3172,129 @@ async function applyDuplicateRemoval(characterName, abortCheck = null, review = 
   };
 }
 
+/**
+ * Runs a read-only memory query or challenge review.
+ *
+ * Both /sm-search and /sm-challenge share this path. It gathers the memories
+ * eligible for the current chat and branch, scores them with embeddings (with
+ * a Jaccard fallback), and displays the shared review panel. Challenge mode
+ * adds an evidence banner. Nothing here writes memory, advances extraction
+ * state, or presents similarity as a truth verdict.
+ *
+ * @param {'query'|'challenge'} mode - Review mode.
+ * @param {object|null} args - Slash command args; k and min are honoured.
+ * @param {string} queryText - The query or claim text.
+ * @returns {Promise<string>} Summary string for the slash command.
+ */
+async function runMemoryReview(mode, args, queryText) {
+  const reviewMode = mode === MEMORY_REVIEW_MODES.CHALLENGE
+    ? MEMORY_REVIEW_MODES.CHALLENGE
+    : MEMORY_REVIEW_MODES.QUERY;
+  const actionLabel = reviewMode === MEMORY_REVIEW_MODES.CHALLENGE ? 'challenge' : 'search';
+  const q = String(queryText || '').trim();
+  if (!q) {
+    toastr.warning(`Usage: /sm-${reviewMode === MEMORY_REVIEW_MODES.CHALLENGE ? 'challenge' : 'search'} <${actionLabel} text>`, 'Storyhold', {
+      timeOut: 3000,
+      positionClass: 'toast-bottom-right',
+    });
+    return '';
+  }
+
+  const reviewGeneration = chatLoadId;
+  const reviewChatId = getCurrentChatId();
+  const reviewMetadata = getContext().chatMetadata;
+  const reviewChatUid = reviewMetadata?.[META_KEY]?.chat_uid ?? null;
+  const reviewProductMode = getSettings().single_extension_mode === true;
+  const reviewResponder = currentProductResponder();
+  const reviewStillCurrent = () =>
+    chatLoadId === reviewGeneration &&
+    getCurrentChatId() === reviewChatId &&
+    getContext().chatMetadata === reviewMetadata &&
+    getContext().chatMetadata?.[META_KEY]?.chat_uid === reviewChatUid &&
+    getSettings().single_extension_mode === reviewProductMode &&
+    getSettings().enabled !== false &&
+    !isFreshStart() &&
+    !isCurrentLineageQuarantined() &&
+    currentProductResponder() === reviewResponder;
+
+  let allMems;
+  if (getSettings().single_extension_mode) {
+    const productSettings = getSettings();
+    const context = getContext();
+    const root = context.chatMetadata?.[META_KEY] ?? {};
+    const lineage = getCurrentLineage();
+    if (productSettings.enabled === false || isFreshStart() || isCurrentLineageQuarantined() || !root.chat_uid) {
+      return 'Product memory is unavailable until this chat has a verified identity.';
+    }
+    const responder = reviewResponder;
+    const branchUid = lineage?.epoch_id ?? lineage?.epochId ?? root.lineage?.epoch_id ?? root.chat_uid;
+    const scoped = filterRetrievalRecords(root.structured_records, {
+      chatUid: root.chat_uid,
+      branchUid,
+      respondingCharacter: responder,
+      lineage,
+      allowLegacy: false,
+    });
+    allMems = filterProductRecords(scoped, productSettings, responder).map((record) => ({
+      ...record,
+      _tier: 'product',
+    }));
+  } else {
+    const characterName = getCurrentCharacterName();
+    const ltMemories = characterName
+      ? loadCharacterMemories(characterName).filter((m) => !m.superseded_by)
+      : [];
+    const sessionMems = loadSessionMemories().filter((m) => !m.superseded_by);
+    allMems = [
+      ...ltMemories.map((m) => ({ ...m, _tier: 'long-term' })),
+      ...sessionMems.map((m) => ({ ...m, _tier: 'session' })),
+    ];
+  }
+
+  if (allMems.length === 0) {
+    toastr.info('No memories to review.', 'Storyhold', {
+      timeOut: 3000,
+      positionClass: 'toast-bottom-right',
+    });
+    return '';
+  }
+
+  const topK = Math.max(1, Math.min(50, Number(args?.k) || 10));
+  const minScore = Math.max(0, Math.min(1, args?.min !== undefined ? Number(args.min) : 0.5));
+  const qLower = q.toLowerCase();
+  const memTexts = allMems.map((m) =>
+    String(m.content || '')
+      .toLowerCase()
+      .trim(),
+  );
+  const vectorMap = await getEmbeddingBatch([qLower, ...memTexts], { queryTexts: [qLower] });
+  if (!reviewStillCurrent()) return 'Memory review cancelled because the active chat changed.';
+  if (
+    reviewProductMode &&
+    (getSettings().enabled === false || isFreshStart() || isCurrentLineageQuarantined())
+  ) {
+    return 'Memory review cancelled because Product Memory is unavailable for this chat.';
+  }
+  const queryVec = vectorMap.get(qLower) ?? null;
+
+  const scored = allMems
+    .map((mem, i) => {
+      const memText = memTexts[i];
+      const memVec = vectorMap.get(memText) ?? null;
+      const score =
+        queryVec && memVec
+          ? cosineSimilarity(queryVec, memVec)
+          : jaccardSimilarity(qLower, memText);
+      return { mem, score };
+    })
+    .filter(({ score }) => score >= minScore);
+
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, topK);
+  showMemoryReview(buildMemoryReview({ mode: reviewMode, query: q, results: top }));
+  return `${actionLabel === 'challenge' ? 'Related evidence' : 'Results'}: ${top.length} match${top.length === 1 ? '' : 'es'} for "${q}".`;
+}
+
 jQuery(async function () {
   loadSettings();
   registerSmartMemoryMacros();
@@ -3255,6 +3379,7 @@ jQuery(async function () {
     unlinkManualMemory: unlinkCurrentManualMemory,
     scanDuplicateMemories,
     applyDuplicateRemoval,
+    runMemoryReview,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
     runProductCatchUp: runSingleExtensionCatchUp,
@@ -3725,110 +3850,7 @@ jQuery(async function () {
   SlashCommandParser.addCommandObject(
     SlashCommand.fromProps({
       name: 'sm-search',
-      callback: async (args, query) => {
-        const q = String(query || '').trim();
-        if (!q) {
-          toastr.warning('Usage: /sm-search <query>', 'Storyhold', {
-            timeOut: 3000,
-            positionClass: 'toast-bottom-right',
-          });
-          return '';
-        }
-
-        const searchGeneration = chatLoadId;
-        const searchChatId = getCurrentChatId();
-        const searchMetadata = getContext().chatMetadata;
-        const searchChatUid = searchMetadata?.[META_KEY]?.chat_uid ?? null;
-        const searchProductMode = getSettings().single_extension_mode === true;
-        const searchResponder = currentProductResponder();
-        const searchStillCurrent = () =>
-          chatLoadId === searchGeneration &&
-          getCurrentChatId() === searchChatId &&
-          getContext().chatMetadata === searchMetadata &&
-          getContext().chatMetadata?.[META_KEY]?.chat_uid === searchChatUid &&
-          getSettings().single_extension_mode === searchProductMode &&
-          getSettings().enabled !== false &&
-          !isFreshStart() &&
-          !isCurrentLineageQuarantined() &&
-          currentProductResponder() === searchResponder;
-
-        let allMems;
-        if (getSettings().single_extension_mode) {
-          const productSettings = getSettings();
-          const context = getContext();
-          const root = context.chatMetadata?.[META_KEY] ?? {};
-          const lineage = getCurrentLineage();
-          if (productSettings.enabled === false || isFreshStart() || isCurrentLineageQuarantined() || !root.chat_uid) {
-            return 'Product memory is unavailable until this chat has a verified identity.';
-          }
-          const responder = searchResponder;
-          const branchUid = lineage?.epoch_id ?? lineage?.epochId ?? root.lineage?.epoch_id ?? root.chat_uid;
-          const scoped = filterRetrievalRecords(root.structured_records, {
-            chatUid: root.chat_uid,
-            branchUid,
-            respondingCharacter: responder,
-            lineage,
-            allowLegacy: false,
-          });
-          allMems = filterProductRecords(scoped, productSettings, responder).map((record) => ({
-            ...record,
-            _tier: 'product',
-          }));
-        } else {
-          const characterName = getCurrentCharacterName();
-          const ltMemories = characterName
-            ? loadCharacterMemories(characterName).filter((m) => !m.superseded_by)
-            : [];
-          const sessionMems = loadSessionMemories().filter((m) => !m.superseded_by);
-          allMems = [
-            ...ltMemories.map((m) => ({ ...m, _tier: 'long-term' })),
-            ...sessionMems.map((m) => ({ ...m, _tier: 'session' })),
-          ];
-        }
-
-        if (allMems.length === 0) {
-          toastr.info('No memories to search.', 'Storyhold', {
-            timeOut: 3000,
-            positionClass: 'toast-bottom-right',
-          });
-          return '';
-        }
-
-        const topK = Math.max(1, Math.min(50, Number(args?.k) || 10));
-        const minScore = Math.max(0, Math.min(1, args?.min !== undefined ? Number(args.min) : 0.5));
-        const qLower = q.toLowerCase();
-        const memTexts = allMems.map((m) =>
-          String(m.content || '')
-            .toLowerCase()
-            .trim(),
-        );
-        const vectorMap = await getEmbeddingBatch([qLower, ...memTexts], { queryTexts: [qLower] });
-        if (!searchStillCurrent()) return 'Search cancelled because the active chat changed.';
-        if (
-          searchProductMode &&
-          (getSettings().enabled === false || isFreshStart() || isCurrentLineageQuarantined())
-        ) {
-          return 'Search cancelled because Product Memory is unavailable for this chat.';
-        }
-        const queryVec = vectorMap.get(qLower) ?? null;
-
-        const scored = allMems
-          .map((mem, i) => {
-            const memText = memTexts[i];
-            const memVec = vectorMap.get(memText) ?? null;
-            const score =
-              queryVec && memVec
-                ? cosineSimilarity(queryVec, memVec)
-                : jaccardSimilarity(qLower, memText);
-            return { mem, score };
-          })
-          .filter(({ score }) => score >= minScore);
-
-        scored.sort((a, b) => b.score - a.score);
-        const top = scored.slice(0, topK);
-        showSearchResults(q, top);
-        return `Found ${top.length} result${top.length === 1 ? '' : 's'} for "${q}".`;
-      },
+      callback: async (args, query) => runMemoryReview('query', args, query),
       namedArgumentList: [
         SlashCommandNamedArgument.fromProps({
           name: 'k',
@@ -3847,7 +3869,34 @@ jQuery(async function () {
       ],
       unnamedArgumentList: [new SlashCommandArgument('search query', [ARGUMENT_TYPE.STRING], true)],
       helpString:
-        'Searches long-term and session memories by semantic similarity. Displays top matching memories with type and tier labels. Optional: k sets result count (default 10, max 50); min sets the minimum similarity threshold to filter weak matches (default 0.5, range 0-1).',
+        'Searches active Storyhold memories for this chat by semantic similarity. Read-only: displays matching records with type, provenance, and score; nothing is modified. Optional: k sets result count (default 10, max 50); min sets the minimum similarity threshold to filter weak matches (default 0.5, range 0-1).',
+      returns: ARGUMENT_TYPE.STRING,
+    }),
+  );
+
+  SlashCommandParser.addCommandObject(
+    SlashCommand.fromProps({
+      name: 'sm-challenge',
+      callback: async (args, claim) => runMemoryReview('challenge', args, claim),
+      namedArgumentList: [
+        SlashCommandNamedArgument.fromProps({
+          name: 'k',
+          description: 'number of results to return (default 10, max 50)',
+          typeList: [ARGUMENT_TYPE.NUMBER],
+          isRequired: false,
+          defaultValue: '10',
+        }),
+        SlashCommandNamedArgument.fromProps({
+          name: 'min',
+          description: 'minimum similarity score to include a result (default 0.5, range 0-1)',
+          typeList: [ARGUMENT_TYPE.NUMBER],
+          isRequired: false,
+          defaultValue: '0.5',
+        }),
+      ],
+      unnamedArgumentList: [new SlashCommandArgument('claim to check', [ARGUMENT_TYPE.STRING], true)],
+      helpString:
+        'Challenges a player claim against Storyhold memories for this chat. Read-only: displays related records and an evidence banner. Similarity is never treated as a truth verdict and no memory is modified. Optional: k and min behave like /sm-search.',
       returns: ARGUMENT_TYPE.STRING,
     }),
   );

@@ -74,6 +74,39 @@ test('token bar reads the current API-specific context limit', async () => {
   assert.doesNotMatch(source, /const maxContext = getContext\(\)\.maxContext \|\| 0;/);
 });
 
+test('query and challenge review share one read-only console', async () => {
+  const [indexSource, settingsHtml, settingsSource, uiSource] = await Promise.all([
+    readFile(resolve(root, 'index.js'), 'utf8'),
+    readFile(resolve(root, 'settings.html'), 'utf8'),
+    readFile(resolve(root, 'settings.js'), 'utf8'),
+    readFile(resolve(root, 'ui.js'), 'utf8'),
+  ]);
+
+  // Both entry points route through the shared read-only runner.
+  assert.match(indexSource, /async function runMemoryReview\(mode, args, queryText\)/);
+  assert.match(indexSource, /name: 'sm-challenge'/);
+  assert.match(indexSource, /callback: async \(args, claim\) => runMemoryReview\('challenge', args, claim\)/);
+  assert.match(indexSource, /callback: async \(args, query\) => runMemoryReview\('query', args, query\)/);
+  assert.match(indexSource, /runMemoryReview,\n\s+getSelectedCharacterName,/);
+
+  // The settings panel exposes the same console and delegates to the runner.
+  assert.match(settingsHtml, /id="sm_memory_review"/);
+  assert.match(settingsHtml, /id="sm_review_text"/);
+  assert.match(settingsHtml, /id="sm_review_query"/);
+  assert.match(settingsHtml, /id="sm_review_challenge"/);
+  assert.match(settingsHtml, /Read-only\. Similarity is evidence, never a truth verdict\./);
+  assert.match(settingsSource, /await ctrl\.runMemoryReview\?\.\(mode, \{ k: 10, min: 0\.5 \}, text\)/);
+
+  // The panel renders challenge evidence without rendering a verdict.
+  assert.match(uiSource, /export function showMemoryReview\(review\)/);
+  assert.match(uiSource, /sm_challenge_banner/);
+  assert.match(uiSource, /export function showSearchResults\(query, results\)/);
+
+  // The review must never write memory through the provider path.
+  assert.doesNotMatch(indexSource, /runMemoryReview[\s\S]{0,3000}generateMemoryExtract/);
+});
+
+
 test('product catch-up exposes progress and canonical pipeline messaging', async () => {
   const [indexSource, settingsHtml, unifiedSource] = await Promise.all([
     readFile(resolve(root, 'index.js'), 'utf8'),
@@ -274,26 +307,36 @@ test('product slash commands do not read legacy stores', async () => {
   assert.match(checkBlock, /isCurrentLineageQuarantined/);
 
   const searchStart = source.indexOf("name: 'sm-search'");
+  const challengeStart = source.indexOf("name: 'sm-challenge'");
   assert.ok(searchStart >= 0);
-  const searchBlock = source.slice(searchStart);
-  assert.match(searchBlock, /structured_records/);
-  assert.match(searchBlock, /filterProductRecords/);
-  assert.match(searchBlock, /filterRetrievalRecords/);
-  assert.match(searchBlock, /single_extension_mode/);
+  assert.ok(challengeStart >= 0);
+  // Both commands route through the shared read-only review runner.
+  const searchBlock = source.slice(searchStart, challengeStart + 5000);
+  assert.match(searchBlock, /runMemoryReview\('query', args, query\)/);
+  assert.match(searchBlock, /runMemoryReview\('challenge', args, claim\)/);
+  const runnerStart = source.indexOf('async function runMemoryReview(mode, args, queryText)');
+  const runnerEnd = source.indexOf('jQuery(async function ()', runnerStart);
+  assert.ok(runnerStart >= 0 && runnerEnd > runnerStart);
+  const runner = source.slice(runnerStart, runnerEnd);
+  assert.match(runner, /structured_records/);
+  assert.match(runner, /filterProductRecords/);
+  assert.match(runner, /filterRetrievalRecords/);
+  assert.match(runner, /single_extension_mode/);
 });
 
 test('product search discards embedding results after a chat transition', async () => {
   const source = await readFile(resolve(root, 'index.js'), 'utf8');
-  const searchStart = source.indexOf("name: 'sm-search'");
-  assert.ok(searchStart >= 0);
-  const block = source.slice(searchStart);
-  assert.match(block, /const searchGeneration = chatLoadId/);
-  assert.match(block, /const searchMetadata = getContext\(\)\.chatMetadata/);
-  assert.match(block, /const searchStillCurrent = \(\) =>/);
-  assert.match(block, /const searchResponder = currentProductResponder\(\)/);
-  assert.match(block, /currentProductResponder\(\) === searchResponder/);
+  const start = source.indexOf('async function runMemoryReview(mode, args, queryText)');
+  const end = source.indexOf('jQuery(async function ()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /const reviewGeneration = chatLoadId/);
+  assert.match(block, /const reviewMetadata = getContext\(\)\.chatMetadata/);
+  assert.match(block, /const reviewStillCurrent = \(\) =>/);
+  assert.match(block, /const reviewResponder = currentProductResponder\(\)/);
+  assert.match(block, /currentProductResponder\(\) === reviewResponder/);
   assert.match(block, /await getEmbeddingBatch/);
-  assert.match(block, /if \(!searchStillCurrent\(\)\)/);
+  assert.match(block, /if \(!reviewStillCurrent\(\)\)/);
 });
 
 test('manual recap paths discard results after a chat transition or blocked state', async () => {
@@ -874,11 +917,16 @@ test('product operations revalidate the captured responder before writes and inj
 
 test('Product search fails closed before embedding when the chat is blocked', async () => {
   const source = await readFile(resolve(root, 'index.js'), 'utf8');
-  const start = source.indexOf("name: 'sm-search'");
-  assert.ok(start >= 0);
-  const block = source.slice(start);
-  assert.match(block, /const searchStillCurrent = \(\) =>[\s\S]*isFreshStart\(\)/);
+  const start = source.indexOf('async function runMemoryReview(mode, args, queryText)');
+  const end = source.indexOf('jQuery(async function ()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /const reviewStillCurrent = \(\) =>[\s\S]*isFreshStart\(\)/);
   assert.match(block, /productSettings\.enabled === false \|\| isFreshStart\(\) \|\| isCurrentLineageQuarantined\(\)/);
+  // The blocked-state check must happen before the embedding batch is requested.
+  const guardIndex = block.indexOf('productSettings.enabled === false');
+  const embeddingIndex = block.indexOf('getEmbeddingBatch(');
+  assert.ok(guardIndex >= 0 && embeddingIndex >= 0 && guardIndex < embeddingIndex);
 });
 
 test('automatic recaps abort model work and never clear a newer chat status', async () => {

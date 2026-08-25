@@ -639,6 +639,30 @@ A live token count shows how much context the current profiles are using. A **Re
 | `/sm-extract`        | Run long-term, session, and arc extraction against the current chat now                                                                                                                                                                                                          |
 | `/sm-recap`          | Generate and show a "Previously on..." recap popup now                                                                                                                                                                                                                           |
 | `/sm-search <query>` | Search all memories by meaning and show a results popup. Optional `k=N` sets the result count (default 10, max 50); `min=N` sets a minimum match quality to filter weak results (default 0.5, range 0-1). Falls back to keyword matching when the embedding model is unavailable |
+| `/sm-challenge <claim>` | Challenge a player claim against stored memories and show an evidence panel. Read-only: displays related records with provenance and a similarity banner. Storyhold never renders a true/false verdict and nothing is modified. Accepts the same `k` and `min` options as `/sm-search` |
+
+### Query & Challenge Memory (read-only)
+
+Both `/sm-search` and `/sm-challenge` are also available in the settings panel under
+**Query & Challenge Memory**. Type a query or a claim and press **Query** or
+**Challenge** (or press Enter).
+
+What the result panel shows:
+
+- Matching records for the current chat and branch, with type, score, and source range
+- For challenges, an evidence banner: **No related evidence found**, **Related evidence
+  found**, or **Strongly related evidence found**
+- Spoiler-tagged perspective records (false beliefs, hidden secrets) stay collapsed
+  behind a warning until you open them deliberately
+
+What it deliberately does not do:
+
+- It never modifies, retires, or rewrites a memory
+- It never declares a claim true or false - similarity is evidence, not a verdict
+- It does not inject anything into the roleplay prompt; this is a review tool
+
+If a challenge reveals a wrong memory, fix it through the normal edit/delete controls on
+the relevant list - that is the only path that changes stored memory.
 
 ---
 

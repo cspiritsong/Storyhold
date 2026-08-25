@@ -1116,6 +1116,35 @@ export function bindSettingsUI(ctrl) {
     renderRenameAudit(ctrl.auditRenameNamespaces?.());
   });
 
+  // Read-only memory query / challenge console. Delegates to the shared
+  // runMemoryReview in index.js so slash commands and this panel stay
+  // identical. Reads only; never writes memory.
+  $('#sm_review_query, #sm_review_challenge').on('click', async function () {
+    const mode = this.id === 'sm_review_challenge' ? 'challenge' : 'query';
+    const text = String($('#sm_review_text').val() || '').trim();
+    if (!text) {
+      toastr.info('Type a query or claim first.', 'Storyhold', {
+        timeOut: 3000,
+        positionClass: 'toast-bottom-right',
+      });
+      return;
+    }
+    const $button = $(this);
+    $button.prop('disabled', true);
+    try {
+      await ctrl.runMemoryReview?.(mode, { k: 10, min: 0.5 }, text);
+    } finally {
+      $button.prop('disabled', false);
+    }
+  });
+
+  $('#sm_review_text').on('keydown', function (event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      $('#sm_review_query').trigger('click');
+    }
+  });
+
   $('#sm_manage_character_chat_memory').on('click', function () {
     renderCharacterMemoryManager(ctrl.listCharacterChatMemory?.());
   });

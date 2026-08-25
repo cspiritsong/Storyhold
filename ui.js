@@ -56,6 +56,7 @@ import {
   filterEpistemicRecordsForSubject,
   scopeProductStatus,
 } from './product-status.js';
+import { buildMemoryReview } from './memory-review.js';
 import {
   estimateTokens,
   MODULE_NAME,
@@ -935,12 +936,77 @@ export function setContinuityBadge(count) {
 }
 
 /**
- * Displays memory search results in a dismissible modal overlay.
- * Called by the /sm-search slash command.
- * @param {string} query - The original search query.
- * @param {Array<{mem: Object, score: number}>} results - Top-K scored memories, sorted descending.
+ * Builds a short human-readable provenance label for one memory record.
+ * Evidence labels show where a record came from; they never judge truth.
+ * @param {object} mem
+ * @returns {string|null}
  */
-export function showSearchResults(query, results) {
+function recordProvenanceLabel(mem) {
+  if (!mem || typeof mem !== 'object') return null;
+  const range = mem.sourceRange ?? mem.source_range ?? mem.provenance?.source_range ?? null;
+  if (range && Number.isInteger(range.start) && Number.isInteger(range.end)) {
+    return range.kind === 'mesId'
+      ? `source messages ${range.start}-${range.end}`
+      : `source index ${range.start}-${range.end}`;
+  }
+  const tier = String(mem._tier ?? '').trim();
+  return tier ? `tier: ${tier}` : null;
+}
+
+function recordKindLabel(mem) {
+  const kind = String(mem?.kind ?? '').trim();
+  if (kind) return kind;
+  return String(mem?.type ?? 'memory');
+}
+
+function appendMemoryReviewRows(card, review) {
+  if (review.visible.length === 0) {
+    card.append($('<p>').text('No matching memories found.'));
+  } else {
+    const $list = $('<ul class="sm_search_list">');
+    for (const { mem, score } of review.visible) {
+      const $item = $('<li class="sm_search_item">');
+      $item.append(
+        $('<span class="sm_search_badge sm_search_badge_tier">').text(mem._tier ?? 'product'),
+        $('<span>').addClass(`sm_search_badge sm_type_${recordKindLabel(mem)}`).text(recordKindLabel(mem)),
+        $('<span class="sm_search_content">').text(String(mem.content || '')),
+        $('<span class="sm_search_score">').text(`${Math.round((score ?? 0) * 100)}%`),
+      );
+      const provenance = recordProvenanceLabel(mem);
+      if (provenance) $item.append($('<span class="sm_search_provenance">').text(provenance));
+      $list.append($item);
+    }
+    card.append($list);
+  }
+
+  if (review.spoiler.length > 0) {
+    const $spoiler = $('<details class="sm_product_record_group sm_search_spoiler">');
+    const $summary = $('<summary>').text(
+      `Hidden perspectives & secrets (${review.spoiler.length}) - open to reveal potential spoilers`,
+    );
+    $spoiler.append($summary);
+    const $list = $('<ul class="sm_search_list">');
+    for (const { mem, score } of review.spoiler) {
+      const $item = $('<li class="sm_search_item">');
+      $item.append(
+        $('<span>').addClass(`sm_search_badge sm_type_${recordKindLabel(mem)}`).text(recordKindLabel(mem)),
+        $('<span class="sm_search_content">').text(String(mem.content || '')),
+        $('<span class="sm_search_score">').text(`${Math.round((score ?? 0) * 100)}%`),
+      );
+      $list.append($item);
+    }
+    $spoiler.append($list);
+    card.append($spoiler);
+  }
+}
+
+/**
+ * Displays a read-only memory review panel for a query or challenge.
+ * Query mode lists matching records. Challenge mode adds an evidence
+ * classification banner and never judges the claim true or false.
+ * @param {object} review - Review model from memory-review.js.
+ */
+export function showMemoryReview(review) {
   $('#sm_search_overlay').remove();
 
   // Use a <dialog> element so it renders in the browser's top layer, immune
@@ -949,29 +1015,22 @@ export function showSearchResults(query, results) {
   dialog.id = 'sm_search_overlay';
 
   const card = $('<div class="sm_search_card">');
-  card.append($('<h3>Memory Search Results</h3>'));
+  const isChallenge = review.mode === 'challenge';
+  card.append($('<h3>').text(isChallenge ? 'Memory Challenge' : 'Memory Query'));
   card.append(
     $('<p class="sm_search_query_label">').text(
-      `Query: "${query}" - ${results.length} result${results.length === 1 ? '' : 's'}`,
+      `${isChallenge ? 'Claim' : 'Query'}: "${review.query}" - ${review.results.length} result${review.results.length === 1 ? '' : 's'}`,
     ),
   );
 
-  if (results.length === 0) {
-    card.append($('<p>').text('No matching memories found.'));
-  } else {
-    const $list = $('<ul class="sm_search_list">');
-    for (const { mem, score } of results) {
-      const $item = $('<li class="sm_search_item">');
-      $item.append(
-        $('<span class="sm_search_badge sm_search_badge_tier">').text(mem._tier),
-        $('<span>').addClass(`sm_search_badge sm_type_${mem.type}`).text(mem.type),
-        $('<span class="sm_search_content">').text(String(mem.content || '')),
-        $('<span class="sm_search_score">').text(`${Math.round(score * 100)}%`),
-      );
-      $list.append($item);
-    }
-    card.append($list);
+  if (isChallenge && review.challenge) {
+    const $banner = $('<div>').addClass(`sm_challenge_banner sm_challenge_${review.challenge.status}`);
+    $banner.append($('<strong>').text(`${review.challenge.label}. `));
+    $banner.append($('<span>').text(review.challenge.detail));
+    card.append($banner);
   }
+
+  appendMemoryReviewRows(card, review);
 
   const $footer = $('<div class="sm_search_footer">');
   const $dismiss = $('<button>Dismiss</button>').addClass('menu_button');
@@ -988,6 +1047,16 @@ export function showSearchResults(query, results) {
   $(dialog).append(card);
   document.body.appendChild(dialog);
   dialog.showModal();
+}
+
+/**
+ * Displays memory search results in a dismissible modal overlay.
+ * Kept as a thin wrapper around the shared memory review panel.
+ * @param {string} query - The original search query.
+ * @param {Array<{mem: Object, score: number}>} results - Top-K scored memories, sorted descending.
+ */
+export function showSearchResults(query, results) {
+  showMemoryReview(buildMemoryReview({ mode: 'query', query, results }));
 }
 
 /**
