@@ -3403,7 +3403,20 @@ async function runMemoryReview(mode, args, queryText) {
   try {
     return await executeMemoryReview(reviewMode, args, q, owner);
   } finally {
-    if (memoryReviewOwner === owner) memoryReviewOwner = null;
+    if (memoryReviewOwner === owner) {
+      memoryReviewOwner = null;
+      // The executor may return early (cancelled by chat change, unavailable
+      // product memory, or a failed identity match) before publishing a
+      // terminal state. Never leave the console stuck busy: publish a terminal
+      // state so the controls restore.
+      const status = document.getElementById('sm_review_status');
+      const phase = status?.dataset?.phase ?? null;
+      if (phase === 'acknowledged' || phase === 'in-progress') {
+        setMemoryReviewStatus(
+          memoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.CANCELLED }),
+        );
+      }
+    }
   }
 }
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.2] - 2026-08-26
+
+### Fixed
+
+- **Query/Challenge no longer hang when a review is rejected early.** The review executor could return before publishing a terminal state (e.g. when the chat was quarantined after a branch rollback, product memory was unavailable, or the chat identity was missing). The console then stayed stuck on "received" with both controls disabled forever. The wrapper now guarantees a terminal cancelled state and restores the controls whenever the executor returned early, while still never repainting a newer chat.
+
 ## [1.11.1] - 2026-08-26
 
 ### Changed

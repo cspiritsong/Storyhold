@@ -61,6 +61,18 @@ test('review errors explain that the query did not change memory', () => {
   assert.match(failed.message, /no memory was changed/i);
 });
 
+test('cancelled reviews are terminal and report that no memory changed', () => {
+  const cancelled = memoryReviewProgress({
+    mode: 'challenge',
+    phase: MEMORY_REVIEW_PHASES.CANCELLED,
+  });
+
+  assert.equal(cancelled.busy, false);
+  assert.equal(cancelled.severity, 'info');
+  assert.match(cancelled.message, /cancelled/i);
+  assert.match(cancelled.message, /no memory was changed/i);
+});
+
 test('empty completed queries still report an explicit outcome', () => {
   const completed = memoryReviewProgress({
     mode: 'query',

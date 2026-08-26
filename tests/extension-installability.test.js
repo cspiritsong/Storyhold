@@ -130,6 +130,26 @@ test('query and challenge expose acknowledgement, progress, and outcome states',
   assert.match(uiSource, /No memory was changed/);
 });
 
+test('memory review always reaches a terminal state after an early return', async () => {
+  const source = await readFile(resolve(root, 'index.js'), 'utf8');
+  const start = source.indexOf('async function runMemoryReview(mode, args, queryText)');
+  const end = source.indexOf('jQuery(async function ()', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+
+  // The wrapper owns the busy lifecycle: its finally must clear ownership and,
+  // when the executor returned before publishing a terminal state, restore the
+  // controls rather than leaving the console stuck busy.
+  assert.match(block, /try \{/);
+  assert.match(block, /finally \{/);
+  assert.match(block, /if \(memoryReviewOwner === owner\) \{/);
+  assert.match(block, /memoryReviewOwner = null;/);
+  assert.match(block, /MEMORY_REVIEW_PHASES\.CANCELLED/);
+  assert.match(block, /'acknowledged'/);
+  assert.match(block, /'in-progress'/);
+  assert.match(block, /setMemoryReviewStatus\(/);
+});
+
 
 test('product catch-up exposes progress and canonical pipeline messaging', async () => {
   const [indexSource, settingsHtml, unifiedSource] = await Promise.all([
