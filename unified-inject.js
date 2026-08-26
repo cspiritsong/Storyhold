@@ -194,7 +194,7 @@ export function injectUnified({ respondingCharacter = null } = {}) {
       ? meta.structured_records
       : [];
     const responder = respondingCharacter ?? context.name2 ?? context.characterName ?? null;
-    const branchUid = lineage?.epoch_id ?? lineage?.epochId ?? meta.lineage?.epoch_id ?? chatUid;
+    const branchUid = chatUid;
     const scopedStructuredRecords = filterRetrievalRecords(structuredRecords, {
       chatUid,
       branchUid,

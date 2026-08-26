@@ -44,7 +44,7 @@ test('memory actions say exactly what they read or change', async () => {
     sm_rescan_chat: 'Scan This Chat Again',
     sm_scan_duplicates: 'Find & Remove Duplicate Memories',
     sm_clear_chat_context: 'Delete All Memory for This Chat',
-    sm_rebuild_branch: "Rebuild Memory for This Branch",
+    sm_rebuild_branch: 'Rebuild Memory for This Chat',
     sm_extract_now: 'Scan Recent Messages for This Character',
     sm_clear_memories: "Delete This Character's Long-term Memory",
     sm_extract_session_now: 'Save Recent Chat Details',
@@ -75,7 +75,7 @@ test('memory actions say exactly what they read or change', async () => {
   const actionStart = html.indexOf('<button id="sm_catch_up"');
   const actionEnd = html.indexOf('<!-- Chat memory status and read-only previews -->', actionStart);
   const actionBlock = html.slice(actionStart, actionEnd);
-  assert.doesNotMatch(actionBlock, /canonical|projection|namespace|lineage|vector/i);
+  assert.doesNotMatch(actionBlock, /canonical|projection|namespace|lineage/i);
   assert.match(actionBlock, /whole current chat/i);
   assert.match(actionBlock, /selected character/i);
   assert.match(actionBlock, /chat text/i);

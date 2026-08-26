@@ -23,6 +23,7 @@ import {
   relinkNamespace,
   retagChatMetadata,
   stableChatIdentity,
+  namespaceOwnerMatches,
   unlinkNamespace,
 } from './rename-recovery.js';
 
@@ -81,14 +82,37 @@ export async function ensureStableChatIdentity() {
     meta.lineage?.chat_id,
     ...(meta.legacy_chat_ids ?? []),
   ];
-  const identity = stableChatIdentity(meta, chatId, fingerprint, generateMemoryId);
+  let identity = stableChatIdentity(meta, chatId, fingerprint, generateMemoryId);
   const previousChatId = meta.chat_id ?? null;
   const store = currentNamespaceStore(context, true);
   let settingsChanged = false;
   let metadataChanged = false;
+  const currentKey = String(chatId);
+  let targetKey = String(identity.chat_uid);
+  const aliases = mergeAliases(meta, legacySeeds);
+
+  if (
+    store?.[targetKey] &&
+    !namespaceOwnerMatches(store[targetKey], {
+      chatUid: targetKey,
+      chatId: currentKey,
+      aliases,
+    })
+  ) {
+    const previousChatUid = targetKey;
+    const replacementUid = generateMemoryId();
+    identity = { ...identity, chat_uid: replacementUid, created: true };
+    targetKey = String(replacementUid);
+    meta.previous_chat_uid = previousChatUid;
+    metadataChanged = true;
+  }
 
   if (meta.chat_uid !== identity.chat_uid) {
     meta.chat_uid = identity.chat_uid;
+    metadataChanged = true;
+  }
+  if (meta.root_chat_uid !== meta.chat_uid) {
+    meta.root_chat_uid = meta.chat_uid;
     metadataChanged = true;
   }
   if (meta.chat_id !== identity.chat_id) {
@@ -100,7 +124,6 @@ export async function ensureStableChatIdentity() {
     meta.transcript_fingerprint = fingerprint;
     metadataChanged = true;
   }
-  const aliases = mergeAliases(meta, legacySeeds);
   if (JSON.stringify(meta.chat_aliases ?? []) !== JSON.stringify(aliases)) {
     meta.chat_aliases = aliases;
     metadataChanged = true;
@@ -142,51 +165,67 @@ export async function ensureStableChatIdentity() {
       }
     }
   }
+
+  const priorLineage = meta.lineage;
+  const independentLineage = {
+    status: LINEAGE_STATUS.STANDALONE,
+    quarantined: false,
+    chat_id: String(chatId),
+    chat_uid: String(meta.chat_uid),
+    method: 'independent-chat-tree',
+  };
+  if (
+    priorLineage &&
+    (priorLineage.status !== LINEAGE_STATUS.STANDALONE ||
+      priorLineage.quarantined === true ||
+      priorLineage.parent_chat_id != null)
+  ) {
+    meta.legacy_lineage = priorLineage;
+  }
+  if (JSON.stringify(meta.lineage ?? {}) !== JSON.stringify(independentLineage)) {
+    meta.lineage = independentLineage;
+    metadataChanged = true;
+  }
   context.chatMetadata[META_KEY] = meta;
 
   if (store) {
-    const targetKey = String(identity.chat_uid);
-    const currentKey = String(chatId);
     if (!store[targetKey] && store[currentKey]) {
-      if (store[currentKey]?.transcript_fingerprint === fingerprint) {
+      const legacyNamespace = store[currentKey];
+      if (
+        namespaceOwnerMatches(legacyNamespace, {
+          chatUid: identity.chat_uid,
+          chatId: currentKey,
+          aliases,
+        })
+      ) {
         const moved = relinkNamespace(store, currentKey, targetKey, {
           chat_id: chatId,
           transcript_fingerprint: fingerprint,
           relinked_at: Date.now(),
         });
         settingsChanged = moved.ok || settingsChanged;
-      } else {
-        // An unproven filename namespace stays visible to the audit/recovery path.
       }
     } else if (store[targetKey]) {
       const target = store[targetKey];
-      const targetChatId = target.chat_id == null ? null : String(target.chat_id);
-      const targetOwnerMatches =
-        target.chat_uid === targetKey &&
-        (targetChatId === currentKey || aliases.includes(targetChatId));
-      const targetFingerprintMatches =
-        typeof target.transcript_fingerprint === 'string' &&
-        target.transcript_fingerprint.trim() !== '' &&
-        target.transcript_fingerprint === fingerprint;
-      if (!targetOwnerMatches) {
-        meta.lineage = {
-          ...(meta.lineage ?? {}),
-          status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
-          quarantined: true,
-          reason: 'stable-namespace-owner-mismatch',
-        };
-        metadataChanged = true;
-      } else if (!targetFingerprintMatches) {
-        meta.lineage = {
-          ...(meta.lineage ?? {}),
-          status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
-          quarantined: true,
-          reason: 'stable-namespace-fingerprint-mismatch',
-        };
-        metadataChanged = true;
-      } else if (target.chat_id !== currentKey) {
-        target.chat_id = currentKey;
-        settingsChanged = true;
+      if (
+        namespaceOwnerMatches(target, {
+          chatUid: targetKey,
+          chatId: currentKey,
+          aliases,
+        })
+      ) {
+        if (target.chat_uid !== targetKey) {
+          target.chat_uid = targetKey;
+          settingsChanged = true;
+        }
+        if (target.chat_id !== currentKey) {
+          target.chat_id = currentKey;
+          settingsChanged = true;
+        }
+        if (target.transcript_fingerprint !== fingerprint) {
+          target.transcript_fingerprint = fingerprint;
+          settingsChanged = true;
+        }
       }
     }
   }

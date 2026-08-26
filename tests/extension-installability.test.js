@@ -176,14 +176,43 @@ test('challenge adjudicates claims against records and raw source excerpts', asy
   assert.match(uiSource, /Challenge blocked\./);
 });
 
-test('branch recovery accepts snake_case parent metadata from stored lineage', async () => {
+test('runtime loads every stable chat as its own tree without cross-file inheritance', async () => {
+  const source = await readFile(resolve(root, 'index.js'), 'utf8');
+  const start = source.indexOf('async function onChatChangedImpl()');
+  const end = source.indexOf('\n  // Detect an in-file branch', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+
+  assert.match(source, /classifyIndependentChatTree/);
+  assert.match(block, /const lineage = classifyIndependentChatTree\(/);
+  assert.doesNotMatch(block, /verifyAndInheritCurrentBranch/);
+  assert.doesNotMatch(block, /lineage\.quarantined && getContext\(\)\.chatMetadata\?\.main_chat/);
+  assert.match(block, /setCurrentLineage\(lineage\)/);
+});
+
+test('active identity refresh does not quarantine a chat when its transcript grows', async () => {
+  const source = await readFile(resolve(root, 'rename-ops.js'), 'utf8');
+  const start = source.indexOf('export async function ensureStableChatIdentity');
+  const end = source.indexOf('\n/**\n * Read-only metadata audit', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+
+  assert.match(block, /namespaceOwnerMatches/);
+  assert.match(block, /target\.transcript_fingerprint !== fingerprint/);
+  assert.match(block, /target\.transcript_fingerprint = fingerprint/);
+  assert.match(block, /meta\.root_chat_uid !== meta\.chat_uid/);
+  assert.match(block, /meta\.lineage = independentLineage/);
+});
+
+test('catch-up no longer blocks an identified chat because another chat lineage is stale', async () => {
   const source = await readFile(resolve(root, 'settings.js'), 'utf8');
-  assert.match(source, /function branchParentChatId\(lineage = ctrl\.lineageState\)/);
-  assert.match(source, /lineage\?\.parentChatId/);
-  assert.match(source, /lineage\?\.parent_chat_id/);
-  assert.match(source, /getContext\(\)\.chatMetadata\?\.main_chat/);
-  assert.match(source, /const parentChatId = branchParentChatId\(lineage\)/);
-  assert.match(source, /Boolean\(branchParentChatId\(lineage\)\)/);
+  const start = source.indexOf('async function runCatchUpFlow');
+  const end = source.indexOf('\n    const operationRunning', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+
+  assert.doesNotMatch(block, /if \(ctrl\.lineageQuarantined\)/);
+  assert.match(block, /Scan|Memorize|catch-up/i);
 });
 
 
@@ -243,8 +272,8 @@ test('product runtime guards automatic writes and legacy prompt paths', async ()
   assert.match(source, /function onChatChanged\([^)]*\) \{[\s\S]*setCurrentLineage\(null\)[\s\S]*clearAllInjections/);
   assert.match(settings, /if \(isProductMode\(\)\) \{[\s\S]*maybeInjectUnified\(\);/);
   assert.match(settings, /single_extension_mode[\s\S]*injectSummary/);
-  assert.match(settings, /REBUILD THIS BRANCH[\s\S]*isFreshStart\(\)/);
-  assert.match(settings, /smart_memory:lineage_changed\.storyholdRebuild/);
+  assert.match(settings, /REBUILD THIS CHAT[^\n]*MEMORY[\s\S]*isFreshStart\(\)/);
+  assert.match(settings, /buildIndependentChatTreeMetadata/);
   assert.match(settings, /productClearBlocked/);
 });
 
@@ -264,7 +293,7 @@ test('swipe and delete pruning pass live control and generation guards', async (
     assert.match(block, /setCurrentLineage\(null\)/);
     assert.match(block, /smart_memory:lineage_changed/);
     assert.match(block, /allowUnclassifiedPrune:\s*true/);
-    const reclassifyIndex = block.indexOf('const reclassified = classifyChatLineage');
+    const reclassifyIndex = block.indexOf('const reclassified = classifyIndependentChatTree');
     const injectIndex = block.indexOf('maybeInjectUnified');
     assert.ok(reclassifyIndex >= 0 && injectIndex > reclassifyIndex);
   }
@@ -276,7 +305,7 @@ test('swipe and delete reclassify lineage and re-inject tiers in compatibility m
   const swipeStart = source.indexOf('event_types.MESSAGE_SWIPED');
   const swipeEnd = source.indexOf('event_types.MESSAGE_DELETED', swipeStart);
   const swipe = source.slice(swipeStart, swipeEnd);
-  assert.match(swipe, /classifyChatLineage\(/);
+  assert.match(swipe, /classifyIndependentChatTree\(/);
   assert.match(swipe, /reinjectCompatibilityTiers\(/);
   assert.match(swipe, /single_extension_mode[\s\S]*reinjectCompatibilityTiers\(/);
   assert.doesNotMatch(
@@ -287,7 +316,7 @@ test('swipe and delete reclassify lineage and re-inject tiers in compatibility m
   const deleteEnd = source.indexOf('// ---- Slash commands', deleteStart);
   assert.ok(deleteEnd > deleteStart);
   const deleted = source.slice(deleteStart, deleteEnd);
-  assert.match(deleted, /classifyChatLineage\(/);
+  assert.match(deleted, /classifyIndependentChatTree\(/);
   assert.match(deleted, /reinjectCompatibilityTiers\(/);
 });
 test('README explains derivative origin, credits, and independent changes', async () => {
@@ -881,31 +910,29 @@ test('deletion resets the swipe length baseline so the next message is processed
   assert.match(block, /lastKnownChatLength = context\.chat\?\.length \?\? 0/);
 });
 
-test('automatic namespace relink requires an exact stored transcript fingerprint', async () => {
+test('automatic namespace adoption uses current-chat ownership rather than transcript age', async () => {
   const source = await readFile(resolve(root, 'rename-ops.js'), 'utf8');
   const start = source.indexOf('if (!store[targetKey] && store[currentKey])');
   const end = source.indexOf('} else if (store[targetKey])', start);
   assert.ok(start >= 0);
   assert.ok(end > start);
   const block = source.slice(start, end);
-  assert.match(block, /store\[currentKey\]\?\.transcript_fingerprint === fingerprint/);
+  assert.match(block, /namespaceOwnerMatches/);
   assert.match(block, /relinkNamespace\(/);
+  assert.doesNotMatch(block, /transcript_fingerprint === fingerprint/);
 });
 
-test('stable namespace fingerprint mismatch fails closed instead of being overwritten', async () => {
+test('owned namespace fingerprint changes are refreshed instead of quarantining the chat', async () => {
   const source = await readFile(resolve(root, 'rename-ops.js'), 'utf8');
   const start = source.indexOf('} else if (store[targetKey])');
   const end = source.indexOf('\n  }\n\n  if (metadataChanged)', start);
   assert.ok(start >= 0);
   assert.ok(end > start);
   const block = source.slice(start, end);
-  assert.match(block, /target\.chat_uid === targetKey/);
-  assert.match(block, /targetChatId === currentKey/);
-  assert.match(block, /targetOwnerMatches/);
-  assert.match(block, /if \(!targetOwnerMatches\)[\s\S]*meta\.lineage[\s\S]*quarantined: true/);
-  assert.match(block, /else if \(!targetFingerprintMatches\)[\s\S]*meta\.lineage[\s\S]*quarantined: true/);
-  assert.doesNotMatch(block, /target\.transcript_fingerprint = fingerprint/);
-  assert.match(block, /targetFingerprintMatches/);
+  assert.match(block, /namespaceOwnerMatches/);
+  assert.match(block, /target\.transcript_fingerprint = fingerprint/);
+  assert.doesNotMatch(block, /stable-namespace-fingerprint-mismatch/);
+  assert.doesNotMatch(block, /quarantined: true/);
 });
 
 test('stable identity quarantines a narrative with foreign scope before retagging', async () => {
@@ -933,10 +960,10 @@ test('stable identity requires current branch proof before retagging narrative',
   assert.match(block, /requireBranch: currentBranchUid != null/);
 });
 
-test('branch rebuild uses a pinned scope and abort guards across legacy clears', async () => {
+test('chat rebuild uses a pinned scope and abort guards across legacy clears', async () => {
   const source = await readFile(resolve(root, 'settings.js'), 'utf8');
   const start = source.indexOf('pinChatScope(stableChatUid ?? chatId)', source.indexOf("$('#sm_rebuild_branch')"));
-  const end = source.indexOf('const epochId = generateMemoryId();', start);
+  const end = source.indexOf('context.chatMetadata[META_KEY] = buildIndependentChatTreeMetadata', start);
   assert.ok(start >= 0);
   assert.ok(end > start);
   const block = source.slice(start, end);
@@ -1321,6 +1348,9 @@ test('Clear Chat Memory guards apply outside Product mode and recheck after the 
   assert.ok(end > start, 'clear handler end must exist');
   const block = source.slice(start, end);
   assert.match(block, /const productClearBlocked = \(\) =>/);
+  assert.match(block, /!clearChatId/);
+  assert.match(block, /!clearMetadata/);
+  assert.doesNotMatch(block, /ctrl\.lineageQuarantined/);
   assert.match(block, /getCurrentChatId\(\) !== clearChatId/);
   assert.match(block, /ctrl\.chatGeneration !== clearGeneration/);
   assert.match(block, /getContext\(\)\.chatMetadata !== clearMetadata/);
@@ -1390,10 +1420,10 @@ test('swipe and delete reclassify lineage before the Fresh Start guard', async (
     ['delete', deleteStart, source.indexOf('onChatChanged();', deleteStart)],
   ]) {
     const block = source.slice(start, end);
-    assert.ok(block.includes('classifyChatLineage'), `${label} handler must reclassify`);
+    assert.ok(block.includes('classifyIndependentChatTree'), `${label} handler must reclassify`);
     const thenBlocks = block.split('.then(() => {');
     for (const thenBlock of thenBlocks.slice(1)) {
-      const classify = thenBlock.indexOf('classifyChatLineage');
+      const classify = thenBlock.indexOf('classifyIndependentChatTree');
       const freshStart = thenBlock.indexOf('isFreshStart()');
       assert.ok(classify >= 0, `${label} then block must classify lineage`);
       assert.ok(freshStart < 0 || classify < freshStart, `${label} must classify before its Fresh Start guard`);

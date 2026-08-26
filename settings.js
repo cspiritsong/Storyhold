@@ -140,7 +140,7 @@ import {
 } from './state-ledger.js';
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { updateLegacySourceProof, watermarkFromChat } from './branch-aware.js';
-import { buildRebuiltLineageMetadata, LINEAGE_STATUS } from './lineage.js';
+import { buildIndependentChatTreeMetadata } from './lineage.js';
 import { currentLineageRecordStamp, isCurrentLineageQuarantined } from './lineage-runtime.js';
 import { NAMESPACE_STATUS } from './rename-recovery.js';
 import {
@@ -933,22 +933,8 @@ export function bindSettingsUI(ctrl) {
     return false;
   }
 
-  function branchParentChatId(lineage = ctrl.lineageState) {
-    const parent =
-      lineage?.parentChatId ??
-      lineage?.parent_chat_id ??
-      getContext().chatMetadata?.main_chat ??
-      null;
-    const normalized = parent == null ? '' : String(parent).trim();
-    return normalized || null;
-  }
-
   function updateBranchRebuildButton() {
-    const lineage = ctrl.lineageState;
-    const show =
-      Boolean(branchParentChatId(lineage)) &&
-      lineage.status !== LINEAGE_STATUS.STANDALONE &&
-      lineage.status !== LINEAGE_STATUS.REBUILT;
+    const show = Boolean(getCurrentChatId() && getContext().chatMetadata);
     $('#sm_rebuild_branch').toggle(show);
   }
 
@@ -3399,7 +3385,7 @@ export function bindSettingsUI(ctrl) {
       isFreshStart() ||
       isCurrentLineageQuarantined()
     ) {
-      setStatusMessage('Recap unavailable while Storyhold is disabled, read-only, or unverified.');
+      setStatusMessage('Recap unavailable while Storyhold is disabled, read-only, or has no stable chat identity yet.');
       $(this).prop('disabled', false);
       return;
     }
@@ -3439,16 +3425,16 @@ export function bindSettingsUI(ctrl) {
 
   $('#sm_rebuild_branch').on('click', async function () {
     if (extension_settings[MODULE_NAME].enabled === false) {
-      setStatusMessage('Branch rebuild is unavailable because Storyhold is disabled.');
-      toastr.info('Enable Storyhold before rebuilding a branch.', 'Storyhold', {
+      setStatusMessage('Chat memory rebuild is unavailable because Storyhold is disabled.');
+      toastr.info('Enable Storyhold before rebuilding chat memory.', 'Storyhold', {
         timeOut: 5000,
         positionClass: 'toast-bottom-right',
       });
       return;
     }
     if (isFreshStart()) {
-      setStatusMessage('Branch rebuild is unavailable while read-only mode is active.');
-      toastr.info('Turn off read-only mode before rebuilding a branch.', 'Storyhold', {
+      setStatusMessage('Chat memory rebuild is unavailable while read-only mode is active.');
+      toastr.info('Turn off read-only mode before rebuilding chat memory.', 'Storyhold', {
         timeOut: 5000,
         positionClass: 'toast-bottom-right',
       });
@@ -3476,8 +3462,6 @@ export function bindSettingsUI(ctrl) {
       ? [...priorSmartMemory.chat_aliases]
       : [];
     const operationGeneration = ctrl.chatGeneration;
-    const lineage = ctrl.lineageState;
-    const parentChatId = branchParentChatId(lineage);
     const rebuildMustStop = () =>
       extension_settings[MODULE_NAME].enabled === false ||
       !isProductMode() && productControlReserved ||
@@ -3487,8 +3471,8 @@ export function bindSettingsUI(ctrl) {
       getContext().chatMetadata !== context.chatMetadata ||
       context.chatMetadata?.[META_KEY]?.chat_uid !== stableChatUid ||
       ctrl.chatGeneration !== operationGeneration;
-    if (!chatId || !lineage?.parentChatId) {
-      toastr.warning('No cross-file branch is active.', 'Storyhold', { timeOut: 3000 });
+    if (!chatId || !context.chatMetadata || !stableChatUid) {
+      toastr.warning('No current chat memory tree is available.', 'Storyhold', { timeOut: 3000 });
       releaseProductControl();
       return;
     }
@@ -3496,7 +3480,7 @@ export function bindSettingsUI(ctrl) {
     let confirmed;
     try {
       confirmed = await callGenericPopup(
-        'REBUILD THIS BRANCH\n\nThis clears only this branch\'s derived Storyhold and rebuilds it from the raw transcript.\n\nWILL SURVIVE: this branch\'s chat transcript, the parent chat, all other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
+        'REBUILD THIS CHAT\'S MEMORY\n\nThis clears only this chat\'s derived Storyhold memory and scans the current raw transcript again.\n\nWILL SURVIVE: the raw chat transcript, the character card, other chats, and native Vector Storage.\n\nThis may use the configured memory model. Continue?',
         POPUP_TYPE.CONFIRM,
       );
     } catch (error) {
@@ -3563,15 +3547,12 @@ export function bindSettingsUI(ctrl) {
         }
       }
 
-    const epochId = generateMemoryId();
-    context.chatMetadata[META_KEY] = buildRebuiltLineageMetadata({
+    context.chatMetadata[META_KEY] = buildIndependentChatTreeMetadata({
       priorSmartMemory,
       chatId,
-      parentChatId,
       chatUid: stableChatUid,
       aliases: stableChatAliases,
       schemaVersion: SCHEMA_VERSION,
-      epochId,
     });
     try {
       await context.saveMetadata();
@@ -3585,10 +3566,10 @@ export function bindSettingsUI(ctrl) {
     }
     saveSettingsDebounced();
     ctrl.clearAllInjections();
-    setStatusMessage('Branch reset. Rebuilding from raw chat...');
+    setStatusMessage('Chat memory reset. Scanning the current chat...');
 
-    // Wait for the debounced chat refresh to publish a rebuilt lineage before
-    // starting catch-up. The event gate avoids guessing at a fixed delay.
+    // Wait for the chat refresh to publish the independent tree before starting
+    // the scan. The event gate avoids guessing at a fixed delay.
     const rebuildEvent = 'smart_memory:lineage_changed.storyholdRebuild';
     const rebuildCancelEvent = 'smart_memory:rebuild_cancelled.storyholdRebuild';
     const rebuildFailedEvent = 'smart_memory:rebuild_failed.storyholdRebuild';
@@ -3619,8 +3600,8 @@ export function bindSettingsUI(ctrl) {
       }
       if (
         ctrl.lineageQuarantined ||
-        activeLineage?.status !== LINEAGE_STATUS.REBUILT ||
-        activeLineage?.epoch_id !== epochId
+        activeLineage?.status !== 'standalone' ||
+        activeLineage?.chatUid !== stableChatUid
       ) {
         cleanupRebuildWait();
         return;
@@ -3653,14 +3634,6 @@ export function bindSettingsUI(ctrl) {
         timeOut: 5000,
         positionClass: 'toast-bottom-right',
       });
-      return;
-    }
-    if (ctrl.lineageQuarantined) {
-      toastr.warning(
-        'This branch has unverified memory lineage. Rebuild or verify the branch before catch-up.',
-        'Storyhold',
-        { timeOut: 5000 },
-      );
       return;
     }
     const operationRunning = isProductMode()
@@ -4320,7 +4293,7 @@ export function bindSettingsUI(ctrl) {
     if (blockLegacyProductAction('Legacy duplicate scanning')) return;
     if (ctrl.lineageQuarantined) {
       toastr.warning(
-        'This branch has unverified memory lineage. Verify or rebuild the branch before scanning.',
+        'Storyhold needs a stable chat identity before scanning. Run Scan & Memorize This Chat first.',
         'Storyhold',
         { timeOut: 5000 },
       );
@@ -4406,15 +4379,16 @@ export function bindSettingsUI(ctrl) {
     const clearMetadata = getContext().chatMetadata;
     const productClearBlocked = () =>
       extension_settings[MODULE_NAME].enabled === false ||
-      ctrl.lineageQuarantined ||
+      !clearChatId ||
+      !clearMetadata ||
       getCurrentChatId() !== clearChatId ||
       ctrl.chatGeneration !== clearGeneration ||
       getContext().chatMetadata !== clearMetadata ||
       isFreshStart();
     const clearStillCurrent = () => !productClearBlocked();
     if (productClearBlocked()) {
-      setStatusMessage('Chat memory clear is unavailable while Storyhold is disabled or the chat is unverified.');
-      toastr.info('Verify this chat lineage before clearing Storyhold memory.', 'Storyhold', {
+      setStatusMessage('Chat memory clear is unavailable because Storyhold is disabled, read-only mode is active, or the active chat changed.');
+      toastr.info('Open a current chat and turn off read-only mode before clearing Storyhold memory.', 'Storyhold', {
         timeOut: 5000,
         positionClass: 'toast-bottom-right',
       });

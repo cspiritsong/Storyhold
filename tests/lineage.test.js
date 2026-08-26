@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   LINEAGE_STATUS,
   buildRebuiltLineageMetadata,
+  buildIndependentChatTreeMetadata,
   buildVerifiedPrefixLineage,
   canInheritRecord,
   classifyChatLineage,
+  classifyIndependentChatTree,
   filterDerivedRecordsForChat,
   findCommonChatPrefix,
   inheritDerivedRecords,
@@ -154,6 +156,52 @@ test('standalone chat is trusted without a parent lineage', () => {
     hasRealMesIds: true,
     chatUid: 'uid-30',
   });
+});
+
+test('independent chat trees ignore parent and stale lineage metadata', () => {
+  const result = classifyIndependentChatTree({
+    chatId: 'branch-31',
+    chatUid: 'uid-branch-31',
+    parentChatId: 'parent-chat',
+    chat: [message(1), message(2)],
+    lineage: {
+      status: LINEAGE_STATUS.UNVERIFIED_BRANCH,
+      quarantined: true,
+      reason: 'stable-namespace-fingerprint-mismatch',
+      parent_chat_id: 'parent-chat',
+    },
+  });
+
+  assert.equal(result.status, LINEAGE_STATUS.STANDALONE);
+  assert.equal(result.quarantined, false);
+  assert.equal(result.parentChatId, null);
+  assert.equal(result.chatUid, 'uid-branch-31');
+  assert.equal(result.hasRealMesIds, true);
+});
+
+test('independent chat-tree rebuild metadata clears derived state without a parent', () => {
+  const rebuilt = buildIndependentChatTreeMetadata({
+    priorSmartMemory: {
+      chat_uid: 'old-uid',
+      root_chat_uid: 'parent-uid',
+      chat_aliases: ['old-name'],
+      structured_records: [{ id: 'foreign' }],
+      lineage: { status: LINEAGE_STATUS.UNVERIFIED_BRANCH, parent_chat_id: 'parent-chat' },
+    },
+    chatId: 'current-name',
+    chatUid: 'current-uid',
+    aliases: ['prior-name'],
+    schemaVersion: 9,
+  });
+
+  assert.equal(rebuilt.chat_uid, 'current-uid');
+  assert.equal(rebuilt.root_chat_uid, 'current-uid');
+  assert.deepEqual(rebuilt.chat_aliases, ['old-name', 'prior-name']);
+  assert.deepEqual(rebuilt.structured_records, []);
+  assert.equal(rebuilt.lineage.status, LINEAGE_STATUS.STANDALONE);
+  assert.equal(rebuilt.lineage.quarantined, false);
+  assert.equal(rebuilt.lineage.parent_chat_id, undefined);
+  assert.equal(rebuilt.lineage.method, 'independent-chat-tree');
 });
 
 test('missing stable chat uid is quarantined instead of trusting the filename', () => {

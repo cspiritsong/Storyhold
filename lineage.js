@@ -619,6 +619,76 @@ export function buildRebuiltLineageMetadata({
   };
 }
 
+export function buildIndependentChatTreeMetadata({
+  priorSmartMemory = {},
+  chatId = null,
+  chatUid = null,
+  aliases = [],
+  schemaVersion = priorSmartMemory.schema_version ?? null,
+} = {}) {
+  const normalizedChatId = normalizeChatId(chatId);
+  const normalizedChatUid = normalizeChatId(chatUid ?? priorSmartMemory.chat_uid);
+  const chatAliases = [
+    ...(Array.isArray(priorSmartMemory.chat_aliases) ? priorSmartMemory.chat_aliases : []),
+    ...(Array.isArray(aliases) ? aliases : []),
+  ]
+    .map(normalizeChatId)
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const lineage = {
+    status: LINEAGE_STATUS.STANDALONE,
+    quarantined: false,
+    chat_id: normalizedChatId,
+    chat_uid: normalizedChatUid,
+    method: 'independent-chat-tree',
+  };
+  return {
+    schema_version: schemaVersion,
+    ...(normalizedChatUid != null ? { chat_uid: normalizedChatUid, root_chat_uid: normalizedChatUid } : {}),
+    ...(chatAliases.length > 0 ? { chat_aliases: chatAliases } : {}),
+    lastExtractCutoff: 0,
+    lastInjectionRefresh: 0,
+    product_cursor: null,
+    narrative: null,
+    structured_records: [],
+    ingest_windows: {},
+    product_status: null,
+    lineage,
+  };
+}
+
+export function classifyIndependentChatTree({
+  chatId,
+  chatUid = null,
+  legacyChatIds = [],
+  chat,
+} = {}) {
+  const normalizedChatId = normalizeChatId(chatId);
+  const normalizedChatUid = normalizeChatId(chatUid);
+  const normalizedLegacyChatIds = [...new Set(legacyChatIds.map(normalizeChatId).filter(Boolean))];
+  const hasRealMesIds = chatHasRealMesIds(chat);
+  if (normalizedChatId === null || normalizedChatUid === null) {
+    return {
+      status: LINEAGE_STATUS.MISSING_IDENTITY,
+      quarantined: true,
+      chatId: normalizedChatId,
+      parentChatId: null,
+      hasRealMesIds,
+      ...(normalizedChatUid !== null ? { chatUid: normalizedChatUid } : {}),
+      ...(normalizedLegacyChatIds.length > 0 ? { legacyChatIds: normalizedLegacyChatIds } : {}),
+    };
+  }
+  return {
+    status: LINEAGE_STATUS.STANDALONE,
+    quarantined: false,
+    chatId: normalizedChatId,
+    parentChatId: null,
+    hasRealMesIds,
+    chatUid: normalizedChatUid,
+    ...(normalizedLegacyChatIds.length > 0 ? { legacyChatIds: normalizedLegacyChatIds } : {}),
+  };
+}
+
 /**
  * Classifies whether derived memory may be trusted for the current chat.
  *

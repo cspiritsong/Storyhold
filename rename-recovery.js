@@ -45,6 +45,33 @@ export function stableChatIdentity(meta = {}, chatId = null, fingerprint = null,
   };
 }
 
+/**
+ * Returns whether a persisted namespace can belong to the current chat. A
+ * missing namespace UID is acceptable only when its chat filename is current
+ * (legacy namespace migration); a foreign explicit UID or filename is not.
+ */
+export function namespaceOwnerMatches(
+  namespace = {},
+  { chatUid = null, chatId = null, aliases = [] } = {},
+) {
+  const expectedUid = chatUid == null ? null : String(chatUid);
+  const expectedChatId = chatId == null ? null : String(chatId);
+  if (!expectedUid || !expectedChatId) return false;
+
+  const namespaceUid = namespace?.chat_uid == null ? null : String(namespace.chat_uid);
+  if (namespaceUid && namespaceUid !== expectedUid) return false;
+
+  const namespaceChatId = namespace?.chat_id == null ? null : String(namespace.chat_id);
+  if (namespaceUid === null && namespaceChatId === null) return false;
+  if (namespaceChatId === null) return true;
+
+  const allowedChatIds = new Set([
+    expectedChatId,
+    ...(Array.isArray(aliases) ? aliases : []).map(String),
+  ]);
+  return allowedChatIds.has(namespaceChatId);
+}
+
 function nonEmptyCount(value) {
   if (value === undefined || value === null) return 0;
   if (Array.isArray(value)) return value.length;

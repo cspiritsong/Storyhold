@@ -558,8 +558,8 @@ function currentProductResponder() {
   return context.name2 || context.characterName || null;
 }
 
-function currentProductBranchUid(root, lineage) {
-  return lineage?.epoch_id ?? lineage?.epochId ?? root?.lineage?.epoch_id ?? root?.chat_uid ?? null;
+function currentProductBranchUid(root) {
+  return root?.chat_uid ?? null;
 }
 
 function scopedProductRecords(records, settings, responder, { includeInactive = false } = {}) {
@@ -567,7 +567,7 @@ function scopedProductRecords(records, settings, responder, { includeInactive = 
   const chatUid = typeof root.chat_uid === 'string' ? root.chat_uid.trim() : '';
   const lineage = getCurrentLineage();
   if (!chatUid || !lineage || lineage.quarantined) return [];
-  const branchUid = currentProductBranchUid(root, lineage);
+  const branchUid = currentProductBranchUid(root);
   const scoped = filterRetrievalRecords(records, {
     chatUid,
     branchUid,
@@ -819,7 +819,7 @@ export function updateProductStatusUI(progress = null) {
   }
   const responder = currentProductResponder();
   const lineage = getCurrentLineage();
-  const branchUid = currentProductBranchUid(root, lineage);
+  const branchUid = currentProductBranchUid(root);
   const scopedRecords = scopedProductRecords(root.structured_records, settings, responder);
   const scopedNarrative = filterNarrativeStateForIdentity(root.narrative, {
     chatUid: root.chat_uid,

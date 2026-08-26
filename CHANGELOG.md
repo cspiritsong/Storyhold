@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-08-26
+
 ### Changed
 
-- **Plain-language settings panel.** Memory controls now say what they actually do, for everyone rather than for implementers. The main actions read *Scan & Memorize This Chat*, *Scan This Chat Again*, *Find & Remove Duplicate Memories*, *Delete All Memory for This Chat*, and *Rebuild Memory for This Branch*. Feature sections and tooltips were renamed from internal terms (long-term/session memory, canon, state ledger, entity registry, continuity checker, injection) to words a roleplayer can understand, with a note that the actions affect the current chat only. No behavior or control IDs changed.
+- **Plain-language settings panel.** Memory controls now say what they actually do, for everyone rather than for implementers. The main actions read *Scan & Memorize This Chat*, *Scan This Chat Again*, *Find & Remove Duplicate Memories*, *Delete All Memory for This Chat*, and *Rebuild Memory for This Chat*. Feature sections and tooltips were renamed from internal terms (long-term/session memory, canon, state ledger, entity registry, continuity checker, injection) to words a roleplayer can understand, with a note that the actions affect the current chat only.
+- **Independent chat trees.** Storyhold no longer verifies parent/child branch lineage, inherits parent memory, or quarantines a chat because another chat's transcript fingerprint changed. Every chat file is its own tree: `main_chat` is kept only as SillyTavern navigation/provenance, each chat scans and retrieves only its own records, and challenge judges only this chat's memory. In-file swipes/regenerations remain branch-aware. Stale cross-file lineage metadata is archived as `legacy_lineage` and no longer blocks scan, delete, rebuild, or challenge.
+- **Rebuild is now chat-local.** *Rebuild Memory for This Branch* became *Rebuild Memory for This Chat*: it clears this chat's derived Storyhold and rescans the current transcript, with no parent requirement.
+
+### Fixed
+
+- Scan, delete, rebuild, query, and challenge no longer deadlock on "unverified branch lineage". Only a missing stable chat identity (no active chat / no stored UID) leaves a chat inactive, with a plain next step.
 
 ## [1.12.1] - 2026-08-26
 

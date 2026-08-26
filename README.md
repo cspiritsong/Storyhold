@@ -339,13 +339,13 @@ When you turn read-only off, a dialog asks what to do with the session:
 
 You can toggle read-only on and off multiple times in the same chat; each window is handled independently.
 
-**Using read-only with checkpoints and branches:** every chat and branch has its own memory namespace. A branch inherits only a verified transcript prefix; divergent-tail memory is not carried across. If you plan to explore an alternative path, enable read-only mode first.
+**Using read-only with checkpoints and branches:** each chat file is its own Storyhold tree. A new chat or cross-file branch may contain copied transcript text, but it never inherits mutable memory from the parent automatically. Storyhold scans and retrieves only the current chat's tree. Swipes and regenerations inside the same chat remain branch-aware so discarded futures are not selected. If you want continuity from another chat, copy/import it explicitly rather than relying on hidden parent inheritance.
 
 ### Chat-only Memory Boundary
 
-Storyhold has one mutable memory boundary: the current chat. The character card is reference material, not a shared memory store. There is no scope selector and no automatic memory sharing between chats.
+Storyhold has one mutable memory boundary: the current chat. The character card is reference material, not a shared memory store. There is no automatic memory sharing between chats.
 
-Every chat gets a stable identity and its own structured records, narrative chain, retrieval scope, and processing cursor. Renames preserve the same chat identity when the transcript matches. Branches inherit only verified prefix projections; unverified branches remain quarantined.
+Every chat gets a stable identity and its own structured records, narrative chain, retrieval scope, and processing cursor. `main_chat` is retained as SillyTavern navigation/provenance only; it does not grant the child chat access to the parent's Storyhold memory. Renaming a chat preserves its tree identity. A rebuild clears and rescans only the current chat.
 
 ### Per-tier Extract Buttons
 
@@ -639,7 +639,7 @@ A live token count shows how much context the current profiles are using. A **Re
 | `/sm-extract`        | Run long-term, session, and arc extraction against the current chat now                                                                                                                                                                                                          |
 | `/sm-recap`          | Generate and show a "Previously on..." recap popup now                                                                                                                                                                                                                           |
 | `/sm-search <query>` | Search all memories by meaning and show a results popup. Optional `k=N` sets the result count (default 10, max 50); `min=N` sets a minimum match quality to filter weak results (default 0.5, range 0-1). Falls back to keyword matching when the embedding model is unavailable |
-| `/sm-challenge <claim>` | Challenge a player claim against stored memories and show an evidence panel. Read-only: displays related records with provenance and a similarity banner. Storyhold never renders a true/false verdict and nothing is modified. Accepts the same `k` and `min` options as `/sm-search` |
+| `/sm-challenge <claim>` | Check a player claim against saved memory and show an evidence panel. Read-only: returns **Supported**, **Contradicted**, or **Unresolved** with an explanation, cited records, provenance, and source ranges. No memory is modified. Accepts the same `k` and `min` options as `/sm-search` |
 
 ### Query & Challenge Memory (read-only)
 
@@ -649,22 +649,22 @@ Both `/sm-search` and `/sm-challenge` are also available in the settings panel u
 
 The controls show the complete lifecycle:
 
-1. **Received** - Storyhold acknowledges the request and captures the current chat/branch.
-2. **In progress** - both controls are disabled while active records are searched.
+1. **Received** - Storyhold acknowledges the request and captures the current chat tree.
+2. **In progress** - both controls are disabled while this chat's active records are searched.
 3. **Complete** - the review panel opens with the outcome, evidence, and next step.
 4. **Failed** - the status explains that no memory was changed, so you can retry safely.
 
 What the result panel shows:
 
-- Matching records for the current chat and branch, with type, score, and source range
+- Matching records for the current chat tree, with type, score, and source range
 - For challenges, a real verdict: **Supported**, **Contradicted**, or **Unresolved**,
   with an explanation and the record ids it was based on
 - Spoiler-tagged perspective records (false beliefs, hidden secrets) stay collapsed
   behind a warning until you open them deliberately
 
-If the current chat's memory cannot back a challenge (it is quarantined, unavailable,
-or has no verified identity), the panel says **Challenge blocked** and shows the exact
-reason and a next step, instead of a bare "cancelled".
+If the current chat has no saved records, Challenge reports **Unresolved: no evidence
+in this chat tree**. It does not block merely because another chat or an old branch
+has stale metadata.
 
 What it deliberately does not do:
 
@@ -815,9 +815,9 @@ Storyhold is not presented as the upstream Smart Memory project. Its independent
 - one broker-owned prompt envelope instead of several independent memory injections;
 - structured projections for facts, relationships, state, arcs, timelines, and perspective-scoped knowledge;
 - deterministic retrieval before optional vector or agentic escalation;
-- explicit provenance, validity, supersession, uncertainty, branch lineage, rename recovery, and quarantine rules;
+- explicit provenance, validity, supersession, uncertainty, and chat-tree ownership;
 - bounded, resumable historical catch-up with concurrency protection;
-- branch-safe pruning and verified-prefix inheritance;
+- branch-safe pruning inside the current chat tree; no automatic parent-chat inheritance;
 - a clear **Clear Chat Memory** action that preserves the raw transcript and character card.
 
 Other memory systems and roleplay products were studied as design references for continuity, state tracking, episodic detail, hierarchical summaries, retrieval, and context budgeting. Their names are references, not runtime dependencies, and their code is not being represented as Storyhold's original work.

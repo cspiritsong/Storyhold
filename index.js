@@ -146,7 +146,7 @@ import {
 } from './state-ledger.js';
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { chatHasRealMesIds, getMesIdWindow, updateLegacySourceProof, watermarkFromChat } from './branch-aware.js';
-import { classifyChatLineage } from './lineage.js';
+import { classifyIndependentChatTree } from './lineage.js';
 import {
   getCurrentLineage,
   isCurrentLineageQuarantined,
@@ -156,7 +156,6 @@ import {
 // Wire the live Fresh Start reader so lineage-runtime.js stays free of static
 // SillyTavern imports (the node regression tests import that module directly).
 setFreshStartProvider(() => getContext().chatMetadata?.[META_KEY]?.freshStart === true);
-import { verifyAndInheritCurrentBranch } from './lineage-ops.js';
 import { ensureStableChatIdentity } from './rename-ops.js';
 import {
   archiveCurrentNamespace,
@@ -683,11 +682,7 @@ async function runSingleExtensionIngest(
   });
   if (productAborted()) return null;
 
-  const branchUid =
-    lineage.epoch_id ??
-    lineage.epochId ??
-    meta.lineage?.epoch_id ??
-    meta.chat_uid;
+  const branchUid = meta.chat_uid;
   const timeline = rebuildTimeline(context.chat, {
     chatId: meta.chat_uid,
     epochId: branchUid,
@@ -880,13 +875,7 @@ async function runSingleExtensionCatchUpUnlocked({
   const capturedChatUid = expectedChatUid !== undefined
     ? expectedChatUid
     : context.chatMetadata?.[META_KEY]?.chat_uid ?? null;
-  const capturedBranchUid =
-    getCurrentLineage()?.epoch_id ??
-    getCurrentLineage()?.epochId ??
-    context.chatMetadata?.[META_KEY]?.lineage?.epoch_id ??
-    context.chatMetadata?.[META_KEY]?.lineage?.epochId ??
-    context.chatMetadata?.[META_KEY]?.branch_uid ??
-    capturedChatUid;
+  const capturedBranchUid = capturedChatUid;
   const productResponder = expectedResponder !== undefined
     ? expectedResponder
     : selectedGroupCharacter || getCurrentCharacterName();
@@ -2058,22 +2047,13 @@ async function onChatChangedImpl() {
   await ensureStableChatIdentity();
   if (transitionStale()) return;
   const activeMeta = getContext().chatMetadata?.[META_KEY] ?? {};
-  let lineage = classifyChatLineage({
+  const lineage = classifyIndependentChatTree({
     chatId: getCurrentChatId(),
     chatUid: activeMeta.chat_uid ?? null,
     legacyChatIds: activeMeta.chat_aliases ?? [],
-    parentChatId: getContext().chatMetadata?.main_chat,
     chat: getContext().chat,
-    lineage: activeMeta.lineage ?? null,
   });
 
-  // Cross-file branches are resolved against the parent raw transcript before
-  // any derived tier is released. If the parent cannot be fetched or the prefix
-  // does not match, lineage remains quarantined and no memory is injected.
-  if (lineage.quarantined && getContext().chatMetadata?.main_chat) {
-    lineage = (await verifyAndInheritCurrentBranch(transitionStale)) ?? lineage;
-    if (transitionStale()) return;
-  }
   if (transitionStale()) return;
   setCurrentLineage(lineage);
   $(document).trigger('smart_memory:lineage_changed');
@@ -2081,10 +2061,10 @@ async function onChatChangedImpl() {
 
   if (lineage.quarantined) {
     clearAllInjections();
-    setStatusMessage('Memory quarantined: branch lineage is not verified.');
+    setStatusMessage('Storyhold needs a stable identity for this chat.');
     if (typeof toastr !== 'undefined') {
       toastr.warning(
-        'This branch has no verified memory lineage. Storyhold will stay out of the prompt until the branch is rebuilt or verified.',
+        'This chat has no stable Storyhold identity yet. Reopen the chat, then run Scan & Memorize This Chat.',
         'Storyhold',
         { timeOut: 8000, positionClass: 'toast-bottom-right' },
       );
@@ -3196,16 +3176,13 @@ function yieldToMemoryReviewUi() {
 
 /** Human-readable reason the current chat's memory cannot back a challenge. */
 function challengeBlockReason() {
-  const lineage = getCurrentLineage();
-  const parts = [lineage?.status, lineage?.invalidation_reason ?? lineage?.reason].filter(Boolean);
-  return parts.join(' — ') || 'memory unavailable for this chat';
+  if (getSettings().enabled === false) return 'Storyhold is disabled';
+  if (isFreshStart()) return 'read-only mode is active';
+  return 'this chat has no stable Storyhold identity yet';
 }
 
-function challengeNextStep(reason) {
-  if (/fingerprint|quarantine|unverified/i.test(reason)) {
-    return 'This chat is quarantined because its identity no longer matches its stored memory. Rebuild this branch or open a verified chat, then challenge again.';
-  }
-  return 'Run Memorize Chat to establish this chat\'s identity and records, then challenge again.';
+function challengeNextStep() {
+  return 'Run Scan & Memorize This Chat to build this chat\'s memory, then challenge again.';
 }
 
 /**
@@ -3317,10 +3294,10 @@ async function executeMemoryReview(mode, args, queryText, expectedIdentity = nul
         }
         publishMemoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.CANCELLED, reason });
       }
-      return 'Product memory is unavailable until this chat has a verified identity.';
+      return 'Product memory is unavailable until this chat has a stable Storyhold identity.';
     }
     const responder = reviewResponder;
-    const branchUid = lineage?.epoch_id ?? lineage?.epochId ?? root.lineage?.epoch_id ?? root.chat_uid;
+    const branchUid = root.chat_uid;
     const scoped = filterRetrievalRecords(root.structured_records, {
       chatUid: root.chat_uid,
       branchUid,
@@ -3766,13 +3743,11 @@ jQuery(async function () {
           getCurrentLineage() !== null
         ) return;
         const activeMeta = getContext().chatMetadata?.[META_KEY] ?? {};
-        const reclassified = classifyChatLineage({
+        const reclassified = classifyIndependentChatTree({
           chatId: getCurrentChatId(),
           chatUid: activeMeta.chat_uid ?? null,
           legacyChatIds: activeMeta.chat_aliases ?? [],
-          parentChatId: getContext().chatMetadata?.main_chat,
           chat: getContext().chat,
-          lineage: activeMeta.lineage ?? null,
         });
         setCurrentLineage(reclassified);
         $(document).trigger('smart_memory:lineage_changed');
@@ -3840,13 +3815,11 @@ jQuery(async function () {
           getCurrentLineage() !== null
         ) return;
         const activeMeta = getContext().chatMetadata?.[META_KEY] ?? {};
-        const reclassified = classifyChatLineage({
+        const reclassified = classifyIndependentChatTree({
           chatId: getCurrentChatId(),
           chatUid: activeMeta.chat_uid ?? null,
           legacyChatIds: activeMeta.chat_aliases ?? [],
-          parentChatId: getContext().chatMetadata?.main_chat,
           chat: getContext().chat,
-          lineage: activeMeta.lineage ?? null,
         });
         setCurrentLineage(reclassified);
         $(document).trigger('smart_memory:lineage_changed');
@@ -3882,10 +3855,10 @@ jQuery(async function () {
       callback: async () => {
         if (getSettings().single_extension_mode) {
           if (getSettings().enabled === false) return 'Storyhold is disabled.';
-          if (isCurrentLineageQuarantined()) return 'Product memory is quarantined for this chat.';
+          if (isCurrentLineageQuarantined()) return 'Product memory is unavailable until this chat has a stable Storyhold identity.';
           return 'Product Memory continuity checks use the canonical product pipeline.';
         }
-        if (isCurrentLineageQuarantined()) return 'Memory is quarantined for this branch.';
+        if (isCurrentLineageQuarantined()) return 'Memory is unavailable until this chat has a stable Storyhold identity.';
         const characterName = getCurrentCharacterName();
         if (!characterName) return 'No character active.';
         const contradictions = await checkContinuity(characterName);
@@ -3918,11 +3891,11 @@ jQuery(async function () {
           if (getSettings().enabled === false) return 'Storyhold is disabled.';
           if (productOperationGate.isRunning(chatLoadId)) return 'Product memory operation already running.';
           const outcome = await runSingleExtensionCatchUp();
-          if (outcome.skipped) return 'Product memory is read-only or quarantined.';
+          if (outcome.skipped) return 'Product memory is read-only or has no stable chat identity yet.';
           return `Product catch-up processed ${outcome.windows} window${outcome.windows === 1 ? '' : 's'}.`;
         }
         const operation = captureLegacyOperation();
-        if (!operation) return 'Summary unavailable while Storyhold is disabled, read-only, or unverified.';
+        if (!operation) return 'Summary unavailable while Storyhold is disabled, read-only, or has no stable chat identity yet.';
         if (compactionOwner) return 'Compaction already running.';
         const compactionToken = claimCompactionOwnership();
         setStatusMessage('Extracting short-term memories...');
@@ -3961,11 +3934,11 @@ jQuery(async function () {
           if (getSettings().enabled === false) return 'Storyhold is disabled.';
           if (productOperationGate.isRunning(chatLoadId)) return 'Product memory operation already running.';
           const outcome = await runSingleExtensionCatchUp();
-          if (outcome.skipped) return 'Product memory is read-only or quarantined.';
+          if (outcome.skipped) return 'Product memory is read-only or has no stable chat identity yet.';
           return `Product extraction processed ${outcome.windows} window${outcome.windows === 1 ? '' : 's'}.`;
         }
         const operation = captureLegacyOperation();
-        if (!operation) return 'Extraction unavailable while Storyhold is disabled, read-only, or unverified.';
+        if (!operation) return 'Extraction unavailable while Storyhold is disabled, read-only, or has no stable chat identity yet.';
         if (extractionRunning) return 'Extraction already running.';
         const characterName = operation.characterName;
         if (!characterName) return 'No character active.';
@@ -4037,7 +4010,7 @@ jQuery(async function () {
           isFreshStart() ||
           isCurrentLineageQuarantined()
         ) {
-          return 'Recap unavailable while Storyhold is disabled, read-only, or unverified.';
+          return 'Recap unavailable while Storyhold is disabled, read-only, or has no stable chat identity yet.';
         }
         const recap = await generateRecap();
         if (!recapStillCurrent()) return 'Recap cancelled because the active chat changed.';

@@ -275,7 +275,7 @@ export function createProductPipeline({
       ? window.branch_uid
       : settings.branchUid !== undefined
         ? settings.branchUid
-        : root.lineage?.epoch_id ?? root.lineage?.epochId ?? root.branch_uid ?? chatUid;
+        : chatUid;
     const chatId = settings.chatId ?? root.chat_id ?? root.lineage?.chat_id ?? null;
     return { chatUid, branchUid, chatId };
   };

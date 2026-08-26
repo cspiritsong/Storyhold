@@ -14,6 +14,30 @@ const record = (overrides = {}) => ({
   ...(overrides.entities ? { entities: overrides.entities } : {}),
 });
 
+test('independent chat trees filter by chat ownership, not parent branch epochs', () => {
+  const lineage = {
+    status: 'standalone',
+    quarantined: false,
+    chatId: 'chat-a',
+    chatUid: 'chat-a-uid',
+  };
+  const records = [
+    record({ id: 'current', scope: { chat_uid: 'chat-a-uid', branch_uid: 'chat-a-uid' } }),
+    record({ id: 'foreign-chat', scope: { chat_uid: 'chat-b-uid', branch_uid: 'chat-b-uid' } }),
+    record({ id: 'old-parent-epoch', scope: { chat_uid: 'chat-a-uid', branch_uid: 'old-parent-epoch' } }),
+  ];
+
+  assert.deepEqual(
+    filterRetrievalRecords(records, {
+      chatUid: 'chat-a-uid',
+      branchUid: 'chat-a-uid',
+      lineage,
+      allowLegacy: false,
+    }).map((item) => item.id),
+    ['current'],
+  );
+});
+
 test('exact phrase retrieval wins without calling vector search', async () => {
   let vectorCalls = 0;
   const result = await retrieveWithLadder({

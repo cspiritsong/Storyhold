@@ -10,6 +10,7 @@ import {
   relinkNamespace,
   retagChatMetadata,
   stableChatIdentity,
+  namespaceOwnerMatches,
 } from '../rename-recovery.js';
 
 const message = (mes, extra = {}) => ({
@@ -46,6 +47,25 @@ test('stable identity preserves an existing uid and creates one only when absent
     transcript_fingerprint: 'fp',
     created: true,
   });
+});
+
+test('namespace owner matching distinguishes a rename from a copied chat uid', () => {
+  assert.equal(namespaceOwnerMatches(
+    { chat_uid: 'uid-a', chat_id: 'chat-old' },
+    { chatUid: 'uid-a', chatId: 'chat-new', aliases: ['chat-old'] },
+  ), true);
+  assert.equal(namespaceOwnerMatches(
+    { chat_uid: 'uid-a', chat_id: 'chat-other' },
+    { chatUid: 'uid-a', chatId: 'chat-new', aliases: ['chat-old'] },
+  ), false);
+  assert.equal(namespaceOwnerMatches(
+    { chat_uid: 'uid-a', chat_id: 'chat-new' },
+    { chatUid: 'uid-b', chatId: 'chat-new' },
+  ), false);
+  assert.equal(namespaceOwnerMatches(
+    { chat_id: 'chat-new' },
+    { chatUid: 'uid-new', chatId: 'chat-new' },
+  ), true);
 });
 
 test('audit identifies a high-confidence renamed namespace without dumping memory text', () => {
