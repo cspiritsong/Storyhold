@@ -881,7 +881,7 @@ export function bindSettingsUI(ctrl) {
     return extension_settings[MODULE_NAME].single_extension_mode === true;
   }
 
-  function blockLegacyProductAction(label) {
+  function blockLegacyProductAction(_label) {
     if (!isProductMode()) return false;
     toastr.info('This tool is not available in the current memory mode. The main chat scan already handles this automatically.', 'Storyhold', {
       timeOut: 4000,
@@ -933,10 +933,20 @@ export function bindSettingsUI(ctrl) {
     return false;
   }
 
+  function branchParentChatId(lineage = ctrl.lineageState) {
+    const parent =
+      lineage?.parentChatId ??
+      lineage?.parent_chat_id ??
+      getContext().chatMetadata?.main_chat ??
+      null;
+    const normalized = parent == null ? '' : String(parent).trim();
+    return normalized || null;
+  }
+
   function updateBranchRebuildButton() {
     const lineage = ctrl.lineageState;
     const show =
-      Boolean(lineage?.parentChatId) &&
+      Boolean(branchParentChatId(lineage)) &&
       lineage.status !== LINEAGE_STATUS.STANDALONE &&
       lineage.status !== LINEAGE_STATUS.REBUILT;
     $('#sm_rebuild_branch').toggle(show);
@@ -3467,6 +3477,7 @@ export function bindSettingsUI(ctrl) {
       : [];
     const operationGeneration = ctrl.chatGeneration;
     const lineage = ctrl.lineageState;
+    const parentChatId = branchParentChatId(lineage);
     const rebuildMustStop = () =>
       extension_settings[MODULE_NAME].enabled === false ||
       !isProductMode() && productControlReserved ||
@@ -3552,7 +3563,6 @@ export function bindSettingsUI(ctrl) {
         }
       }
 
-      const parentChatId = lineage.parentChatId;
     const epochId = generateMemoryId();
     context.chatMetadata[META_KEY] = buildRebuiltLineageMetadata({
       priorSmartMemory,

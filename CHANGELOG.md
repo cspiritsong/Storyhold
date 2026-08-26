@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Plain-language settings panel.** Memory controls now say what they actually do, for everyone rather than for implementers. The main actions read *Scan & Memorize This Chat*, *Scan This Chat Again*, *Find & Remove Duplicate Memories*, *Delete All Memory for This Chat*, and *Rebuild Memory for This Branch*. Feature sections and tooltips were renamed from internal terms (long-term/session memory, canon, state ledger, entity registry, continuity checker, injection) to words a roleplayer can understand, with a note that the actions affect the current chat only. No behavior or control IDs changed.
 
+## [1.12.1] - 2026-08-26
+
+### Fixed
+
+- **Branch rebuild is available for stored lineage metadata.** The recovery UI and handler now accept `parentChatId`, `parent_chat_id`, and SillyTavern's `main_chat`. Previously, a quarantined branch could have a valid `main_chat` parent but keep **Rebuild This Branch** hidden because the UI checked only one camelCase field.
+
 ## [1.12.0] - 2026-08-26
 
 ### Changed

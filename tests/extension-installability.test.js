@@ -176,6 +176,16 @@ test('challenge adjudicates claims against records and raw source excerpts', asy
   assert.match(uiSource, /Challenge blocked\./);
 });
 
+test('branch recovery accepts snake_case parent metadata from stored lineage', async () => {
+  const source = await readFile(resolve(root, 'settings.js'), 'utf8');
+  assert.match(source, /function branchParentChatId\(lineage = ctrl\.lineageState\)/);
+  assert.match(source, /lineage\?\.parentChatId/);
+  assert.match(source, /lineage\?\.parent_chat_id/);
+  assert.match(source, /getContext\(\)\.chatMetadata\?\.main_chat/);
+  assert.match(source, /const parentChatId = branchParentChatId\(lineage\)/);
+  assert.match(source, /Boolean\(branchParentChatId\(lineage\)\)/);
+});
+
 
 test('product catch-up exposes progress and canonical pipeline messaging', async () => {
   const [indexSource, settingsHtml, unifiedSource] = await Promise.all([
@@ -926,7 +936,7 @@ test('stable identity requires current branch proof before retagging narrative',
 test('branch rebuild uses a pinned scope and abort guards across legacy clears', async () => {
   const source = await readFile(resolve(root, 'settings.js'), 'utf8');
   const start = source.indexOf('pinChatScope(stableChatUid ?? chatId)', source.indexOf("$('#sm_rebuild_branch')"));
-  const end = source.indexOf('const parentChatId = lineage.parentChatId;', start);
+  const end = source.indexOf('const epochId = generateMemoryId();', start);
   assert.ok(start >= 0);
   assert.ok(end > start);
   const block = source.slice(start, end);
