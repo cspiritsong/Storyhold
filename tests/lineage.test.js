@@ -185,7 +185,10 @@ test('independent chat-tree rebuild metadata clears derived state without a pare
       chat_uid: 'old-uid',
       root_chat_uid: 'parent-uid',
       chat_aliases: ['old-name'],
-      structured_records: [{ id: 'foreign' }],
+      structured_records: [
+        { id: 'manual', manual_override: { active: true }, content: 'keep', scope: { chat_uid: 'current-uid' } },
+        { id: 'generated', content: 'clear' },
+      ],
       lineage: { status: LINEAGE_STATUS.UNVERIFIED_BRANCH, parent_chat_id: 'parent-chat' },
     },
     chatId: 'current-name',
@@ -197,13 +200,31 @@ test('independent chat-tree rebuild metadata clears derived state without a pare
   assert.equal(rebuilt.chat_uid, 'current-uid');
   assert.equal(rebuilt.root_chat_uid, 'current-uid');
   assert.deepEqual(rebuilt.chat_aliases, ['old-name', 'prior-name']);
-  assert.deepEqual(rebuilt.structured_records, []);
+  assert.deepEqual(rebuilt.structured_records.map((record) => record.id), ['manual']);
   assert.equal(rebuilt.lineage.status, LINEAGE_STATUS.STANDALONE);
   assert.equal(rebuilt.lineage.quarantined, false);
   assert.equal(rebuilt.lineage.parent_chat_id, undefined);
   assert.equal(rebuilt.lineage.method, 'independent-chat-tree');
 });
 
+test('independent chat-tree rebuild preserves user suppressions and timeline overrides', () => {
+  const rebuilt = buildIndependentChatTreeMetadata({
+    priorSmartMemory: {
+      chat_uid: 'chat-a',
+      product_suppressions: [{ key: 'suppression-1', chat_uid: 'chat-a' }],
+      timeline_overrides: [{ event_id: 'event-1', chat_uid: 'chat-a', patch: { narrative_role: 'backstory' } }],
+    },
+    chatId: 'chat-a.jsonl',
+    chatUid: 'chat-a',
+  });
+
+  assert.deepEqual(rebuilt.product_suppressions, [{ key: 'suppression-1', chat_uid: 'chat-a' }]);
+  assert.deepEqual(rebuilt.timeline_overrides, [{
+    event_id: 'event-1',
+    chat_uid: 'chat-a',
+    patch: { narrative_role: 'backstory' },
+  }]);
+});
 test('missing stable chat uid is quarantined instead of trusting the filename', () => {
   const result = classifyChatLineage({
     chatId: 'chat-30',

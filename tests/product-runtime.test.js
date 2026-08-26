@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildIngestWindow, fingerprintMessages } from '../projections.js';
+import { buildProductSuppressionKey } from '../product-mutations.js';
 import {
   buildProductWindow,
   createProductPipeline,
@@ -16,6 +17,34 @@ const chat = [
   { mesId: 13, name: 'Mira', is_user: false, mes: 'Not yet.' },
 ];
 
+test('recent Product windows reprocess only the requested recent range', () => {
+  const recent = buildProductWindow({
+    chat: [
+      ...chat,
+      { mesId: 14, name: 'Badi', is_user: true, mes: 'Keep the clue.' },
+      { mesId: 15, name: 'Mira', is_user: false, mes: 'The clue is safe.' },
+    ],
+    chatUid: 'chat-uid-recent',
+    branchUid: 'chat-uid-recent',
+    cursor: {
+      chat_uid: 'chat-uid-recent',
+      branch_uid: 'chat-uid-recent',
+      last_mes_id: 14,
+      last_index: 4,
+      end_index: 4,
+      source_range: { kind: 'mesId', start: 10, end: 14 },
+      fingerprint: fingerprintMessages([
+        ...chat,
+        { mesId: 14, name: 'Badi', is_user: true, mes: 'Keep the clue.' },
+      ]),
+    },
+    maxMessages: 2,
+    recentOnly: true,
+  });
+
+  assert.deepEqual(recent.messages.map((message) => message.mes), ['Not yet.', 'Keep the clue.']);
+  assert.deepEqual(recent.source_range, { kind: 'mesId', start: 13, end: 14 });
+});
 test('product window selects only unprocessed messages and prefers mesId provenance', () => {
   const first = buildProductWindow({
     chat,
@@ -663,6 +692,8 @@ test('rescan reset clears only product stores and preserves unrelated metadata',
     smartMemory: {
       lineage: { status: 'standalone' },
       timeline: { current_anchor: { day: 15 } },
+      timeline_overrides: [{ event_id: 'event-1', chat_uid: 'chat-a', patch: { narrative_role: 'backstory' } }],
+      product_suppressions: [{ key: 'suppression-1', chat_uid: 'chat-a' }],
       product_cursor: { last_mes_id: 10 },
       narrative: { layers: [[{ text: 'old' }]] },
       structured_records: [{ id: 'old-record' }],
@@ -677,7 +708,13 @@ test('rescan reset clears only product stores and preserves unrelated metadata',
 
   assert.deepEqual(metadata.unrelated, { keep: true });
   assert.deepEqual(metadata.smartMemory.lineage, { status: 'standalone' });
-  assert.deepEqual(metadata.smartMemory.timeline, { current_anchor: { day: 15 } });
+  assert.equal(metadata.smartMemory.timeline, null);
+  assert.deepEqual(metadata.smartMemory.timeline_overrides, [{
+    event_id: 'event-1',
+    chat_uid: 'chat-a',
+    patch: { narrative_role: 'backstory' },
+  }]);
+  assert.deepEqual(metadata.smartMemory.product_suppressions, [{ key: 'suppression-1', chat_uid: 'chat-a' }]);
   assert.equal(metadata.smartMemory.product_cursor, null);
   assert.equal(metadata.smartMemory.narrative, null);
   assert.deepEqual(metadata.smartMemory.structured_records, []);
@@ -707,4 +744,92 @@ test('rescan reset aborts before mutation when cancellation is already active', 
   );
   assert.deepEqual(metadata, before);
   assert.equal(saves, 0);
+});
+
+test('rebuild reset preserves explicit manual Product records while clearing generated records', async () => {
+  const metadata = {
+    smartMemory: {
+      chat_uid: 'chat-a',
+      structured_records: [
+        {
+          id: 'manual-fact',
+          kind: 'fact',
+          content: 'The corrected fact.',
+          scope: { chat_uid: 'chat-a', branch_uid: 'chat-a' },
+          source_range: { kind: 'index', start: 0, end: 1 },
+          manual_override: { active: true, action: 'edit' },
+        },
+        {
+          id: 'generated-fact',
+          kind: 'fact',
+          content: 'The generated fact.',
+          scope: { chat_uid: 'chat-a', branch_uid: 'chat-a' },
+          source_range: { kind: 'index', start: 2, end: 3 },
+        },
+      ],
+    },
+  };
+
+  await resetProductMemory(metadata, async () => {});
+
+  assert.deepEqual(metadata.smartMemory.structured_records.map((record) => record.id), ['manual-fact']);
+});
+
+test('explicit product clear reset removes timeline decisions and suppressions', async () => {
+  const metadata = {
+    smartMemory: {
+      timeline: { events: [{ event_id: 'event-1' }] },
+      timeline_overrides: [{ event_id: 'event-1', chat_uid: 'chat-a' }],
+      product_suppressions: [{ key: 'suppression-1', chat_uid: 'chat-a' }],
+      narrative_stale: { reason: 'record-edited' },
+    },
+  };
+
+  await resetProductMemory(metadata, async () => {}, 'smartMemory', () => false, {
+    preserveManualDecisions: false,
+  });
+
+  assert.equal(metadata.smartMemory.timeline, null);
+  assert.equal(metadata.smartMemory.timeline_overrides, undefined);
+  assert.equal(metadata.smartMemory.product_suppressions, undefined);
+  assert.equal(metadata.smartMemory.narrative_stale, null);
+});
+
+test('product pipeline respects source-scoped suppression during a later rescan', async () => {
+  const metadata = {
+    smartMemory: {
+      chat_uid: 'chat-uid-a',
+      product_suppressions: [],
+    },
+  };
+  const window = buildIngestWindow({
+    chatUid: 'chat-uid-a',
+    branchUid: 'chat-uid-a',
+    messages: chat.slice(0, 2),
+    sourceRange: { kind: 'mesId', start: 10, end: 11 },
+  });
+  const recreated = {
+    id: 'recreated',
+    kind: 'fact',
+    content: 'The old fact should stay deleted.',
+    scope: { chat_uid: 'chat-uid-a', branch_uid: 'chat-uid-a' },
+    source_range: window.source_range,
+    provenance: { source_chat_uid: 'chat-uid-a', source_messages: [10, 11] },
+    validity: { status: 'active' },
+  };
+  metadata.smartMemory.product_suppressions.push({
+    key: buildProductSuppressionKey(recreated),
+    chat_uid: 'chat-uid-a',
+  });
+  const pipeline = createProductPipeline({
+    metadata,
+    settings: { chatUid: 'chat-uid-a', chatId: 'chat-a', branchUid: 'chat-uid-a' },
+    summarizeNarrative: async () => 'A narrative.',
+    extractStructured: async () => [recreated],
+  });
+
+  const result = await pipeline.ingest(window);
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(metadata.smartMemory.structured_records, []);
 });

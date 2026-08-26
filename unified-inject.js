@@ -217,7 +217,7 @@ export function injectUnified({ respondingCharacter = null } = {}) {
       query,
       records: injectableRecords,
       sections: buildSectionsFromTypedState({
-        narrativeState: meta.narrative ?? null,
+        narrativeState: meta.narrative_stale ? null : meta.narrative,
         chatUid,
         chatId: lineage?.chatId ?? null,
         branchUid,

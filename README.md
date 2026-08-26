@@ -167,7 +167,7 @@ Long-term memories also benefit: memories extracted from a scene the responding 
 
 ### Entity Registry
 
-As memories are extracted, Storyhold tracks the named entities behind them - characters, places, objects, factions, and concepts. The AI classifies each entity by type from the context of the memory it appeared in, so invented names and made-up settings are handled just as well as real-world ones. The registry is built from both your long-term memories and your current session memories, and is updated after each extraction pass.
+In the current Product mode, the optional **Inspect or Fix Chat Memory** Explorer is the authoritative place to view Product records, timeline events, and their source ranges. The compatibility-mode Entity Registry described below remains available only when legacy mode is deliberately enabled. The AI classifies each entity by type from the context of the memory it appeared in, so invented names and made-up settings are handled just as well as real-world ones. The registry is built from both your long-term memories and your current session memories, and is updated after each extraction pass.
 
 A collapsible **Entity Registry** panel in the settings shows all tracked entities with:
 
@@ -324,7 +324,17 @@ Clears every derived Smart-Memory record for the current chat: structured memori
 
 There is deliberately no character-wide memory wipe because Storyhold does not use a mutable cross-chat character-memory store.
 
-To prevent this chat from contributing memory at all, use **Read-only mode** instead.
+### Inspect or Fix Chat Memory
+
+The normal Product-mode path is automatic. When you deliberately open **Inspect or Fix Chat Memory**, Storyhold shows the complete memory for the current chat in three views:
+
+- **Records** - facts, relationships, recent evidence, current state, open threads, and character knowledge. Filter by type/status/text, inspect provenance, jump to the source message, add a record, edit it, retire it, restore a retired record, or permanently delete it.
+- **Timeline** - chronological events with story time, conversation position, source preview, historical/current interpretation, and conflict indicators. A timeline interpretation can be overridden without changing the raw chat transcript; the override is labelled and can be cleared.
+- **Narrative** - generated continuity layers. After a manual record/timeline change, Storyhold marks generated narrative as needing refresh instead of silently presenting stale prose as current. **Regenerate narrative** refreshes it for this chat.
+
+Manual changes affect only this chat's derived Storyhold memory. They do not edit the raw JSONL transcript, the character card, other chats, or native SillyTavern Vector Storage. Product records remain searchable and challengeable after editing; semantic embeddings are refreshed automatically or fall back to deterministic matching when unavailable.
+
+The Explorer is optional. You should not need to open it during ordinary roleplay; it exists for deliberate inspection and correction when something seems wrong.
 
 ### Read-only Mode
 
@@ -347,9 +357,9 @@ Storyhold has one mutable memory boundary: the current chat. The character card 
 
 Every chat gets a stable identity and its own structured records, narrative chain, retrieval scope, and processing cursor. `main_chat` is retained as SillyTavern navigation/provenance only; it does not grant the child chat access to the parent's Storyhold memory. Renaming a chat preserves its tree identity. A rebuild clears and rescans only the current chat.
 
-### Per-tier Extract Buttons
+### Compatibility-mode Extract Buttons
 
-Each memory tier has its own **Extract Now** or **Extract** button that processes a recent window of messages - not the full chat. Useful for pulling in the latest exchanges outside the automatic schedule.
+When compatibility mode is deliberately enabled, its legacy tier buttons process a recent window of messages - not the full chat. Product mode hides these legacy controls and provides equivalent scoped actions inside **Inspect or Fix Chat Memory**, so every visible Product-mode control has a real Product handler.
 
 | Button                | Window                           |
 | --------------------- | -------------------------------- |

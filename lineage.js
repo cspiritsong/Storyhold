@@ -615,6 +615,12 @@ export function buildRebuiltLineageMetadata({
     structured_records: [],
     ingest_windows: {},
     product_status: null,
+    ...(Array.isArray(priorSmartMemory.product_suppressions)
+      ? { product_suppressions: priorSmartMemory.product_suppressions.map((item) => ({ ...item })) }
+      : {}),
+    ...(Array.isArray(priorSmartMemory.timeline_overrides)
+      ? { timeline_overrides: priorSmartMemory.timeline_overrides.map((item) => ({ ...item, patch: { ...(item.patch ?? {}) } })) }
+      : {}),
     lineage,
   };
 }
@@ -635,6 +641,12 @@ export function buildIndependentChatTreeMetadata({
     .map(normalizeChatId)
     .filter(Boolean)
     .filter((value, index, values) => values.indexOf(value) === index);
+  const manualRecords = Array.isArray(priorSmartMemory.structured_records)
+    ? priorSmartMemory.structured_records
+      .filter((record) => record?.manual_override?.active === true)
+      .filter((record) => normalizedChatUid != null && String(record?.scope?.chat_uid ?? '') === normalizedChatUid)
+      .map((record) => ({ ...record }))
+    : [];
   const lineage = {
     status: LINEAGE_STATUS.STANDALONE,
     quarantined: false,
@@ -650,9 +662,15 @@ export function buildIndependentChatTreeMetadata({
     lastInjectionRefresh: 0,
     product_cursor: null,
     narrative: null,
-    structured_records: [],
+    structured_records: manualRecords,
     ingest_windows: {},
     product_status: null,
+    ...(Array.isArray(priorSmartMemory.product_suppressions)
+      ? { product_suppressions: priorSmartMemory.product_suppressions.map((item) => ({ ...item })) }
+      : {}),
+    ...(Array.isArray(priorSmartMemory.timeline_overrides)
+      ? { timeline_overrides: priorSmartMemory.timeline_overrides.map((item) => ({ ...item, patch: { ...(item.patch ?? {}) } })) }
+      : {}),
     lineage,
   };
 }

@@ -141,6 +141,7 @@ import {
 import { detectAndPruneInFileBranch } from './branch-ops.js';
 import { updateLegacySourceProof, watermarkFromChat } from './branch-aware.js';
 import { buildIndependentChatTreeMetadata } from './lineage.js';
+import { renderProductExplorer } from './product-explorer.js';
 import { currentLineageRecordStamp, isCurrentLineageQuarantined } from './lineage-runtime.js';
 import { NAMESPACE_STATUS } from './rename-recovery.js';
 import {
@@ -707,11 +708,37 @@ export function autoTuneBudgets(characterName) {
  * The global total injection cap remains visible in both modes.
  * @param {'simple'|'advanced'} mode
  */
+function syncProductModeControls() {
+  const legacyActionSelectors = [
+    '#sm_extract_now',
+    '#sm_clear_memories',
+    '#sm_extract_session_now',
+    '#sm_clear_session',
+    '#sm_summarize_now',
+    '#sm_generate_canon',
+    '#sm_extract_scenes_now',
+    '#sm_clear_scenes',
+    '#sm_extract_arcs_now',
+    '#sm_clear_arcs',
+    '#sm_profiles_regenerate',
+    '#sm_add_relationship',
+    '#sm_clear_relationships',
+    '#sm_epistemic_add',
+    '#sm_epistemic_clear',
+  ];
+  const productMode = extension_settings[MODULE_NAME]?.single_extension_mode === true;
+  for (const selector of legacyActionSelectors) {
+    $(selector).closest('.sm-btn-row').toggle(!productMode);
+  }
+  $('#sm_product_status_panel').toggle(productMode);
+}
+
 function applySettingsMode(mode) {
   const isSimple = mode === 'simple';
   $('.sm-advanced-only').toggle(!isSimple);
   $('.sm-simple-only').toggle(isSimple);
   updateBudgetCapUI(extension_settings[MODULE_NAME]);
+  syncProductModeControls();
 }
 
 // ---- Settings loading and migration -------------------------------------
@@ -1106,8 +1133,490 @@ export function bindSettingsUI(ctrl) {
       .get();
   }
 
+  let productExplorerState = {
+    view: 'records',
+    kind: 'all',
+    status: 'active',
+    search: '',
+    includeInactive: false,
+  };
+
+  function renderCurrentProductExplorer(nextState = {}) {
+    productExplorerState = { ...productExplorerState, ...nextState };
+    const panel = document.getElementById('sm_product_explorer');
+    const content = document.getElementById('sm_product_explorer_content');
+    if (!panel || !content) return;
+    const model = ctrl.getProductExplorerModel?.();
+    if (!model) {
+      content.textContent = 'This chat is not ready for Product memory inspection.';
+      return;
+    }
+    renderProductExplorer(content, model, {
+      ...productExplorerState,
+      onChange: (state) => renderCurrentProductExplorer(state),
+    });
+  }
+
+  function explorerRecord(recordId) {
+    return ctrl.getProductExplorerModel?.()?.records?.find(
+      (record) => String(record.id) === String(recordId),
+    ) ?? null;
+  }
+
+  function explorerEvent(eventId) {
+    return ctrl.getProductExplorerModel?.()?.timeline?.events?.find(
+      (event) => String(event.event_id) === String(eventId),
+    ) ?? null;
+  }
+
+  function appendProductEditorField($form, label, value, key, { type = 'text' } = {}) {
+    const $label = $('<label class="sm-product-editor-field">').text(label);
+    const $input = $(`<input class="text_pole" type="${type}">`).attr('data-editor-field', key).val(value ?? '');
+    $label.append($input);
+    $form.append($label);
+    return $input;
+  }
+
+  function openProductRecordCreator(initialKind = 'fact') {
+    const $contentContainer = $('#sm_product_explorer_content');
+    if (!$contentContainer.length) return;
+    $contentContainer.find('.sm-product-editor-form').remove();
+    const $form = $('<div class="sm-product-editor-form sm-product-create-form">');
+    const $kindLabel = $('<label class="sm-product-editor-field">').text('Memory type');
+    const $kind = $('<select class="text_pole" data-editor-field="kind">');
+    for (const value of ['fact', 'relationship', 'session', 'state', 'arc', 'epistemic']) {
+      $kind.append($('<option>').val(value).text(value).prop('selected', value === initialKind));
+    }
+    $kindLabel.append($kind);
+    $form.append($kindLabel);
+    const $contentLabel = $('<label class="sm-product-editor-field">').text('Memory text');
+    const $content = $('<textarea class="text_pole" rows="4" placeholder="Describe the fact, relationship, state, thread, or knowledge entry.">');
+    $contentLabel.append($content);
+    $form.append($contentLabel);
+    appendProductEditorField($form, 'Confidence (0–1)', '0.7', 'confidence', { type: 'number' })
+      .attr({ min: 0, max: 1, step: 0.05 });
+    appendProductEditorField($form, 'Source start (optional)', '', 'source_start', { type: 'number' }).attr({ min: 0 });
+    appendProductEditorField($form, 'Source end (optional)', '', 'source_end', { type: 'number' }).attr({ min: 0 });
+    for (const key of ['subject', 'target', 'entity', 'entity_type', 'type']) {
+      appendProductEditorField($form, key.replace(/_/g, ' '), '', key);
+    }
+    $form.append($('<div class="sm-muted">Manual records belong to this chat. If no source range is supplied, Storyhold links the record to the current chat tip.</div>'));
+    const $actions = $('<div class="sm-product-editor-actions">');
+    const $save = $('<button type="button" class="menu_button">Add memory</button>');
+    const $cancel = $('<button type="button" class="menu_button">Cancel</button>');
+    $actions.append($save, $cancel);
+    $form.append($actions);
+    $contentContainer.prepend($form);
+    $content.trigger('focus');
+    $cancel.on('click', () => $form.remove());
+    $save.on('click', async () => {
+      const text = String($content.val() ?? '').trim();
+      if (!text) {
+        toastr.warning('Memory text cannot be empty.', 'Storyhold');
+        return;
+      }
+      const patch = { content: text };
+      $form.find('[data-editor-field]').each(function () {
+        const key = $(this).attr('data-editor-field');
+        const value = String($(this).val() ?? '').trim();
+        if (key === 'kind' || key === 'source_start' || key === 'source_end') return;
+        if (key === 'confidence') {
+          if (value !== '') patch[key] = Number(value);
+        } else if (value) {
+          patch[key] = value;
+        }
+      });
+      const start = Number($form.find('[data-editor-field="source_start"]').val());
+      const end = Number($form.find('[data-editor-field="source_end"]').val());
+      const sourceRange = Number.isInteger(start) && Number.isInteger(end) && end >= start
+        ? { kind: 'index', start, end }
+        : null;
+      $save.prop('disabled', true);
+      try {
+        const kind = String($kind.val() ?? 'fact');
+        const result = await ctrl.createProductRecord?.(kind, text, patch, sourceRange);
+        if (!result?.ok) {
+          toastr.error(`Memory creation stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
+          return;
+        }
+        toastr.success('Added Product memory to this chat.', 'Storyhold');
+        renderCurrentProductExplorer({ view: 'records', kind });
+      } catch (error) {
+        toastr.error(`Memory creation failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+      } finally {
+        $save.prop('disabled', false);
+      }
+    });
+  }
+
+  function openProductRecordEditor(recordId) {
+    const record = explorerRecord(recordId);
+    if (!record) return;
+    const $row = $('#sm_product_explorer_content .sm-product-explorer-record').filter(
+      (_index, element) => String($(element).attr('data-record-id')) === String(recordId),
+    );
+    if (!$row.length) return;
+    $row.find('.sm-product-editor-form').remove();
+
+    const $form = $('<div class="sm-product-editor-form">');
+    const $contentLabel = $('<label class="sm-product-editor-field">').text('Memory text');
+    const $content = $('<textarea class="text_pole" rows="4">').val(String(record.content ?? ''));
+    $contentLabel.append($content);
+    $form.append($contentLabel);
+    appendProductEditorField($form, 'Confidence (0–1)', record.confidence ?? '', 'confidence', { type: 'number' })
+      .attr({ min: 0, max: 1, step: 0.05 });
+    for (const key of ['subject', 'target', 'entity', 'entity_type', 'type']) {
+      if (record[key] === undefined) continue;
+      appendProductEditorField($form, key.replace(/_/g, ' '), record[key], key);
+    }
+    $form.append($('<div class="sm-muted">Source provenance is preserved. This changes derived memory, not the chat transcript.</div>'));
+    const $actions = $('<div class="sm-product-editor-actions">');
+    const $save = $('<button type="button" class="menu_button">Save memory edit</button>');
+    const $cancel = $('<button type="button" class="menu_button">Cancel</button>');
+    $actions.append($save, $cancel);
+    $form.append($actions);
+    $row.append($form);
+    $content.trigger('focus');
+
+    $cancel.on('click', () => $form.remove());
+    $save.on('click', async () => {
+      const text = String($content.val() ?? '').trim();
+      if (!text) {
+        toastr.warning('Memory text cannot be empty.', 'Storyhold');
+        return;
+      }
+      const patch = { content: text };
+      $form.find('[data-editor-field]').each(function () {
+        const key = $(this).attr('data-editor-field');
+        const value = String($(this).val() ?? '').trim();
+        if (key === 'confidence') {
+          if (value !== '') patch[key] = Number(value);
+        } else if (record[key] !== undefined) {
+          patch[key] = value || null;
+        }
+      });
+      $save.prop('disabled', true);
+      try {
+        const result = await ctrl.editProductRecord?.(recordId, patch);
+        if (!result?.ok) {
+          toastr.error(`Memory edit stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
+          return;
+        }
+        toastr.success('Saved the Product memory edit. The source chat was not changed.', 'Storyhold');
+        renderCurrentProductExplorer();
+      } catch (error) {
+        toastr.error(`Memory edit failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+      } finally {
+        $save.prop('disabled', false);
+      }
+    });
+  }
+
+  function openTimelineEditor(eventId) {
+    const event = explorerEvent(eventId);
+    if (!event) return;
+    const $row = $('#sm_product_explorer_content .sm-product-explorer-event').filter(
+      (_index, element) => String($(element).attr('data-event-id')) === String(eventId),
+    );
+    if (!$row.length) return;
+    $row.find('.sm-product-editor-form').remove();
+
+    const $form = $('<div class="sm-product-editor-form">');
+    $form.append($('<div class="sm-muted">Correct the timeline interpretation only. The raw chat transcript remains unchanged.</div>'));
+    const storyTime = event.story_time ?? {};
+    appendProductEditorField($form, 'Story year', storyTime.year ?? '', 'year', { type: 'number' });
+    appendProductEditorField($form, 'Story month', storyTime.month ?? '', 'month', { type: 'number' });
+    appendProductEditorField($form, 'Story day', storyTime.day ?? '', 'day', { type: 'number' });
+    const $role = $('<label class="sm-product-editor-field">').text('Interpretation');
+    const $roleSelect = $('<select class="text_pole" data-editor-field="narrative_role">');
+    for (const value of ['current', 'backstory', 'flashback', 'hypothetical', 'rumor']) {
+      $roleSelect.append($('<option>').val(value).text(value).prop('selected', value === (event.narrative_role ?? 'current')));
+    }
+    $role.append($roleSelect);
+    $form.append($role);
+    const $note = appendProductEditorField($form, 'Note (optional)', '', 'note');
+    $note.attr('placeholder', 'Why this interpretation is intentional');
+    const $actions = $('<div class="sm-product-editor-actions">');
+    const $save = $('<button type="button" class="menu_button">Save timeline override</button>');
+    const $cancel = $('<button type="button" class="menu_button">Cancel</button>');
+    $actions.append($save, $cancel);
+    if (event.manual_override) {
+      const $clear = $('<button type="button" class="menu_button">Clear override</button>');
+      $actions.append($clear);
+      $clear.on('click', async () => {
+        $clear.prop('disabled', true);
+        try {
+          const result = await ctrl.clearTimelineOverride?.(eventId);
+          if (!result?.ok) {
+            toastr.error(`Timeline override could not be cleared: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
+            return;
+          }
+          toastr.success('Timeline override cleared; raw-derived interpretation restored.', 'Storyhold');
+          renderCurrentProductExplorer({ view: 'timeline' });
+        } finally {
+          $clear.prop('disabled', false);
+        }
+      });
+    }
+    $form.append($actions);
+    $row.append($form);
+    $form.find('[data-editor-field="day"]').trigger('focus');
+    $cancel.on('click', () => $form.remove());
+
+    $save.on('click', async () => {
+      const storyPatch = {};
+      for (const key of ['year', 'month', 'day']) {
+        const value = String($form.find(`[data-editor-field="${key}"]`).val() ?? '').trim();
+        if (value !== '') storyPatch[key] = Number(value);
+      }
+      const patch = {
+        story_time: Object.keys(storyPatch).length > 0 ? storyPatch : null,
+        narrative_role: $roleSelect.val(),
+      };
+      const note = String($note.val() ?? '').trim();
+      if (note) patch.note = note;
+      $save.prop('disabled', true);
+      try {
+        const result = await ctrl.setTimelineOverride?.(eventId, patch);
+        if (!result?.ok) {
+          toastr.error(`Timeline override stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
+          return;
+        }
+        toastr.success('Saved the timeline interpretation override. The source chat was not changed.', 'Storyhold');
+        renderCurrentProductExplorer({ view: 'timeline' });
+      } catch (error) {
+        toastr.error(`Timeline override failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+      } finally {
+        $save.prop('disabled', false);
+      }
+    });
+  }
+
+  function jumpToProductSource(start, end, kind) {
+    const startValue = Number(start);
+    const endValue = Number(end);
+    if (!Number.isInteger(startValue) || !Number.isInteger(endValue) || endValue < startValue) return;
+    const $start = kind === 'mesId'
+      ? $('#chat .mes').filter((_index, element) => Number($(element).attr('mesid')) === startValue).first()
+      : $('#chat .mes').eq(startValue);
+    if (!$start.length) {
+      toastr.info('The original source message is not visible in this chat.', 'Storyhold');
+      return;
+    }
+    if ($('#rm_extensions_block').hasClass('openDrawer')) {
+      $('#extensions-settings-button .drawer-toggle').trigger('click');
+    }
+    setTimeout(() => {
+      const $chat = $('#chat');
+      if (!$chat.length) return;
+      const chatOffset = $chat.offset()?.top ?? 0;
+      $chat.animate({ scrollTop: $start.offset().top - chatOffset + $chat.scrollTop() - 30 }, 250);
+      $start.addClass('sm_memory_highlight');
+      setTimeout(() => $start.removeClass('sm_memory_highlight'), 1800);
+      if (endValue > startValue) {
+        for (let index = startValue + 1; index <= endValue; index++) {
+          const $message = kind === 'mesId'
+            ? $('#chat .mes').filter((_itemIndex, element) => Number($(element).attr('mesid')) === index).first()
+            : $('#chat .mes').eq(index);
+          $message.addClass('sm_memory_highlight');
+          setTimeout(() => $message.removeClass('sm_memory_highlight'), 1800);
+        }
+      }
+    }, 50);
+  }
+
+  async function runProductScopedAction({ kind = null, maxMessages = 20, narrativeOnly = false } = {}) {
+    if (!isProductMode()) return false;
+    if (isCatchUpRunning()) return true;
+    const label = narrativeOnly
+      ? 'Regenerating this chat\'s narrative...'
+      : kind
+        ? `Scanning recent ${kind} memory...`
+        : 'Scanning recent chat memory...';
+    setStatusMessage(label);
+    try {
+      const result = await ctrl.runProductCatchUp?.({
+        maxWindows: 1,
+        maxMessages,
+        recentOnly: true,
+        enabledKinds: narrativeOnly ? [] : kind ? [kind] : null,
+        advanceCursor: false,
+        forceReprocess: true,
+      });
+      if (!result || result.skipped) {
+        toastr.info('This chat is not ready for that Product memory action.', 'Storyhold');
+        return true;
+      }
+      if (result.cancelled) {
+        setStatusMessage('Product memory action cancelled.');
+        return true;
+      }
+      toastr.success(
+        narrativeOnly ? 'Narrative regeneration completed for this chat.' : 'Recent Product memory scan completed.',
+        'Storyhold',
+      );
+      renderCurrentProductExplorer({ view: narrativeOnly ? 'narrative' : 'records' });
+    } catch (error) {
+      toastr.error(`Product memory action failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+    }
+    return true;
+  }
+
+  async function runProductDuplicateAction($button) {
+    if (!isProductMode()) return false;
+    if (isCatchUpRunning()) return true;
+    $button.prop('disabled', true);
+    setStatusMessage('Checking Product memory for duplicates...');
+    try {
+      const scan = await ctrl.scanProductDuplicateMemories?.();
+      if (!scan) {
+        toastr.info('Duplicate review is not ready for this chat.', 'Storyhold');
+        return true;
+      }
+      if (scan.remove_count === 0) {
+        setStatusMessage('No removable Product duplicates found.');
+        toastr.info(`No removable duplicates found. Scanned ${scan.scanned ?? 0} records.`, 'Storyhold');
+        return true;
+      }
+      const confirmed = await callGenericPopup(
+        `FOUND ${scan.remove_count} DUPLICATE PRODUCT MEMORIES across ${scan.clusters} cluster(s).\n\nThe earliest record in each cluster is kept. Later near-duplicates are removed from this chat and suppressed from automatic re-extraction.\n\nThe raw chat transcript and native Vector Storage are not changed. Continue?`,
+        POPUP_TYPE.CONFIRM,
+      );
+      if (!confirmed) {
+        setStatusMessage('Product duplicate removal cancelled.');
+        return true;
+      }
+      const applied = await ctrl.applyProductDuplicateRemoval?.(scan.review);
+      if (!applied?.ok) {
+        toastr.error(`Product duplicate removal stopped: ${applied?.reason ?? 'unknown error'}`, 'Storyhold');
+        return true;
+      }
+      if (applied.stale) {
+        setStatusMessage('Duplicate review expired; nothing was removed.');
+        toastr.warning('Product memory changed during confirmation. Scan duplicates again.', 'Storyhold');
+        return true;
+      }
+      setStatusMessage(`Removed ${applied.removed ?? 0} duplicate Product records.`);
+      toastr.success(
+        `Removed ${applied.removed ?? 0} duplicate Product record${applied.removed === 1 ? '' : 's'}; ${applied.kept ?? 0} kept.`,
+        'Storyhold',
+      );
+      renderCurrentProductExplorer({ view: 'records' });
+    } catch (error) {
+      toastr.error(`Product duplicate review failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+    } finally {
+      $button.prop('disabled', false);
+    }
+    return true;
+  }
+
+  $('#sm_open_product_explorer').on('click', function () {
+    $('#sm_product_explorer').show();
+    $('#sm_product_status_counts, #sm_product_status_records').hide();
+    renderCurrentProductExplorer();
+  });
+
+  $('#sm_close_product_explorer').on('click', function () {
+    $('#sm_product_explorer').hide();
+    $('#sm_product_status_counts, #sm_product_status_records').show();
+  });
+
+  $('#sm_product_explorer_content').on('click', '[data-explorer-action]', async function () {
+    const $button = $(this);
+    const action = $button.attr('data-explorer-action');
+    const recordId = $button.attr('data-record-id');
+    const eventId = $button.attr('data-event-id');
+    if (action === 'scan-recent') {
+      await runProductScopedAction({
+        kind: $button.attr('data-explorer-kind') === 'all' ? null : $button.attr('data-explorer-kind'),
+      });
+      return;
+    }
+    if (action === 'refresh-timeline') {
+      if (!isProductMode() || isCatchUpRunning()) return;
+      try {
+        const result = await ctrl.refreshProductTimeline?.();
+        if (!result) {
+          toastr.info('The timeline is not ready for this chat.', 'Storyhold');
+          return;
+        }
+        toastr.success('Timeline refreshed from the current chat.', 'Storyhold');
+        renderCurrentProductExplorer({ view: 'timeline' });
+      } catch (error) {
+        toastr.error(`Timeline refresh failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+      }
+      return;
+    }
+    if (action === 'regenerate-narrative') {
+      await runProductScopedAction({ narrativeOnly: true, maxMessages: 40 });
+      return;
+    }
+    if (action === 'add-record') {
+      openProductRecordCreator($button.attr('data-explorer-kind') || 'fact');
+      return;
+    }
+    if (action === 'edit-record') {
+      openProductRecordEditor(recordId);
+      return;
+    }
+    if (action === 'edit-timeline') {
+      openTimelineEditor(eventId);
+      return;
+    }
+    if (action === 'jump-source') {
+      jumpToProductSource($button.attr('data-source-start'), $button.attr('data-source-end'), $button.attr('data-source-kind'));
+      return;
+    }
+    const record = recordId ? explorerRecord(recordId) : null;
+    if (!record) return;
+    const descriptions = {
+      'retire-record': 'This removes the Product record from active prompt and search results but keeps it as visible history.',
+      'delete-record': 'This permanently removes the derived Product record. The raw chat transcript and native Vector Storage are not changed.',
+      'restore-record': 'This returns the retired Product record to active prompt and search results.',
+    };
+    if (!descriptions[action]) return;
+    const confirmed = await callGenericPopup(
+      `${action === 'retire-record' ? 'RETIRE' : action === 'delete-record' ? 'DELETE' : 'RESTORE'} PRODUCT MEMORY\n\n${descriptions[action]}\n\nThis affects the current chat only. Continue?`,
+      POPUP_TYPE.CONFIRM,
+    );
+    if (!confirmed) return;
+    $button.prop('disabled', true);
+    try {
+      const handlers = {
+        'retire-record': ctrl.retireProductRecord,
+        'delete-record': ctrl.deleteProductRecord,
+        'restore-record': ctrl.restoreProductRecord,
+      };
+      const result = await handlers[action]?.(recordId);
+      if (!result?.ok) {
+        toastr.error(`Product memory change stopped: ${result?.reason ?? 'unknown error'}`, 'Storyhold');
+        return;
+      }
+      const labels = {
+        'retire-record': 'Product record retired from active memory.',
+        'delete-record': 'Product record deleted from this chat.',
+        'restore-record': 'Product record restored to active memory.',
+      };
+      toastr.success(labels[action], 'Storyhold');
+      renderCurrentProductExplorer({ view: 'records' });
+    } catch (error) {
+      toastr.error(`Product memory change failed: ${error instanceof Error ? error.message : String(error)}`, 'Storyhold');
+    } finally {
+      $button.prop('disabled', false);
+    }
+  });
+
+  $(document).on('smart_memory:lineage_changed', () => {
+    if ($('#sm_product_explorer').is(':visible')) renderCurrentProductExplorer();
+  });
+
+  $(document).on('smart_memory:product_memory_changed', () => {
+    if ($('#sm_product_explorer').is(':visible')) renderCurrentProductExplorer();
+  });
+
   $(document).on('smart_memory:lineage_changed', updateBranchRebuildButton);
   updateBranchRebuildButton();
+
 
   $('#sm_audit_chat_memory').on('click', function () {
     renderRenameAudit(ctrl.auditRenameNamespaces?.());
@@ -4290,6 +4799,10 @@ export function bindSettingsUI(ctrl) {
   );
 
   $('#sm_scan_duplicates').on('click', async function () {
+    if (isProductMode()) {
+      await runProductDuplicateAction($(this));
+      return;
+    }
     if (blockLegacyProductAction('Legacy duplicate scanning')) return;
     if (ctrl.lineageQuarantined) {
       toastr.warning(
@@ -4426,7 +4939,7 @@ export function bindSettingsUI(ctrl) {
       await resetProductMemory(context.chatMetadata, async () => {
         if (productClearBlocked()) return;
         await context.saveMetadata();
-      }, META_KEY, productClearBlocked);
+      }, META_KEY, productClearBlocked, { preserveManualDecisions: false });
       if (productClearBlocked()) return;
       ctrl.clearAllInjections();
       ctrl.clearProductViews?.();

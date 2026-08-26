@@ -787,7 +787,7 @@ test('manual legacy handlers capture identity and gate writes', async () => {
     ['#sm_extract_arcs_now', '#sm_clear_arcs'],
   ];
   for (const [startMarker, endMarker] of ranges) {
-    const start = source.indexOf(`${startMarker}`).valueOf();
+    const start = source.indexOf(`$('${startMarker}').on('click'`).valueOf();
     const end = source.indexOf(endMarker, start);
     assert.ok(start >= 0, `missing ${startMarker}`);
     assert.ok(end > start, `missing boundary after ${startMarker}`);
@@ -982,6 +982,38 @@ test('branch inheritance revalidates metadata identity and generation around the
   assert.match(source, /chats\?\.\[parentChatUid\]/);
   assert.match(source, /resetBranchContainer\(\s*characterName,\s*branchChatUid/);
   assert.doesNotMatch(source, /chats\?\.\[parentChatId\]/);
+});
+
+test('Product mode exposes an optional current-chat Memory Explorer entry point', async () => {
+  const [html, explorer, settings] = await Promise.all([
+    readFile(resolve(root, 'settings.html'), 'utf8'),
+    readFile(resolve(root, 'product-explorer.js'), 'utf8'),
+    readFile(resolve(root, 'settings.js'), 'utf8'),
+  ]);
+  assert.match(html, /id="sm_open_product_explorer"/);
+  assert.match(html, /id="sm_product_explorer"/);
+  assert.match(explorer, /export function renderProductExplorer\(/);
+  assert.match(settings, /#sm_open_product_explorer/);
+  assert.match(settings, /renderProductExplorer\(/);
+});
+test('stale Product narrative is withheld from prompt injection until refreshed', async () => {
+  const source = await readFile(resolve(root, 'unified-inject.js'), 'utf8');
+  assert.match(source, /narrativeState: meta\.narrative_stale \? null : meta\.narrative/);
+});
+
+test('Product mode hides compatibility-only action rows instead of exposing dead ends', async () => {
+  const [html, settings] = await Promise.all([
+    readFile(resolve(root, 'settings.html'), 'utf8'),
+    readFile(resolve(root, 'settings.js'), 'utf8'),
+  ]);
+  assert.match(html, /Inspect or Fix Chat Memory/);
+  assert.match(settings, /function syncProductModeControls\(\)/);
+  assert.match(settings, /const productMode = extension_settings\[MODULE_NAME\]\?\.single_extension_mode === true/);
+  assert.match(settings, /closest\('\.sm-btn-row'\)\.toggle\(!productMode\)/);
+  assert.match(settings, /if \(isProductMode\(\)\) \{[\s\S]*runProductDuplicateAction/);
+  for (const id of ['sm_extract_now', 'sm_extract_session_now', 'sm_extract_scenes_now', 'sm_extract_arcs_now']) {
+    assert.match(settings, new RegExp(`#${id}`));
+  }
 });
 
 test('blocked unified injection clears individual product prompt slots', async () => {

@@ -151,6 +151,7 @@ export function summarizeProductState(metadata, metaKey = META_KEY) {
       (total, layer) => total + (Array.isArray(layer) ? layer.length : 0),
       0,
     ),
+    narrativeStale: Boolean(root?.narrative_stale),
     recordCounts,
     activeRecordCounts,
     totalRecords: records.length,

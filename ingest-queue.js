@@ -133,7 +133,7 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
         return { ...quarantined, record_ids: [], replayed: false };
       }
 
-      if (prior && prior.status === INGEST_STATUS.COMPLETED && allProjectorsCompleted(prior, names)) {
+      if (prior && prior.status === INGEST_STATUS.COMPLETED && allProjectorsCompleted(prior, names) && !context.forceReprocess) {
         reportProgress(onProgress, {
           phase: 'window_complete',
           windowId: window.window_id,
@@ -161,6 +161,10 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
         failures: [],
         updated_at: now(),
       };
+      if (context.forceReprocess) {
+        state.projections = {};
+        state.records = [];
+      }
       await save(window.window_id, state);
 
       for (const [name, projector] of entries) {

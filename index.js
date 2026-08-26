@@ -117,6 +117,7 @@ import {
   getEmbeddingBatch,
   cosineSimilarity,
 } from './embeddings.js';
+import { hash32 } from './identity.js';
 import { jaccardSimilarity } from './similarity.js';
 import { planDuplicateRemoval, createDuplicateReview, duplicateReviewMatches } from './dedup-audit.js';
 import { generateCanon, injectCanon } from './canon.js';
@@ -167,7 +168,20 @@ import {
   relinkCurrentNamespace,
   unlinkCurrentManualMemory,
 } from './rename-ops.js';
+import { buildProductExplorerModel } from './product-explorer.js';
 import { rebuildTimeline } from './timeline.js';
+import {
+  applyTimelineOverride,
+  applyTimelineOverrides,
+  clearTimelineOverride,
+  createProductRecord,
+  buildProductSuppressionKey,
+  deleteProductRecord,
+  editProductRecord,
+  restoreProductRecord,
+  retireProductRecord,
+  upsertProductSuppression,
+} from './product-mutations.js';
 import {
   buildProductWindow,
   createProductPipeline,
@@ -638,6 +652,7 @@ async function runSingleExtensionIngest(
   onProgress = () => {},
   shouldCancel = () => false,
   expectedIdentity = {},
+  productOptions = {},
 ) {
   const context = getContext();
   const settings = getSettings();
@@ -653,6 +668,10 @@ async function runSingleExtensionIngest(
   const expectedResponder = expectedIdentity.responder !== undefined
     ? expectedIdentity.responder
     : characterName;
+  const recentOnly = productOptions.recentOnly === true;
+  const maxMessages = productOptions.maxMessages ?? settings.product_window_size ?? 40;
+  const enabledKinds = productOptions.enabledKinds ?? enabledProductKinds(settings);
+  const advanceCursor = productOptions.advanceCursor !== false && !recentOnly;
   const currentIdentityMatches = () =>
     (expectedGeneration === undefined || chatLoadId === expectedGeneration) &&
     getCurrentChatId() === expectedChatId &&
@@ -683,18 +702,25 @@ async function runSingleExtensionIngest(
   if (productAborted()) return null;
 
   const branchUid = meta.chat_uid;
-  const timeline = rebuildTimeline(context.chat, {
+  const rawTimeline = rebuildTimeline(context.chat, {
     chatId: meta.chat_uid,
     epochId: branchUid,
   });
+  const timeline = {
+    ...rawTimeline,
+    events: applyTimelineOverrides(rawTimeline.events, meta.timeline_overrides, {
+      chatUid: meta.chat_uid,
+    }),
+  };
   const cursor = loadProductCursor(context.chatMetadata);
   const window = buildProductWindow({
     chat: context.chat,
     chatUid: meta.chat_uid,
     branchUid,
-    cursor,
+    cursor: recentOnly ? null : cursor,
     lineage,
-    maxMessages: settings.product_window_size ?? 40,
+    maxMessages,
+    recentOnly,
   });
   if (!window) return null;
   onProgress({
@@ -724,7 +750,6 @@ async function runSingleExtensionIngest(
     snippetsPerPromotion: settings.narrative_snippets_per_promotion,
     maxLayers: settings.narrative_max_layers,
   };
-  const enabledKinds = enabledProductKinds(settings);
   const pipeline = createProductPipeline({
     metadata: context.chatMetadata,
     settings: {
@@ -773,6 +798,7 @@ async function runSingleExtensionIngest(
       shouldAbort: productAborted,
       isCancelled: shouldCancel,
       onProgress,
+      forceReprocess: productOptions.forceReprocess === true,
     });
   } catch (error) {
     if (shouldCancel()) {
@@ -837,20 +863,32 @@ async function runSingleExtensionIngest(
   }
   if (completed) {
     const root = (context.chatMetadata[META_KEY] ??= {});
+    if (!result.replayed) root.narrative_stale = null;
     root.product_status = {
       ...status,
       updated_at: Date.now(),
     };
-    await advanceProductCursor(context.chatMetadata, window, async () => {
-      if (productAborted()) throw CHAT_SWITCHED;
+    if (advanceCursor) {
+      await advanceProductCursor(context.chatMetadata, window, async () => {
+        if (productAborted()) throw CHAT_SWITCHED;
+        await context.saveMetadata();
+      });
+      if (productAborted()) return result;
+      onProgress({
+        phase: 'cursor_advanced',
+        windowId: window.window_id,
+        status: result.status,
+      });
+    } else {
       await context.saveMetadata();
-    });
-    if (productAborted()) return result;
-    onProgress({
-      phase: 'cursor_advanced',
-      windowId: window.window_id,
-      status: result.status,
-    });
+      if (productAborted()) return result;
+      onProgress({
+        phase: 'projection_complete',
+        windowId: window.window_id,
+        status: result.status,
+        recentOnly: true,
+      });
+    }
   }
   if (!productAborted()) {
     maybeInjectUnified({ respondingCharacter: characterName });
@@ -868,6 +906,12 @@ async function runSingleExtensionCatchUpUnlocked({
   expectedChatUid = undefined,
   expectedResponder = undefined,
   expectedMetadata = undefined,
+  maxWindows = undefined,
+  maxMessages = undefined,
+  recentOnly = false,
+  enabledKinds = null,
+  advanceCursor = true,
+  forceReprocess = false,
 } = {}) {
   const capturedGen = expectedGeneration !== undefined ? expectedGeneration : chatLoadId;
   const capturedChatId = expectedChatId !== undefined ? expectedChatId : getCurrentChatId();
@@ -982,9 +1026,10 @@ async function runSingleExtensionCatchUpUnlocked({
             metadata: expectedMetadata,
             responder: productResponder,
           },
+          { recentOnly, maxMessages, enabledKinds, advanceCursor, forceReprocess },
         ),
       shouldAbort: () => productChatInvalidated() || catchUpCancelled,
-      maxWindows: settings.product_catchup_max_windows ?? 1000,
+      maxWindows: maxWindows ?? settings.product_catchup_max_windows ?? 1000,
       rescan,
       onProgress: report,
     });
@@ -995,9 +1040,11 @@ async function runSingleExtensionCatchUpUnlocked({
           ? 'partial'
           : result.last && result.last.status !== 'completed'
           ? 'partial'
-          : result.exhausted
+          : recentOnly && result.last?.status === 'completed'
             ? 'finished'
-            : 'capped';
+            : result.exhausted
+              ? 'finished'
+              : 'capped';
       const terminalMessage = productProgressMessage({
         phase: terminalPhase,
         windows: result.windows,
@@ -1105,7 +1152,13 @@ async function refreshCurrentTimeline(abortCheck = null) {
 
   const meta = context.chatMetadata[META_KEY] ?? (context.chatMetadata[META_KEY] = {});
   const epochId = meta.lineage?.epoch_id ?? meta.timeline?.story_epoch ?? chatId ?? null;
-  const timeline = rebuildTimeline(context.chat, { chatId, epochId });
+  const rawTimeline = rebuildTimeline(context.chat, { chatId, epochId });
+  const timeline = {
+    ...rawTimeline,
+    events: applyTimelineOverrides(rawTimeline.events, meta.timeline_overrides, {
+      chatUid: meta.chat_uid,
+    }),
+  };
   if (abortCheck?.()) return null;
   if (JSON.stringify(meta.timeline) !== JSON.stringify(timeline)) {
     if (abortCheck?.()) return null;
@@ -1114,6 +1167,169 @@ async function refreshCurrentTimeline(abortCheck = null) {
     await context.saveMetadata();
   }
   return timeline;
+}
+
+function currentProductExplorerModel() {
+  const context = getContext();
+  const root = context.chatMetadata?.[META_KEY] ?? null;
+  if (!root?.chat_uid) return null;
+  return buildProductExplorerModel({
+    chatUid: root.chat_uid,
+    chatId: getCurrentChatId(),
+    records: root.structured_records,
+    timeline: root.timeline,
+    timelineOverrides: root.timeline_overrides,
+    chat: context.chat,
+    narrative: root.narrative,
+    narrativeStale: Boolean(root.narrative_stale),
+  });
+}
+
+function captureProductMutation() {
+  const context = getContext();
+  const metadata = context.chatMetadata;
+  const root = metadata?.[META_KEY];
+  const identity = captureProductOperationIdentity({
+    generation: chatLoadId,
+    chatId: getCurrentChatId(),
+    chatUid: root?.chat_uid ?? null,
+    responder: currentProductResponder(),
+    metadata,
+  });
+  const stillCurrent = () =>
+    chatLoadId === identity.generation &&
+    getCurrentChatId() === identity.chatId &&
+    getContext().chatMetadata === identity.metadata &&
+    getContext().chatMetadata?.[META_KEY]?.chat_uid === identity.chatUid &&
+    currentProductResponder() === identity.responder &&
+    getSettings().enabled !== false &&
+    getSettings().single_extension_mode === true &&
+    !isFreshStart() &&
+    !isCurrentLineageQuarantined();
+  if (!metadata || !root?.chat_uid || !stillCurrent()) return null;
+  return { context, identity, stillCurrent };
+}
+
+async function runProductMutation(mutator) {
+  const operation = captureProductMutation();
+  if (!operation) return { ok: false, reason: 'This chat is not ready for Product memory changes.' };
+  if (productOperationGate.isRunning() || productControl.isHeld()) {
+    return { ok: false, reason: 'Product memory is already processing this chat.' };
+  }
+  return runExclusiveProductOperation(
+    async () => {
+      if (!operation.stillCurrent()) return { ok: false, reason: 'The active chat changed.' };
+      const root = operation.context.chatMetadata[META_KEY];
+      const result = await mutator(root, operation.stillCurrent);
+      if (!operation.stillCurrent()) return { ok: false, reason: 'The active chat changed.' };
+      if (result?.records) root.structured_records = result.records;
+      if (result?.timelineOverrides) root.timeline_overrides = result.timelineOverrides;
+      if (result?.suppression) {
+        root.product_suppressions = upsertProductSuppression(
+          root.product_suppressions,
+          result.suppression,
+        );
+      }
+      if (Array.isArray(result?.suppressions)) {
+        root.product_suppressions = result.suppressions.reduce(
+          (current, suppression) => upsertProductSuppression(current, suppression),
+          root.product_suppressions,
+        );
+      }
+      if (result?.contentChanged || result?.timelineChanged || result?.records) {
+        root.narrative_stale = {
+          reason: result?.contentChanged ? 'record-edited' : result?.timelineChanged ? 'timeline-edited' : 'records-changed',
+          updated_at: Date.now(),
+        };
+      }
+      if (result?.contentChanged) clearEmbeddingCache();
+      await operation.context.saveMetadata();
+      if (!operation.stillCurrent()) return { ok: false, reason: 'The active chat changed.' };
+      await refreshCurrentTimeline(operation.stillCurrent);
+      if (!operation.stillCurrent()) return { ok: false, reason: 'The active chat changed.' };
+      maybeInjectUnified({ respondingCharacter: operation.identity.responder });
+      refreshProductViews(null, operation.identity.responder);
+      $(document).trigger('smart_memory:product_memory_changed');
+      return { ok: true, ...result };
+    },
+    `product-mutation-${operation.identity.generation}`,
+  );
+}
+
+async function createCurrentProductRecord(kind, content, patch = {}, sourceRange = null) {
+  return runProductMutation((root) => {
+    const chat = getContext().chat ?? [];
+    const fallbackIndex = Math.max(0, chat.length - 1);
+    const record = createProductRecord({
+      chatUid: root.chat_uid,
+      kind,
+      content,
+      sourceRange: sourceRange ?? { kind: 'index', start: fallbackIndex, end: fallbackIndex },
+      patch,
+    });
+    const existing = Array.isArray(root.structured_records) ? root.structured_records : [];
+    if (existing.some((item) => String(item?.id) === String(record.id))) {
+      return { records: existing, record, contentChanged: false, changed: false };
+    }
+    return { records: [...existing, record], record, contentChanged: true, changed: true };
+  });
+}
+
+async function editCurrentProductRecord(recordId, patch) {
+  return runProductMutation((root) => editProductRecord(root.structured_records ?? [], {
+    recordId,
+    chatUid: root.chat_uid,
+    patch,
+  }));
+}
+
+async function retireCurrentProductRecord(recordId) {
+  return runProductMutation((root) => retireProductRecord(root.structured_records ?? [], {
+    recordId,
+    chatUid: root.chat_uid,
+  }));
+}
+
+async function restoreCurrentProductRecord(recordId) {
+  return runProductMutation((root) => restoreProductRecord(root.structured_records ?? [], {
+    recordId,
+    chatUid: root.chat_uid,
+  }));
+}
+
+async function deleteCurrentProductRecord(recordId) {
+  return runProductMutation((root) => deleteProductRecord(root.structured_records ?? [], {
+    recordId,
+    chatUid: root.chat_uid,
+  }));
+}
+
+async function setCurrentTimelineOverride(eventId, patch) {
+  return runProductMutation((root) => ({
+    timelineOverrides: applyTimelineOverride(root.timeline_overrides ?? [], {
+      eventId,
+      chatUid: root.chat_uid,
+      patch,
+    }),
+    timelineChanged: true,
+  }));
+}
+
+async function clearCurrentTimelineOverride(eventId) {
+  return runProductMutation((root) => ({
+    timelineOverrides: clearTimelineOverride(root.timeline_overrides ?? [], {
+      eventId,
+      chatUid: root.chat_uid,
+    }),
+    timelineChanged: true,
+  }));
+}
+
+async function refreshCurrentProductTimeline() {
+  const operation = captureProductMutation();
+  if (!operation) return null;
+  const timeline = await refreshCurrentTimeline(operation.stillCurrent);
+  return operation.stillCurrent() ? timeline : null;
 }
 
 // Tracks which group member the settings panel is currently showing.
@@ -3164,6 +3380,67 @@ async function applyDuplicateRemoval(characterName, abortCheck = null, review = 
   };
 }
 
+async function scanProductDuplicateMemories(abortCheck = null) {
+  const operation = captureProductMutation();
+  if (!operation || abortCheck?.()) return null;
+  const memories = productDuplicateEligibleRecords();
+  if (memories.length < 2) return duplicateScanResult(memories, planDuplicateRemoval(memories));
+  const texts = memories.map((memory) => String(memory.content).toLowerCase().trim());
+  const vectorMap = await getEmbeddingBatch(texts);
+  if (!operation.stillCurrent() || abortCheck?.()) return null;
+  const plan = planDuplicateRemoval(memories, { scoreFor: buildMemoryScorer(vectorMap) });
+  return duplicateScanResult(memories, plan);
+}
+
+function productDuplicateEligibleRecords() {
+  const model = currentProductExplorerModel();
+  return model?.activeRecords?.filter((record) => record?.content) ?? [];
+}
+
+async function applyProductDuplicateRemoval(review, abortCheck = null) {
+  if (!review || !Array.isArray(review.remove_ids) || abortCheck?.()) return null;
+  return runProductMutation((root, stillCurrent) => {
+    const allRecords = Array.isArray(root.structured_records) ? root.structured_records : [];
+    const memories = allRecords.filter(
+      (record) => record?.scope?.chat_uid === root.chat_uid
+        && !record?.superseded_by
+        && record?.content,
+    );
+    if (!duplicateReviewMatches(memories, review)) {
+      return {
+        stale: true,
+        reason: 'review-stale',
+        scanned: memories.length,
+        clusters: review.clusters?.length ?? 0,
+        remove_count: 0,
+        kept: memories.length,
+        removed: 0,
+      };
+    }
+    const eligibleIds = new Set(memories.map((memory) => memory.id));
+    const removeSet = new Set(review.remove_ids);
+    if ([...removeSet].some((id) => !eligibleIds.has(id)) || !stillCurrent() || abortCheck?.()) {
+      return { stale: true, reason: 'review-invalidated', removed: 0 };
+    }
+    const removedRecords = memories.filter((record) => removeSet.has(record.id));
+    return {
+      records: allRecords.filter((record) => !removeSet.has(record.id)),
+      suppressions: removedRecords.map((record) => ({
+        key: buildProductSuppressionKey(record),
+        chat_uid: root.chat_uid,
+        kind: record.kind ?? null,
+        source_range: record.source_range ?? null,
+        content_hash: hash32(String(record.content ?? '').trim()),
+        created_at: Date.now(),
+      })),
+      removed: removedRecords.length,
+      kept: memories.length - removedRecords.length,
+      remove_count: removedRecords.length,
+      clusters: review.clusters?.length ?? 0,
+      scanned: memories.length,
+    };
+  });
+}
 function publishMemoryReviewProgress(progress) {
   const state = setMemoryReviewStatus(memoryReviewProgress(progress));
   setStatusMessage(state.message);
@@ -3574,10 +3851,21 @@ jQuery(async function () {
     unlinkManualMemory: unlinkCurrentManualMemory,
     scanDuplicateMemories,
     applyDuplicateRemoval,
+    scanProductDuplicateMemories,
+    applyProductDuplicateRemoval,
     runMemoryReview,
     getSelectedCharacterName,
     getStableExtractionWindowWithFallback,
     runProductCatchUp: runSingleExtensionCatchUp,
+    getProductExplorerModel: currentProductExplorerModel,
+    createProductRecord: createCurrentProductRecord,
+    editProductRecord: editCurrentProductRecord,
+    retireProductRecord: retireCurrentProductRecord,
+    restoreProductRecord: restoreCurrentProductRecord,
+    deleteProductRecord: deleteCurrentProductRecord,
+    setTimelineOverride: setCurrentTimelineOverride,
+    clearTimelineOverride: clearCurrentTimelineOverride,
+    refreshProductTimeline: refreshCurrentProductTimeline,
   });
   initTooltips();
   initTypePickers();

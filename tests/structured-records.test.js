@@ -8,6 +8,7 @@ import {
   parseStructuredResponseResult,
 } from '../structured-records.js';
 import { buildIngestWindow } from '../projections.js';
+import { buildProductSuppressionKey } from '../product-mutations.js';
 
 const window = buildIngestWindow({
   chatUid: 'chat-uid-a',
@@ -157,6 +158,56 @@ test('merge deduplicates incoming records and retires explicitly superseded stat
   assert.equal(result.find((record) => record.id === 'old-state').validity.status, 'superseded');
   assert.equal(result.filter((record) => record.content === 'Mira is healed.').length, 1);
   assert.equal(existing[0].superseded_by, undefined);
+});
+
+test('merge preserves manual Product edits and source-scoped deletions across rescans', () => {
+  const edited = {
+    id: 'edited-fact',
+    kind: 'fact',
+    content: 'Maeve carries the obsidian key.',
+    scope: { chat_uid: 'chat-uid-a', branch_uid: 'chat-uid-a' },
+    source_range: { kind: 'index', start: 0, end: 1 },
+    provenance: { source_chat_uid: 'chat-uid-a', source_messages: [0, 1] },
+    manual_override: { active: true, action: 'edit' },
+    validity: { status: 'active' },
+  };
+  const deleted = {
+    id: 'deleted-fact',
+    kind: 'fact',
+    content: 'The gate is painted red.',
+    scope: { chat_uid: 'chat-uid-a', branch_uid: 'chat-uid-a' },
+    source_range: { kind: 'index', start: 2, end: 3 },
+    provenance: { source_chat_uid: 'chat-uid-a', source_messages: [2, 3] },
+    validity: { status: 'active' },
+  };
+  const incoming = [
+    {
+      id: 'fresh-old-wording',
+      kind: 'fact',
+      content: 'Maeve carries the silver key.',
+      scope: { chat_uid: 'chat-uid-a', branch_uid: 'chat-uid-a' },
+      source_range: { kind: 'index', start: 0, end: 1 },
+      provenance: { source_chat_uid: 'chat-uid-a', source_messages: [0, 1] },
+      validity: { status: 'active' },
+    },
+    {
+      id: 'recreated-deleted',
+      kind: 'fact',
+      content: 'The gate is painted red.',
+      scope: { chat_uid: 'chat-uid-a', branch_uid: 'chat-uid-a' },
+      source_range: { kind: 'index', start: 2, end: 3 },
+      provenance: { source_chat_uid: 'chat-uid-a', source_messages: [2, 3] },
+      validity: { status: 'active' },
+    },
+  ];
+
+  const result = mergeStructuredRecords(
+    [edited],
+    incoming,
+    { suppressedKeys: [buildProductSuppressionKey(deleted)] },
+  );
+
+  assert.deepEqual(result.map((record) => record.content), ['Maeve carries the obsidian key.']);
 });
 
 test('structured normalization removes foreign nested identity variants from model metadata', () => {

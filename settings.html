@@ -133,6 +133,22 @@
           <div id="sm_product_status_message" class="sm-muted">No chat memory saved for this chat yet.</div>
           <div id="sm_product_status_counts" class="sm-product-status-counts"></div>
           <div id="sm_product_status_records" class="sm-product-status-records"></div>
+          <div class="sm-btn-row" style="margin-top: 6px">
+            <button id="sm_open_product_explorer" class="menu_button menu_button_icon">
+              <i class="fa-solid fa-compass"></i>
+              <span>Inspect or Fix Chat Memory</span>
+            </button>
+          </div>
+          <div id="sm_product_explorer" class="sm-product-explorer" style="display: none">
+            <div class="sm-btn-row sm-product-explorer-header">
+              <button id="sm_close_product_explorer" class="menu_button menu_button_icon" type="button">
+                <i class="fa-solid fa-arrow-left"></i>
+                <span>Back to saved memory</span>
+              </button>
+            </div>
+            <div class="sm-muted">Detailed records and timeline for this chat only.</div>
+            <div id="sm_product_explorer_content"></div>
+          </div>
         </div>
 
         <!-- Read-only memory search / claim check console -->
@@ -546,8 +562,8 @@
           <div class="sm-block">
             <label>
               Summary
-              <small style="color: var(--SmartReplyColor, #aaa)"
-                >(editable - changes apply immediately)</small
+              <small id="sm_summary_editability_hint" style="color: var(--SmartReplyColor, #aaa)"
+                >(editable in compatibility mode; Product mode manages it automatically)</small
               >
             </label>
             <textarea
@@ -1026,8 +1042,8 @@
           <div class="sm-block">
             <label>
               Canon
-              <small style="color: var(--SmartReplyColor, #aaa)"
-                >(editable - changes apply immediately)</small
+              <small id="sm_canon_editability_hint" style="color: var(--SmartReplyColor, #aaa)"
+                >(editable in compatibility mode; Product mode uses generated narrative)</small
               >
             </label>
             <textarea

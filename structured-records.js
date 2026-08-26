@@ -15,6 +15,7 @@ import {
 } from './projections.js';
 import { hash32 } from './identity.js';
 import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './timeline.js';
+import { buildProductSuppressionKey } from './product-mutations.js';
 import { parseArcOutput, parseExtractionOutput, parseSessionOutput } from './parsers.js';
 
 const EMPTY_RESPONSE = Object.freeze({
@@ -324,12 +325,27 @@ function supersededStatus(record) {
   };
 }
 
+function sameSourceWindow(left, right) {
+  const leftRange = left?.source_range ?? left?.sourceRange ?? null;
+  const rightRange = right?.source_range ?? right?.sourceRange ?? null;
+  return JSON.stringify(leftRange) === JSON.stringify(rightRange);
+}
+
+function protectedByManualOverride(existing, incoming) {
+  return existing?.manual_override?.active === true
+    && existing?.kind === incoming?.kind
+    && sameSourceWindow(existing, incoming);
+}
+
 /**
  * Merges typed records without mutating either input. Explicit supersession or
  * a stronger same-key update retires the older state while preserving history.
+ * Manual edits and explicit deletion suppressions win over later re-extraction
+ * from the same source window until the user clears that decision.
  */
-export function mergeStructuredRecords(existing = [], incoming = []) {
+export function mergeStructuredRecords(existing = [], incoming = [], { suppressedKeys = [] } = {}) {
   const result = list(existing).map(cloneRecord);
+  const suppressionSet = new Set(list(suppressedKeys).map((key) => String(key)));
   const seen = new Set(
     result
       .filter((record) => !record.superseded_by)
@@ -338,6 +354,8 @@ export function mergeStructuredRecords(existing = [], incoming = []) {
 
   for (const candidate of list(incoming)) {
     const record = cloneRecord(candidate);
+    if (suppressionSet.has(buildProductSuppressionKey(record))) continue;
+    if (result.some((old) => protectedByManualOverride(old, record))) continue;
     const contentKey = `${record.kind}|${normalizedContent(record)}`;
     const supersedes = new Set(
       list(record.supersedes).concat(record.supersedes ? [] : []).map(String),

@@ -536,6 +536,10 @@ export function clearProductViews() {
     for (const field of form.querySelectorAll('input, textarea')) field.value = '';
   }
   for (const form of document.querySelectorAll('#smart_memory_settings .sm_add_memory_form')) form.remove();
+  const explorer = document.getElementById('sm_product_explorer');
+  if (explorer) explorer.style.display = 'none';
+  const explorerContent = document.getElementById('sm_product_explorer_content');
+  if (explorerContent) explorerContent.replaceChildren();
   const status = document.getElementById('sm_product_status_message');
   if (status) status.textContent = 'Loading chat memory...';
   const summary = document.getElementById('sm_current_summary');
@@ -730,7 +734,7 @@ function renderProductEpistemicList($list, characterName) {
 function renderProductEntityPanel($panel) {
   if (isFreshStart() || getSettings()?.enabled === false || isCurrentLineageQuarantined()) {
     $panel.empty();
-    $panel.append($('<div class="sm_no_char sm-product-empty">').text('Product entities are hidden while Storyhold is disabled, read-only, or chat lineage is unverified.'));
+    $panel.append($('<div class="sm_no_char sm-product-empty">').text('Product entities are hidden while Storyhold is disabled, read-only, or this chat has no stable identity.'));
     return;
   }
   const settings = getSettings();
@@ -804,7 +808,7 @@ export function updateProductStatusUI(progress = null) {
     clearProductViews();
     panel.style.display = '';
     const messageEl = document.getElementById('sm_product_status_message');
-    if (messageEl) messageEl.textContent = 'Product memory hidden until this chat\'s lineage is verified.';
+    if (messageEl) messageEl.textContent = 'Product memory is unavailable until this chat has a stable identity.';
     return;
   }
 
@@ -847,9 +851,12 @@ export function updateProductStatusUI(progress = null) {
   const records = scopedRecords;
 
   if (messageEl) {
-    const message = progress?.message || summary.lastStatus?.message;
+    const progressMessage = progress?.message;
+    const message = progressMessage || (summary.narrativeStale ? null : summary.lastStatus?.message);
     if (message) {
       messageEl.textContent = message;
+    } else if (summary.narrativeStale) {
+      messageEl.textContent = 'A manual memory change is saved. Narrative continuity needs a refresh.';
     } else if (!summary.hasData) {
       messageEl.textContent = 'No product memory processed for this chat yet.';
     } else {
@@ -871,7 +878,7 @@ export function updateProductStatusUI(progress = null) {
     const rows = [
       [
         'Narrative chain / short-term continuity',
-        `${summary.narrativeLayers} layer${summary.narrativeLayers === 1 ? '' : 's'}, ${summary.narrativeSnippets} snippet${summary.narrativeSnippets === 1 ? '' : 's'}`,
+        `${summary.narrativeLayers} layer${summary.narrativeLayers === 1 ? '' : 's'}, ${summary.narrativeSnippets} snippet${summary.narrativeSnippets === 1 ? '' : 's'}${summary.narrativeStale ? ' · refresh needed' : ''}`,
       ],
       [
         'Product ingest',
@@ -1235,6 +1242,12 @@ export function initTooltips() {
 
 /** Syncs the short-term summary textarea with the current summary text. */
 export function updateShortTermUI(summary) {
+  const hint = document.getElementById('sm_summary_editability_hint');
+  if (hint) {
+    hint.textContent = productModeActive()
+      ? '(generated in Product mode; edit records in Inspect or Fix Chat Memory)'
+      : '(editable - changes apply immediately)';
+  }
   if (productModeActive()) {
     updateProductStatusUI();
     return;
@@ -1248,6 +1261,12 @@ export function updateShortTermUI(summary) {
  * @param {string|null} characterName
  */
 export function updateCanonUI(characterName) {
+  const hint = document.getElementById('sm_canon_editability_hint');
+  if (hint) {
+    hint.textContent = productModeActive()
+      ? '(generated narrative in Product mode; edit records in Inspect or Fix Chat Memory)'
+      : '(editable - changes apply immediately)';
+  }
   if (productModeActive()) {
     $('#sm_canon_display').prop('readonly', true).val('');
     $('#sm_canon_status').text('Canon is not a product projection; narrative continuity is shown above.');

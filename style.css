@@ -102,7 +102,176 @@
   font-size: 0.82em;
 }
 
-/* ── Button rows ─────────────────────────────────────────────────────────── */
+/* ── Optional Product Memory Explorer -------------------------------------- */
+
+#smart_memory_settings .sm-product-explorer {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--SmartThemeBorderColor, #555);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor, transparent) 45%, transparent);
+}
+
+#smart_memory_settings .sm-product-explorer-header {
+  margin-bottom: 6px;
+}
+
+#smart_memory_settings .sm-product-explorer-heading,
+#smart_memory_settings .sm-product-explorer-record,
+#smart_memory_settings .sm-product-explorer-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+#smart_memory_settings .sm-product-explorer-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+#smart_memory_settings .sm-product-explorer-tabs,
+#smart_memory_settings .sm-product-explorer-filters,
+#smart_memory_settings .sm-product-explorer-record-actions,
+#smart_memory_settings .sm-product-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+#smart_memory_settings .sm-product-explorer-tabs {
+  margin-bottom: 8px;
+}
+
+#smart_memory_settings .sm-product-explorer-tabs .menu_button.is-active {
+  border-color: var(--SmartThemeQuoteColor, var(--SmartReplyColor, #aaa));
+  background: var(--SmartThemeQuoteColor, rgba(128, 128, 128, 0.2));
+}
+
+#smart_memory_settings .sm-product-explorer-filters {
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+#smart_memory_settings .sm-product-explorer-filters select,
+#smart_memory_settings .sm-product-explorer-filters input[type='search'] {
+  min-width: 9em;
+  flex: 1 1 9em;
+}
+
+#smart_memory_settings .sm-product-explorer-summary {
+  margin: 4px 0 6px;
+}
+
+#smart_memory_settings .sm-product-explorer-list,
+#smart_memory_settings .sm-product-explorer-timeline,
+#smart_memory_settings .sm-product-explorer-narrative {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+#smart_memory_settings .sm-product-explorer-record,
+#smart_memory_settings .sm-product-explorer-event {
+  padding: 7px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.06);
+}
+
+#smart_memory_settings .sm-product-explorer-record-body {
+  min-width: 0;
+  flex: 1;
+}
+
+#smart_memory_settings .sm-product-explorer-record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 3px;
+}
+
+#smart_memory_settings .sm-product-explorer-record-content,
+#smart_memory_settings .sm-product-explorer-event-text,
+#smart_memory_settings .sm-product-explorer-snippet {
+  overflow-wrap: anywhere;
+}
+
+#smart_memory_settings .sm-product-explorer-source {
+  margin-top: 4px;
+}
+
+#smart_memory_settings .sm-product-explorer-event {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#smart_memory_settings .sm-product-explorer-event-when {
+  min-width: 8em;
+  font-weight: 600;
+}
+
+#smart_memory_settings .sm-product-explorer-event-text {
+  flex: 1 1 12em;
+}
+
+#smart_memory_settings .sm-product-explorer-event-preview {
+  flex: 1 1 100%;
+  padding-left: 8px;
+  color: var(--SmartReplyColor, #aaa);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+
+#smart_memory_settings .sm-product-explorer-narrative details {
+  border-left: 2px solid var(--SmartThemeBorderColor, #555);
+  padding-left: 8px;
+}
+
+#smart_memory_settings .sm-product-explorer-snippet {
+  margin: 5px 0;
+}
+
+#smart_memory_settings .sm-product-editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+#smart_memory_settings .sm-product-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#smart_memory_settings .sm-product-editor-actions {
+  align-items: center;
+}
+
+#smart_memory_settings .sm-memory-status {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.75em;
+  text-transform: capitalize;
+  background: rgba(128, 128, 128, 0.18);
+}
+
+#smart_memory_settings .sm-memory-status-retired,
+#smart_memory_settings .sm-memory-status-superseded {
+  opacity: 0.65;
+}
+
+#smart_memory_settings .sm-memory-status-manual {
+  color: var(--SmartThemeQuoteColor, var(--SmartReplyColor, #aaa));
+}
+
+
 
 /* Flex row where every direct .menu_button child stretches to an equal share
  * of the available width. Single buttons go full-width; two buttons are 50/50;

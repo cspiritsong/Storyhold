@@ -72,6 +72,27 @@ test('replaying a committed window does not run projections twice', async () => 
   assert.deepEqual(second.record_ids.sort(), ['narrative-a', 'state-a']);
 });
 
+test('explicit force reprocess reruns a completed window instead of replaying it', async () => {
+  const stored = new Map();
+  let calls = 0;
+  const queue = createIngestQueue({
+    load: (id) => stored.get(id),
+    save: (id, state) => stored.set(id, structuredClone(state)),
+    projectors: {
+      structured: async () => {
+        calls++;
+        return [{ id: `fact-${calls}`, kind: 'fact', content: `Fact ${calls}.` }];
+      },
+    },
+  });
+
+  await queue.ingest(makeWindow());
+  const result = await queue.ingest(makeWindow(), { forceReprocess: true });
+
+  assert.equal(result.replayed, false);
+  assert.equal(calls, 2);
+  assert.deepEqual(result.record_ids, ['fact-2']);
+});
 test('persisted window state carries the actual array endpoints', async () => {
   const stored = new Map();
   const queue = createIngestQueue({

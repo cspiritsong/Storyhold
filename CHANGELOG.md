@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-08-26
+
+### Added
+
+- **Optional Chat Memory Explorer.** Product mode now has a current-chat-only Explorer with full Product-record browsing, type/status/text filters, bounded source previews, source-message navigation, complete timeline events, narrative layers, and explicit refresh/regeneration actions.
+- **Product-mode memory controls.** Recent scoped scans, duplicate review/removal, manual Product-record creation, edit/retire/delete/restore, and timeline interpretation overrides now operate through the canonical current-chat Product store instead of legacy-only handlers.
+
+### Changed
+
+- **Feature-rich without feature-dead ends.** Legacy per-tier action rows are hidden while Product mode is active; their capabilities are available through real Product-aware Explorer actions. The default path remains compact and set-and-play.
+- **Manual projection safety.** Product edits preserve source provenance, mark generated narrative stale, invalidate semantic embedding state when text changes, survive a rebuild, and never modify raw chat JSONL. Deliberate deletion is source-scoped so a later rescan does not silently recreate the deleted record.
+- **Timeline reset semantics.** Rebuild clears generated timeline data while preserving explicit user decisions; Delete All Memory clears the timeline, overrides, suppressions, records, narrative, cursor, and ingest state for the current chat.
+
+### Fixed
+
+- Product mode no longer presents clickable controls that only respond with “This tool is not available in the current memory mode.”
+- Stale generated narrative is withheld from Product prompt injection until it is refreshed.
+- Explicit recent scans can reprocess an already-completed window without moving the historical cursor backward.
+
 ## [1.13.0] - 2026-08-26
 
 ### Changed

@@ -136,6 +136,7 @@ export function buildProductWindow({
   cursor = null,
   lineage = null,
   maxMessages = 40,
+  recentOnly = false,
 } = {}) {
   if (!Array.isArray(chat)) throw new TypeError('chat must be an array');
   if (!Number.isInteger(maxMessages) || maxMessages < 1) {
@@ -148,41 +149,43 @@ export function buildProductWindow({
   if (endExclusive <= 0) return null;
 
   const usableCursor = cursorIdentityMatches(cursor, chatUid, branchUid) ? cursor : null;
-  let startIndex = 0;
-  const lastMesId = stableMesId(usableCursor?.last_mes_id);
-  const lastIndex = Number.isInteger(usableCursor?.last_index)
-    ? usableCursor.last_index
-    : Number.isInteger(usableCursor?.end_index)
-      ? usableCursor.end_index
-      : -1;
-  const hasValidatedIndex = validatedIndexCursor(chat, usableCursor, endExclusive);
-  const hasCursorSource = Boolean(usableCursor?.source_range);
-  const persistedEndIndex = Number.isInteger(usableCursor?.end_index) ? usableCursor.end_index : null;
-  const hasValidatedSource = hasCursorSource && sourceRangeMatchesLiveChat(
-    chat,
-    usableCursor.source_range,
-    usableCursor.fingerprint,
-    lastIndex,
-    persistedEndIndex,
-  );
-  const hasStaleSource = hasCursorSource && !hasValidatedSource;
-  if (lastMesId !== null && hasValidatedSource) {
-    const watermarkIndex = chat.findLastIndex((message) => stableMesId(message) === lastMesId);
-    if (watermarkIndex >= 0) {
-      startIndex = hasStaleSource ? 0 : watermarkIndex + 1;
-      if (!hasStaleSource && hasValidatedIndex) startIndex = Math.max(startIndex, lastIndex + 1);
+  let startIndex = recentOnly ? Math.max(0, endExclusive - maxMessages) : 0;
+  if (!recentOnly) {
+    const lastMesId = stableMesId(usableCursor?.last_mes_id);
+    const lastIndex = Number.isInteger(usableCursor?.last_index)
+      ? usableCursor.last_index
+      : Number.isInteger(usableCursor?.end_index)
+        ? usableCursor.end_index
+        : -1;
+    const hasValidatedIndex = validatedIndexCursor(chat, usableCursor, endExclusive);
+    const hasCursorSource = Boolean(usableCursor?.source_range);
+    const persistedEndIndex = Number.isInteger(usableCursor?.end_index) ? usableCursor.end_index : null;
+    const hasValidatedSource = hasCursorSource && sourceRangeMatchesLiveChat(
+      chat,
+      usableCursor.source_range,
+      usableCursor.fingerprint,
+      lastIndex,
+      persistedEndIndex,
+    );
+    const hasStaleSource = hasCursorSource && !hasValidatedSource;
+    if (lastMesId !== null && hasValidatedSource) {
+      const watermarkIndex = chat.findLastIndex((message) => stableMesId(message) === lastMesId);
+      if (watermarkIndex >= 0) {
+        startIndex = hasStaleSource ? 0 : watermarkIndex + 1;
+        if (!hasStaleSource && hasValidatedIndex) startIndex = Math.max(startIndex, lastIndex + 1);
+      } else {
+        // A missing numeric watermark cannot prove that sparse messages between
+        // the old watermark and a newer surviving mesId were processed. Replay
+        // conservatively; the window/idempotency layer removes duplicates.
+        startIndex = 0;
+      }
+    } else if (lastMesId === null) {
+      startIndex = hasValidatedIndex ? lastIndex + 1 : 0;
     } else {
-      // A missing numeric watermark cannot prove that sparse messages between
-      // the old watermark and a newer surviving mesId were processed. Replay
-      // conservatively; the window/idempotency layer removes duplicates.
+      // A numeric watermark without a validated source range/fingerprint is
+      // legacy or corrupt state. Replay rather than risk skipping messages.
       startIndex = 0;
     }
-  } else if (lastMesId === null) {
-    startIndex = hasValidatedIndex ? lastIndex + 1 : 0;
-  } else {
-    // A numeric watermark without a validated source range/fingerprint is
-    // legacy or corrupt state. Replay rather than risk skipping messages.
-    startIndex = 0;
   }
 
   if (startIndex >= endExclusive) return null;
@@ -365,7 +368,10 @@ export function createProductPipeline({
         settings.enabledKinds ?? null,
       );
       const existing = (await structuredStore.load()) ?? [];
-      const merged = mergeStructuredRecords(existing, incoming);
+      const suppressions = Array.isArray(metadata[metaKey]?.product_suppressions)
+        ? metadata[metaKey].product_suppressions.map((item) => item?.key).filter(Boolean)
+        : [];
+      const merged = mergeStructuredRecords(existing, incoming, { suppressedKeys: suppressions });
       await structuredStore.save(merged);
       return { records: incoming };
     },
@@ -444,17 +450,32 @@ export async function resetProductMemory(
   saveMetadata = async () => {},
   metaKey = META_KEY,
   shouldAbort = () => false,
+  { preserveManualDecisions = true } = {},
 ) {
   assertMetadata(metadata);
   if (typeof saveMetadata !== 'function') throw new TypeError('saveMetadata must be a function');
   if (typeof shouldAbort !== 'function') throw new TypeError('shouldAbort must be a function');
   if (shouldAbort()) throw new Error('product reset aborted');
   const root = (metadata[metaKey] ??= {});
+  const retainedManualRecords = preserveManualDecisions
+    ? (Array.isArray(root.structured_records)
+      ? root.structured_records
+        .filter((record) => record?.manual_override?.active === true)
+        .filter((record) => String(record?.scope?.chat_uid ?? '') === String(root.chat_uid))
+        .map((record) => structuredClone(record))
+      : [])
+    : [];
   root.product_cursor = null;
   root.narrative = null;
-  root.structured_records = [];
+  root.timeline = null;
+  root.structured_records = retainedManualRecords;
   root.ingest_windows = {};
   root.product_status = null;
+  root.narrative_stale = null;
+  if (!preserveManualDecisions) {
+    delete root.timeline_overrides;
+    delete root.product_suppressions;
+  }
   await saveMetadata();
   return root;
 }
