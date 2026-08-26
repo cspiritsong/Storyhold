@@ -2,11 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildMemoryReview,
+  buildChallengePrompt,
   classifyMemoryChallenge,
   isSpoilerMemoryRecord,
+  MEMORY_CHALLENGE_VERDICTS,
   MEMORY_REVIEW_PHASES,
   MEMORY_REVIEW_STATUS,
   memoryReviewProgress,
+  parseChallengeAdjudication,
+  parseChallengeResponse,
+  resolveRecordSources,
   splitMemoryReviewResults,
 } from '../memory-review.js';
 
@@ -116,4 +121,98 @@ test('building a review copies the result list and does not mutate records', () 
   assert.notEqual(review.results, [result]);
   assert.equal(JSON.stringify(result), before);
   assert.equal(review.challenge.status, MEMORY_REVIEW_STATUS.RELATED);
+});
+
+test('challenge adjudication accepts supported, contradicted, and unresolved verdicts', () => {
+  const supported = parseChallengeAdjudication({
+    verdict: 'supported',
+    explanation: 'The stored fact confirms the claim.',
+    citations: ['r1'],
+  });
+  assert.equal(supported.verdict, MEMORY_CHALLENGE_VERDICTS.SUPPORTED);
+  assert.match(supported.explanation, /confirms/i);
+  assert.deepEqual(supported.citations, ['r1']);
+
+  const contradicted = parseChallengeAdjudication({
+    verdict: 'contradicted',
+    explanation: 'The transcript contradicts this.',
+    citations: ['r2', 'r3'],
+  });
+  assert.equal(contradicted.verdict, MEMORY_CHALLENGE_VERDICTS.CONTRADICTED);
+  assert.deepEqual(contradicted.citations, ['r2', 'r3']);
+
+  const unresolved = parseChallengeAdjudication({ verdict: 'unresolved', explanation: 'Not enough evidence.' });
+  assert.equal(unresolved.verdict, MEMORY_CHALLENGE_VERDICTS.UNRESOLVED);
+});
+
+test('challenge adjudication rejects unknown verdicts and foreign citations', () => {
+  const unknown = parseChallengeAdjudication({ verdict: 'definitely-wrong', explanation: 'x' });
+  assert.equal(unknown.verdict, MEMORY_CHALLENGE_VERDICTS.UNRESOLVED);
+
+  const valid = new Set(['r1', 'r2']);
+  const cited = parseChallengeAdjudication(
+    { verdict: 'supported', explanation: 'ok', citations: ['r1', 'r99'] },
+    { allowedRecordIds: valid },
+  );
+  assert.deepEqual(cited.citations, ['r1']);
+});
+
+test('challenge prompt embeds the claim, memory evidence, and raw source excerpts', () => {
+  const prompt = buildChallengePrompt({
+    claim: 'The key was destroyed in the forge.',
+    evidence: [
+      { id: 'r1', content: 'The key is silver.' },
+    ],
+    sources: [
+      { id: 'r1', excerpt: 'She melted the silver key in the forge.', index: 42 },
+    ],
+  });
+
+  assert.match(prompt, /The key was destroyed in the forge/);
+  assert.match(prompt, /The key is silver\./);
+  assert.match(prompt, /She melted the silver key in the forge\./);
+  assert.match(prompt, /r1/);
+  assert.match(prompt, /supported|contradicted|unresolved/i);
+});
+
+test('blocked challenge reports the reason and next step instead of a generic cancel', () => {
+  const blocked = memoryReviewProgress({
+    mode: 'challenge',
+    phase: MEMORY_REVIEW_PHASES.CANCELLED,
+    reason: 'stable-namespace-fingerprint-mismatch',
+  });
+
+  assert.equal(blocked.busy, false);
+  assert.match(blocked.message, /stable-namespace-fingerprint-mismatch/);
+  assert.match(blocked.message, /no memory was changed/i);
+});
+
+test('challenge response parser extracts fenced or bare JSON and tolerates garbage', () => {
+  const fenced = parseChallengeResponse('```json\n{"verdict":"contradicted","explanation":"no","citations":["r1"]}\n```');
+  assert.equal(fenced.verdict, 'contradicted');
+  assert.deepEqual(fenced.citations, ['r1']);
+
+  const bare = parseChallengeResponse('{"verdict":"supported"}');
+  assert.equal(bare.verdict, 'supported');
+
+  const garbage = parseChallengeResponse('not json at all');
+  assert.deepEqual(garbage, {});
+});
+
+test('record source excerpts resolve index and mesId ranges from raw chat', () => {
+  const chat = [
+    { mes: 'A', mesId: 10 },
+    { mes: 'B', mesId: 11 },
+    { mes: 'C', mesId: 12 },
+  ];
+
+  const byIndex = resolveRecordSources({ id: 'r1', sourceRange: { kind: 'index', start: 0, end: 1 } }, chat);
+  assert.equal(byIndex.length, 1);
+  assert.match(byIndex[0].excerpt, /A/);
+  assert.match(byIndex[0].excerpt, /B/);
+
+  const byMesId = resolveRecordSources({ id: 'r2', sourceRange: { kind: 'mesId', start: 11, end: 12 } }, chat);
+  assert.equal(byMesId.length, 1);
+  assert.match(byMesId[0].excerpt, /B/);
+  assert.match(byMesId[0].excerpt, /C/);
 });

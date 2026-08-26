@@ -1574,6 +1574,44 @@
   border-left-color: #6fa578;
 }
 
+.sm_challenge_supported {
+  border-left-color: #6fa578;
+}
+
+.sm_challenge_contradicted {
+  border-left-color: #c07070;
+}
+
+.sm_challenge_unresolved {
+  border-left-color: #8a8a6a;
+}
+
+.sm_challenge_blocked {
+  border-left-color: #b08a3e;
+}
+
+.sm_review_outcome_supported {
+  border-left: 3px solid #6fa578;
+}
+
+.sm_review_outcome_contradicted {
+  border-left: 3px solid #c07070;
+}
+
+.sm_review_outcome_unresolved {
+  border-left: 3px solid #8a8a6a;
+}
+
+.sm_review_outcome_blocked {
+  border-left: 3px solid #b08a3e;
+}
+
+.sm_review_citations {
+  margin-top: 6px;
+  font-size: 0.9em;
+  color: var(--SmartReplyColor, #aaa);
+}
+
 /* Query/challenge lifecycle and explicit result outcome. */
 #smart_memory_settings .sm_review_status {
   min-height: 1.3em;

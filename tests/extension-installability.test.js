@@ -150,6 +150,32 @@ test('memory review always reaches a terminal state after an early return', asyn
   assert.match(block, /setMemoryReviewStatus\(/);
 });
 
+test('challenge adjudicates claims against records and raw source excerpts', async () => {
+  const [indexSource, uiSource] = await Promise.all([
+    readFile(resolve(root, 'index.js'), 'utf8'),
+    readFile(resolve(root, 'ui.js'), 'utf8'),
+  ]);
+
+  // The runner builds a real adjudication and cites only shown records.
+  assert.match(indexSource, /async function runChallengeAdjudication\(claim, top\)/);
+  assert.match(indexSource, /buildChallengePrompt\(\{ claim, evidence, sources \}\)/);
+  assert.match(indexSource, /parseChallengeAdjudication\(parseChallengeResponse\(raw\), \{ allowedRecordIds: allowedRecordIds \}\)/);
+  assert.match(indexSource, /resolveRecordSources\(mem, chat\)/);
+  assert.match(indexSource, /MEMORY_CHALLENGE_VERDICTS\.UNRESOLVED/);
+
+  // Blocked chats render a reason and next step instead of a bare cancel.
+  assert.match(indexSource, /challengeBlockReason\(\)/);
+  assert.match(indexSource, /blocked: \{ reason, nextStep: challengeNextStep\(reason\) \}/);
+  assert.match(indexSource, /challengeNextStep\(/);
+
+  // The UI renders a verdict, citations, and a blocked outcome.
+  assert.match(uiSource, /challengeVerdictLabel\(verdict\)/);
+  assert.match(uiSource, /Cited memory: /);
+  assert.match(uiSource, /sm_review_outcome_blocked/);
+  assert.match(uiSource, /sm_challenge_\$\{review\.adjudication\.verdict\}/);
+  assert.match(uiSource, /Challenge blocked\./);
+});
+
 
 test('product catch-up exposes progress and canonical pipeline messaging', async () => {
   const [indexSource, settingsHtml, unifiedSource] = await Promise.all([

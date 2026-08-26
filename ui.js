@@ -1014,6 +1014,14 @@ function recordKindLabel(mem) {
   return String(mem?.type ?? 'memory');
 }
 
+function challengeVerdictLabel(verdict) {
+  return {
+    supported: 'Supported',
+    contradicted: 'Contradicted',
+    unresolved: 'Unresolved',
+  }[verdict] ?? 'Unresolved';
+}
+
 function appendMemoryReviewRows(card, review) {
   if (review.visible.length === 0) {
     card.append($('<p>').text('No matching memories found.'));
@@ -1059,14 +1067,23 @@ function appendMemoryReviewOutcome(card, review) {
   const isChallenge = review.mode === 'challenge';
   const count = review.results.length;
   const outcome = document.createElement('div');
-  outcome.className = `sm_review_outcome ${isChallenge ? `sm_review_outcome_${review.challenge?.status ?? 'unknown'}` : ''}`;
+  const outcomeClass = isChallenge
+    ? review.blocked
+      ? 'sm_review_outcome sm_review_outcome_blocked'
+      : `sm_review_outcome sm_review_outcome_${review.adjudication?.verdict ?? review.challenge?.status ?? 'unknown'}`
+    : 'sm_review_outcome';
+  outcome.className = outcomeClass;
 
   const heading = document.createElement('strong');
   heading.textContent = 'Outcome';
   outcome.appendChild(heading);
 
   const summary = document.createElement('div');
-  if (isChallenge) {
+  if (review.blocked) {
+    summary.textContent = `Challenge blocked — ${review.blocked.reason}.`;
+  } else if (review.adjudication) {
+    summary.textContent = `${challengeVerdictLabel(review.adjudication.verdict)} — ${review.adjudication.explanation}`;
+  } else if (isChallenge) {
     summary.textContent = `${review.challenge?.label ?? (count > 0 ? 'Related evidence found' : 'No related evidence found')}.`;
   } else {
     summary.textContent = count > 0
@@ -1075,15 +1092,27 @@ function appendMemoryReviewOutcome(card, review) {
   }
   outcome.appendChild(summary);
 
+  const citations = review.adjudication?.citations;
+  if (Array.isArray(citations) && citations.length > 0) {
+    const cites = document.createElement('div');
+    cites.className = 'sm_review_citations';
+    cites.textContent = `Cited memory: ${citations.join(', ')}`;
+    outcome.appendChild(cites);
+  }
+
   const next = document.createElement('div');
   next.className = 'sm_review_next_step';
-  next.textContent = isChallenge
-    ? count > 0
-      ? 'Next step: review the evidence and source range. If the memory is wrong, edit or delete it in the relevant Storyhold list.'
-      : 'Next step: this is not proof that the claim is false. Try a more specific claim or lower the match threshold if needed.'
-    : count > 0
-      ? 'Next step: inspect the source ranges below. Query is read-only; no memory was changed.'
-      : 'Next step: try different wording or a lower match threshold. Query is read-only; no memory was changed.';
+  next.textContent = review.blocked?.nextStep
+    ? `Next step: ${review.blocked.nextStep}`
+    : isChallenge
+      ? review.adjudication
+        ? 'Next step: review the cited memory and its source range below. Challenge is read-only; no memory was changed.'
+        : count > 0
+          ? 'Next step: review the evidence and source range. If the memory is wrong, edit or delete it in the relevant Storyhold list.'
+          : 'Next step: this is not proof that the claim is false. Try a more specific claim or lower the match threshold if needed.'
+      : count > 0
+        ? 'Next step: inspect the source ranges below. Query is read-only; no memory was changed.'
+        : 'Next step: try different wording or a lower match threshold. Query is read-only; no memory was changed.';
   outcome.appendChild(next);
 
   const unchanged = document.createElement('div');
@@ -1116,7 +1145,17 @@ export function showMemoryReview(review) {
     ),
   );
 
-  if (isChallenge && review.challenge) {
+  if (isChallenge && review.blocked) {
+    const $banner = $('<div>').addClass('sm_challenge_banner sm_challenge_blocked');
+    $banner.append($('<strong>').text(`Challenge blocked. `));
+    $banner.append($('<span>').text(review.blocked.reason));
+    card.append($banner);
+  } else if (isChallenge && review.adjudication) {
+    const $banner = $('<div>').addClass(`sm_challenge_banner sm_challenge_${review.adjudication.verdict}`);
+    $banner.append($('<strong>').text(`${challengeVerdictLabel(review.adjudication.verdict)}. `));
+    $banner.append($('<span>').text(review.adjudication.explanation));
+    card.append($banner);
+  } else if (isChallenge && review.challenge) {
     const $banner = $('<div>').addClass(`sm_challenge_banner sm_challenge_${review.challenge.status}`);
     $banner.append($('<strong>').text(`${review.challenge.label}. `));
     $banner.append($('<span>').text(review.challenge.detail));

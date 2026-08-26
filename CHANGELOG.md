@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-26
+
+### Changed
+
+- **Challenge now adjudicates claims.** A challenge is no longer a bare similarity search. Storyhold gathers the matched records, resolves their raw source excerpts, and asks the configured memory model to decide **supported**, **contradicted**, or **unresolved**, returning an explanation and citations restricted to the records actually shown. Nothing is mutated.
+- **Blocked challenges explain themselves.** When a chat's memory is quarantined, unavailable, or missing identity, the console now shows the exact reason (for example `unverified-branch — stable-namespace-fingerprint-mismatch`) and a next step, instead of a bare "cancelled". Both controls still restore.
+
 ## [1.11.2] - 2026-08-26
 
 ### Fixed

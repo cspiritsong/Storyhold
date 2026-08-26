@@ -185,7 +185,17 @@ import {
 import { createOwnedProductControl } from './product-control.js';
 import { enabledProductKinds, filterProductRecords, shouldRunProductIngest } from './runtime-policy.js';
 import { filterRetrievalRecords } from './retrieval.js';
-import { buildMemoryReview, MEMORY_REVIEW_MODES, MEMORY_REVIEW_PHASES, memoryReviewProgress } from './memory-review.js';
+import {
+  buildChallengePrompt,
+  buildMemoryReview,
+  MEMORY_CHALLENGE_VERDICTS,
+  MEMORY_REVIEW_MODES,
+  MEMORY_REVIEW_PHASES,
+  memoryReviewProgress,
+  parseChallengeAdjudication,
+  parseChallengeResponse,
+  resolveRecordSources,
+} from './memory-review.js';
 import {
   setStatusMessage,
   updateProductStatusUI,
@@ -3184,6 +3194,57 @@ function yieldToMemoryReviewUi() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Human-readable reason the current chat's memory cannot back a challenge. */
+function challengeBlockReason() {
+  const lineage = getCurrentLineage();
+  const parts = [lineage?.status, lineage?.invalidation_reason ?? lineage?.reason].filter(Boolean);
+  return parts.join(' — ') || 'memory unavailable for this chat';
+}
+
+function challengeNextStep(reason) {
+  if (/fingerprint|quarantine|unverified/i.test(reason)) {
+    return 'This chat is quarantined because its identity no longer matches its stored memory. Rebuild this branch or open a verified chat, then challenge again.';
+  }
+  return 'Run Memorize Chat to establish this chat\'s identity and records, then challenge again.';
+}
+
+/**
+ * Adjudicates a challenge claim against the matched records and their raw
+ * source excerpts using the configured memory LLM. Returns a safe verdict
+ * object; any model failure degrades to an unresolved verdict. Never writes.
+ */
+async function runChallengeAdjudication(claim, top) {
+  const chat = getContext().chat ?? [];
+  const evidence = top
+    .map(({ mem }) => ({ id: mem?.id ?? mem?._id ?? null, content: String(mem?.content ?? '') }))
+    .filter((record) => record.content);
+  const allowedRecordIds = new Set(evidence.map((record) => record.id).filter(Boolean));
+  const sources = [];
+  for (const { mem } of top) {
+    sources.push(...resolveRecordSources(mem, chat));
+  }
+
+  let raw = '';
+  try {
+    raw = await generateMemoryExtract(buildChallengePrompt({ claim, evidence, sources }), {
+      responseLength: 700,
+    });
+  } catch (error) {
+    console.warn('[Storyhold] Challenge adjudication failed:', error);
+    raw = '';
+  }
+
+  if (!raw) {
+    return {
+      verdict: MEMORY_CHALLENGE_VERDICTS.UNRESOLVED,
+      explanation: 'Adjudication did not produce a result; review the evidence below.',
+      citations: [],
+    };
+  }
+
+  return parseChallengeAdjudication(parseChallengeResponse(raw), { allowedRecordIds: allowedRecordIds });
+}
+
 /**
  * Runs a read-only memory query or challenge review.
  *
@@ -3243,8 +3304,18 @@ async function executeMemoryReview(mode, args, queryText, expectedIdentity = nul
     const root = context.chatMetadata?.[META_KEY] ?? {};
     const lineage = getCurrentLineage();
     if (productSettings.enabled === false || isFreshStart() || isCurrentLineageQuarantined() || !root.chat_uid) {
+      const reason = challengeBlockReason();
       if (reviewIdentityMatches()) {
-        publishMemoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.FAILED });
+        if (reviewMode === MEMORY_REVIEW_MODES.CHALLENGE) {
+          showMemoryReview(buildMemoryReview({
+            mode: reviewMode,
+            query: q,
+            results: [],
+            totalRecords: 0,
+            blocked: { reason, nextStep: challengeNextStep(reason) },
+          }));
+        }
+        publishMemoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.CANCELLED, reason });
       }
       return 'Product memory is unavailable until this chat has a verified identity.';
     }
@@ -3326,6 +3397,17 @@ async function executeMemoryReview(mode, args, queryText, expectedIdentity = nul
     reviewProductMode &&
     (getSettings().enabled === false || isFreshStart() || isCurrentLineageQuarantined())
   ) {
+    const reason = challengeBlockReason();
+    if (reviewMode === MEMORY_REVIEW_MODES.CHALLENGE) {
+      showMemoryReview(buildMemoryReview({
+        mode: reviewMode,
+        query: q,
+        results: [],
+        totalRecords: 0,
+        blocked: { reason, nextStep: challengeNextStep(reason) },
+      }));
+    }
+    publishMemoryReviewProgress({ mode: reviewMode, phase: MEMORY_REVIEW_PHASES.CANCELLED, reason });
     return 'Memory review cancelled because Product Memory is unavailable for this chat.';
   }
   const queryVec = vectorMap.get(qLower) ?? null;
@@ -3344,18 +3426,29 @@ async function executeMemoryReview(mode, args, queryText, expectedIdentity = nul
 
   scored.sort((a, b) => b.score - a.score);
   const top = scored.slice(0, topK);
+
+  let adjudication = null;
+  if (reviewMode === MEMORY_REVIEW_MODES.CHALLENGE && top.length > 0) {
+    adjudication = await runChallengeAdjudication(q, top);
+    if (!reviewStillCurrent()) return 'Memory review cancelled because the active chat changed.';
+  }
+
   const review = buildMemoryReview({
     mode: reviewMode,
     query: q,
     results: top,
     totalRecords: allMems.length,
+    adjudication,
   });
   showMemoryReview(review);
+  const verdictLabel = adjudication
+    ? { supported: 'Supported', contradicted: 'Contradicted', unresolved: 'Unresolved' }[adjudication.verdict] ?? 'Unresolved'
+    : review.challenge?.label;
   publishMemoryReviewProgress({
     mode: reviewMode,
     phase: MEMORY_REVIEW_PHASES.COMPLETED,
     resultCount: top.length,
-    challenge: review.challenge,
+    challenge: verdictLabel ? { label: verdictLabel } : null,
   });
   return `${actionLabel === 'challenge' ? 'Related evidence' : 'Results'}: ${top.length} match${top.length === 1 ? '' : 'es'} for "${q}".`;
 }

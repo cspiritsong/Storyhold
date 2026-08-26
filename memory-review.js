@@ -24,6 +24,12 @@ export const MEMORY_REVIEW_PHASES = Object.freeze({
   CANCELLED: 'cancelled',
 });
 
+export const MEMORY_CHALLENGE_VERDICTS = Object.freeze({
+  SUPPORTED: 'supported',
+  CONTRADICTED: 'contradicted',
+  UNRESOLVED: 'unresolved',
+});
+
 const SPOILER_TYPES = new Set(['believes', 'hiding']);
 
 function normalized(value) {
@@ -45,6 +51,7 @@ export function memoryReviewProgress({
   totalRecords = null,
   resultCount = 0,
   challenge = null,
+  reason = null,
 } = {}) {
   const label = mode === MEMORY_REVIEW_MODES.CHALLENGE ? 'Challenge' : 'Query';
   const count = Math.max(0, Number(resultCount) || 0);
@@ -78,7 +85,7 @@ export function memoryReviewProgress({
       message = `${label} failed — no result was produced. No memory was changed.`;
       break;
     case MEMORY_REVIEW_PHASES.CANCELLED:
-      message = `${label} cancelled. No memory was changed.`;
+      message = `${label} cancelled${reason ? ` — ${reason}` : ''}. No memory was changed.`;
       break;
     default:
       message = `${label} is unavailable. No memory was changed.`;
@@ -153,12 +160,20 @@ export function buildMemoryReview({
   totalRecords = null,
   stage = null,
   diagnostics = null,
+  adjudication = null,
+  blocked = null,
 } = {}) {
   const safeMode = mode === MEMORY_REVIEW_MODES.CHALLENGE
     ? MEMORY_REVIEW_MODES.CHALLENGE
     : MEMORY_REVIEW_MODES.QUERY;
   const safeResults = Array.isArray(results) ? results.slice() : [];
   const split = splitMemoryReviewResults(safeResults);
+  const safeBlocked = blocked && typeof blocked === 'object'
+    ? {
+        reason: String(blocked.reason ?? '').trim(),
+        nextStep: String(blocked.nextStep ?? '').trim(),
+      }
+    : null;
   return {
     mode: safeMode,
     query: String(query ?? '').trim(),
@@ -171,5 +186,134 @@ export function buildMemoryReview({
     challenge: safeMode === MEMORY_REVIEW_MODES.CHALLENGE
       ? classifyMemoryChallenge(query, safeResults)
       : null,
+    adjudication: adjudication && typeof adjudication === 'object' ? adjudication : null,
+    blocked: safeBlocked,
   };
+}
+
+/**
+ * Normalizes a model adjudication result into a safe verdict, explanation, and
+ * citation list. Unknown verdicts collapse to unresolved; citations outside the
+ * supplied record set are dropped so a model can never cite memory it was not
+ * shown.
+ * @param {object} result
+ * @param {Set<string>} [options.allowedRecordIds]
+ */
+export function parseChallengeAdjudication(result = {}, { allowedRecordIds = null } = {}) {
+  const verdict = String(result?.verdict ?? '').trim().toLowerCase();
+  const normalizedVerdict = Object.values(MEMORY_CHALLENGE_VERDICTS).includes(verdict)
+    ? verdict
+    : MEMORY_CHALLENGE_VERDICTS.UNRESOLVED;
+
+  const explanation = String(result?.explanation ?? '').trim() || 'No explanation was provided.';
+
+  const rawCitations = Array.isArray(result?.citations) ? result.citations : [];
+  const seen = new Set();
+  const citations = [];
+  for (const citation of rawCitations) {
+    const id = String(citation ?? '').trim();
+    if (!id || seen.has(id)) continue;
+    if (allowedRecordIds && !allowedRecordIds.has(id)) continue;
+    seen.add(id);
+    citations.push(id);
+  }
+
+  return { verdict: normalizedVerdict, explanation, citations };
+}
+
+/**
+ * Builds a read-only adjudication prompt. The model must decide whether the
+ * claim is supported, contradicted, or unresolved from the supplied memory and
+ * source excerpts, and may cite only the record ids it was actually shown.
+ */
+export function buildChallengePrompt({ claim = '', evidence = [], sources = [] } = {}) {
+  const claimText = String(claim ?? '').trim();
+  const evidenceLines = (Array.isArray(evidence) ? evidence : [])
+    .map((record) => `[${record?.id ?? '?'}] ${String(record?.content ?? '').trim()}`)
+    .filter((line) => line.trim());
+  const sourceLines = (Array.isArray(sources) ? sources : [])
+    .map((source) => `[${source?.id ?? '?'}]${Number.isInteger(source?.index) ? ` (source ${source.index})` : ''} ${String(source?.excerpt ?? '').trim()}`)
+    .filter((line) => line.trim());
+
+  return [
+    'Role: memory challenge adjudicator.',
+    'Decide whether the player claim is supported, contradicted, or unresolved by the evidence below.',
+    'Respond with JSON only: {"verdict":"supported|contradicted|unresolved","explanation":"...","citations":["recordId", ...]}.',
+    'Cite only record ids shown below. Never invent evidence.',
+    '<claim>',
+    claimText || '(empty)',
+    '</claim>',
+    '<memory>',
+    evidenceLines.length > 0 ? evidenceLines.join('\n') : '(no matching stored memory)',
+    '</memory>',
+    '<source_excerpts>',
+    sourceLines.length > 0 ? sourceLines.join('\n') : '(no source excerpts)',
+    '</source_excerpts>',
+  ].join('\n');
+}
+
+/** Parses a raw model response into an object, tolerating fenced or trailing prose. */
+export function parseChallengeResponse(raw) {
+  if (typeof raw !== 'string') return {};
+  let source = raw.trim();
+  source = source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = source.indexOf('{');
+  const end = source.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return {};
+  try {
+    const parsed = JSON.parse(source.slice(start, end + 1));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolves the raw chat excerpts a record was derived from. Returns a compact
+ * list of `{ id, index, excerpt }` using the record's source range, falling
+ * back to its provenance source-message index ranges.
+ */
+export function resolveRecordSources(record = {}, chat = []) {
+  const messages = Array.isArray(chat) ? chat : [];
+  const id = record?.id ?? null;
+  const out = [];
+
+  const range = record?.sourceRange ?? record?.source_range ?? null;
+  if (range && Number.isInteger(range.start) && Number.isInteger(range.end)) {
+    let excerpt;
+    if (range.kind === 'mesId') {
+      excerpt = messages
+        .filter((m) => typeof m?.mesId === 'number' && m.mesId >= range.start && m.mesId <= range.end)
+        .map((m) => String(m?.mes ?? ''))
+        .filter(Boolean)
+        .join(' ');
+    } else {
+      excerpt = messages
+        .slice(range.start, range.end + 1)
+        .map((m) => String(m?.mes ?? ''))
+        .filter(Boolean)
+        .join(' ');
+    }
+    if (excerpt) out.push({ id, index: range.start, excerpt });
+  }
+
+  if (out.length === 0) {
+    const provenance = record?.provenance?.source_messages;
+    if (Array.isArray(provenance)) {
+      for (const pair of provenance) {
+        if (!Array.isArray(pair) || pair.length < 2) continue;
+        const start = Number(pair[0]);
+        const end = Number(pair[1]);
+        if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) continue;
+        const excerpt = messages
+          .slice(start, end + 1)
+          .map((m) => String(m?.mes ?? ''))
+          .filter(Boolean)
+          .join(' ');
+        if (excerpt) out.push({ id, index: start, excerpt });
+      }
+    }
+  }
+
+  return out;
 }

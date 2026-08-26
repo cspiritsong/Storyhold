@@ -657,16 +657,21 @@ The controls show the complete lifecycle:
 What the result panel shows:
 
 - Matching records for the current chat and branch, with type, score, and source range
-- For challenges, an evidence banner: **No related evidence found**, **Related evidence
-  found**, or **Strongly related evidence found**
+- For challenges, a real verdict: **Supported**, **Contradicted**, or **Unresolved**,
+  with an explanation and the record ids it was based on
 - Spoiler-tagged perspective records (false beliefs, hidden secrets) stay collapsed
   behind a warning until you open them deliberately
 
+If the current chat's memory cannot back a challenge (it is quarantined, unavailable,
+or has no verified identity), the panel says **Challenge blocked** and shows the exact
+reason and a next step, instead of a bare "cancelled".
+
 What it deliberately does not do:
 
-- It never modifies, retires, or rewrites a memory
-- It never declares a claim true or false - similarity is evidence, not a verdict
-- It does not inject anything into the roleplay prompt; this is a review tool
+- It never modifies, retires, or rewrites a memory - a challenge is read-only
+- It never injects anything into the roleplay prompt; this is a review tool
+- A challenge verdict is the model's reading of the supplied evidence, not a
+  re-write of the story
 
 If a challenge reveals a wrong memory, fix it through the normal edit/delete controls on
 the relevant list - that is the only path that changes stored memory.
