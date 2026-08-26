@@ -94,7 +94,7 @@ test('query and challenge review share one read-only console', async () => {
   assert.match(settingsHtml, /id="sm_review_text"/);
   assert.match(settingsHtml, /id="sm_review_query"/);
   assert.match(settingsHtml, /id="sm_review_challenge"/);
-  assert.match(settingsHtml, /Read-only\. Similarity is evidence, never a truth verdict\./);
+  assert.match(settingsHtml, /Read-only\. Search saved memory or check a claim\. Nothing is changed\./);
   assert.match(settingsSource, /await ctrl\.runMemoryReview\?\.\(mode, \{ k: 10, min: 0\.5 \}, text\)/);
 
   // The panel renders challenge evidence without rendering a verdict.
@@ -186,8 +186,8 @@ test('product catch-up exposes progress and canonical pipeline messaging', async
 
   assert.match(indexSource, /function reportProductProgress/);
   assert.match(indexSource, /onProgress: report/);
-  assert.match(settingsHtml, /one bounded product pipeline/);
-  assert.match(settingsHtml, /session evidence/);
+  assert.match(settingsHtml, /whole current chat/);
+  assert.match(settingsHtml, /saves important facts, events, relationships/);
   assert.match(unifiedSource, /filterProductRecords/);
   assert.match(unifiedSource, /respondingCharacter: responder/);
 });

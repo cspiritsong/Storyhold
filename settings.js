@@ -883,7 +883,7 @@ export function bindSettingsUI(ctrl) {
 
   function blockLegacyProductAction(label) {
     if (!isProductMode()) return false;
-    toastr.info(`${label} is managed by the canonical Product Memory pipeline.`, 'Storyhold', {
+    toastr.info('This tool is not available in the current memory mode. The main chat scan already handles this automatically.', 'Storyhold', {
       timeOut: 4000,
       positionClass: 'toast-bottom-right',
     });

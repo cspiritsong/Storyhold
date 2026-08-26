@@ -18,7 +18,7 @@ test('Smart-Memory exposes one chat-only memory scope', async () => {
   assert.match(settingsSource, /current\.memory_scope = MEMORY_SCOPE_CHAT/);
   assert.doesNotMatch(html, /value="character"/);
   assert.doesNotMatch(html, /sm_fresh_start_button/);
-  assert.match(html, /Clear Chat Memory/);
+  assert.match(html, /Delete All Memory for This Chat/);
 });
 
 test('chat memory reset is the only destructive memory action', async () => {

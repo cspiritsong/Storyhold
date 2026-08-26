@@ -23,37 +23,40 @@
       <!-- Memory scope: Storyhold is intentionally chat-only -->
       <div class="sm-block">
         <label style="display: block; margin-bottom: 4px">
-          Memory scope
+          Where Storyhold saves memory
           <span
             class="sm-info"
-            data-tooltip="All mutable Smart-Memory data is isolated to this chat. The character card remains reference material; memories are never shared automatically with another chat."
+            data-tooltip="Storyhold saves memory only in this chat. It uses the character card as reference, but does not share saved memory with other chats."
             >ⓘ</span
           >
         </label>
-        <div class="sm-muted">Per chat (fixed)</div>
+        <div class="sm-muted">This chat only</div>
       </div>
 
       <!-- Embedding inactive notice - toggled by updateEmbeddingNotice() in index.js -->
       <div id="sm_embedding_notice" class="sm-block" style="display: none">
         <i class="fa-solid fa-triangle-exclamation"></i>
         <span>
-          Semantic embeddings are inactive. Memory deduplication falls back to keyword matching,
-          which misses paraphrases - the same fact or arc can be stored multiple times in different
-          words.
+          Meaning-based duplicate matching is off. Storyhold can still compare words, but the same
+          fact written in different words may be saved twice.
           <a id="sm_embedding_notice_link" href="#">Set up embeddings</a>
         </span>
       </div>
 
       <!-- Memorize / reset buttons -->
       <div class="sm-block" style="display: flex; flex-direction: column; gap: 6px">
+        <p id="sm_memory_action_scope" class="sm-muted" style="margin: 0">
+          These actions affect this chat only. In a group chat, select a character to view that
+          character's memory.
+        </p>
         <div class="sm-btn-row" style="align-items: center">
           <button id="sm_catch_up" class="menu_button menu_button_icon">
             <i class="fa-solid fa-forward-fast"></i>
             <span>
-              Memorize Chat
+              Scan &amp; Memorize This Chat
               <span
                 class="sm-info"
-                data-tooltip="Reads the full chat history through one bounded product pipeline. It writes the narrative chain plus combined structured records for facts, relationships, session evidence, current state, active arcs, and Perspectives & Secrets."
+                data-tooltip="Reads the whole current chat and saves important facts, events, relationships, open story threads, and character knowledge. In a group chat, the selected character controls whose memory view is shown. The chat text is not changed."
                 >ⓘ</span
               >
             </span>
@@ -71,10 +74,10 @@
           <button id="sm_rescan_chat" class="menu_button menu_button_icon">
             <i class="fa-solid fa-rotate"></i>
             <span>
-              Rescan Chat
+              Scan This Chat Again
               <span
                 class="sm-info"
-                data-tooltip="Product mode clears only Storyhold's canonical stores, then rereads the full transcript once through the bounded product pipeline. Compatibility mode retains the older two-pass rescan. Raw chat and unrelated settings are preserved."
+                data-tooltip="Reads the whole current chat again and updates its saved memory. In the current mode, Storyhold clears saved memory for this chat first; in older compatibility mode, existing memory stays and repeats are skipped. The chat text is never deleted."
                 >ⓘ</span
               >
             </span>
@@ -84,10 +87,10 @@
           <button id="sm_scan_duplicates" class="menu_button menu_button_icon">
             <i class="fa-solid fa-clone"></i>
             <span>
-              Scan &amp; Remove Duplicates
+              Find &amp; Remove Duplicate Memories
               <span
                 class="sm-info"
-                data-tooltip="Scans stored long-term memories for near-duplicates. Keeps the earliest entry per cluster and removes later duplicates without state-change markers, after confirmation."
+                data-tooltip="Checks the selected character's long-term memories in this chat for repeated entries. You confirm the matches before later copies are removed. It does not scan the chat or remove unique memories."
                 >ⓘ</span
               >
             </span>
@@ -97,10 +100,10 @@
           <button id="sm_clear_chat_context" class="menu_button menu_button_icon">
             <i class="fa-solid fa-broom"></i>
             <span>
-              Clear Chat Memory
+              Delete All Memory for This Chat
               <span
                 class="sm-info"
-                data-tooltip="Clears all derived Smart-Memory data for this chat only. The raw chat transcript, character card, and other chats are not changed."
+                data-tooltip="Deletes all memory Storyhold created for this chat. The chat text, character card, and other chats stay unchanged. This cannot be undone."
                 >ⓘ</span
               >
             </span>
@@ -114,45 +117,44 @@
           >
             <i class="fa-solid fa-code-branch"></i>
             <span>
-              Rebuild This Branch
+              Rebuild Memory for This Branch
               <span
                 class="sm-info"
-                data-tooltip="Safely clears only this branch's derived Storyhold, keeps the transcript and parent chat, then rebuilds from the branch's raw messages. Native vectors are untouched."
+                data-tooltip="Deletes Storyhold memory for this branch only, then scans the branch again. The branch chat, its parent chat, and other chats stay unchanged."
                 >ⓘ</span
               >
             </span>
           </button>
         </div>
 
-        <!-- Canonical product-store status and read-only previews -->
+        <!-- Chat memory status and read-only previews -->
         <div id="sm_product_status_panel" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
-          <p class="sm-section-title">Product Memory</p>
-          <div id="sm_product_status_message" class="sm-muted">No product memory processed for this chat yet.</div>
+          <p class="sm-section-title">Saved Chat Memory</p>
+          <div id="sm_product_status_message" class="sm-muted">No chat memory saved for this chat yet.</div>
           <div id="sm_product_status_counts" class="sm-product-status-counts"></div>
           <div id="sm_product_status_records" class="sm-product-status-records"></div>
         </div>
 
-        <!-- Read-only player query / challenge console -->
+        <!-- Read-only memory search / claim check console -->
         <div id="sm_memory_review" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
-          <p class="sm-section-title">Query &amp; Challenge Memory</p>
+          <p class="sm-section-title">Search or Check Memory</p>
           <div class="sm-muted">
-            Read-only. Similarity is evidence, never a truth verdict. Same results as
-            /sm-search and /sm-challenge.
+            Read-only. Search saved memory or check a claim. Nothing is changed.
           </div>
           <textarea
             id="sm_review_text"
             class="text_pole"
             rows="2"
-            placeholder="Ask about a stored memory, or challenge a claim..."
+            placeholder="Search memory or type a claim to check..."
           ></textarea>
           <div class="sm-btn-row">
-            <button id="sm_review_query" class="menu_button menu_button_icon" title="Show stored memories matching this text for the current chat and branch.">
+            <button id="sm_review_query" class="menu_button menu_button_icon" title="Find saved memories matching this text in this chat.">
               <i class="fa-solid fa-magnifying-glass"></i>
-              <span>Query</span>
+              <span>Find Matching Memories</span>
             </button>
-            <button id="sm_review_challenge" class="menu_button menu_button_icon" title="Check this claim against stored memories. Nothing is modified and no verdict is rendered.">
+            <button id="sm_review_challenge" class="menu_button menu_button_icon" title="Check this claim against saved memories. Nothing is changed.">
               <i class="fa-solid fa-scale-balanced"></i>
-              <span>Challenge</span>
+              <span>Check This Claim</span>
             </button>
           </div>
           <div
@@ -161,14 +163,14 @@
             role="status"
             aria-live="polite"
             aria-busy="false"
-          >Ready — query or challenge is read-only.</div>
+          >Ready — searching and claim checks do not change memory.</div>
         </div>
 
         <div id="sm_rename_recovery" class="sm-block" style="border-top: 1px solid var(--SmartThemeBorderColor); padding-top: 8px">
           <div class="sm-btn-row">
             <button id="sm_audit_chat_memory" class="menu_button menu_button_icon">
               <i class="fa-solid fa-magnifying-glass-chart"></i>
-              <span>Audit Chat Memory</span>
+              <span>Check Saved Chat Memory</span>
             </button>
           </div>
           <div id="sm_rename_audit_status" class="sm-muted">Not checked</div>
@@ -176,7 +178,7 @@
           <div class="sm-btn-row" style="margin-top: 6px">
             <button id="sm_manage_character_chat_memory" class="menu_button menu_button_icon">
               <i class="fa-solid fa-list-check"></i>
-              <span>Manage Chat Memory</span>
+              <span>Repair or Delete Old Chat Memory</span>
             </button>
           </div>
           <div id="sm_character_memory_manager" style="display: none">
@@ -185,7 +187,7 @@
                 id="sm_close_character_memory_manager"
                 class="menu_button menu_button_icon"
                 type="button"
-                aria-label="Back to chat memory tools"
+                aria-label="Back to saved chat memory tools"
               >
                 <i class="fa-solid fa-arrow-left"></i>
                 <span>Back</span>
@@ -195,19 +197,19 @@
             <div class="sm-btn-row" style="margin-top: 6px">
               <button id="sm_nuke_selected_chat_memory" class="menu_button menu_button_icon">
                 <i class="fa-solid fa-trash"></i>
-                <span>Nuke selected</span>
+                <span>Delete Selected Chat Memory</span>
               </button>
               <button id="sm_nuke_all_chat_memory" class="menu_button menu_button_icon">
                 <i class="fa-solid fa-bomb"></i>
-                <span>Nuke all active</span>
+                <span>Delete All Saved Chat Memory</span>
               </button>
               <button id="sm_empty_rollback_archive" class="menu_button menu_button_icon">
                 <i class="fa-solid fa-box-archive"></i>
-                <span>Empty rollback archive</span>
+                <span>Delete Archived Memory</span>
               </button>
               <button id="sm_unlink_force_link" class="menu_button menu_button_icon" style="display: none">
                 <i class="fa-solid fa-link-slash"></i>
-                <span>Unlink force-linked memory</span>
+                <span>Remove Manual Memory Link</span>
               </button>
             </div>
             <div id="sm_character_memory_rows"></div>
@@ -222,10 +224,10 @@
         <label class="checkbox_label">
           <input id="sm_read_only" type="checkbox" />
           <span>
-            Read-only mode - protect this chat's memory
+            Protect This Chat's Memory (Read-only)
             <span
               class="sm-info"
-              data-tooltip="Nothing from this chat is saved while read-only mode is active. The character card remains available as reference, but this chat's memory is not changed."
+              data-tooltip="While this is on, Storyhold does not save memory from this chat. The character card remains available, but Storyhold will not change this chat's saved memory."
               >ⓘ</span
             >
           </span>
@@ -237,10 +239,10 @@
       <!-- ══ TOKEN USAGE ══ -->
       <div class="sm-token-section">
         <p class="sm-section-title">
-          Token Usage
+          Memory Size
           <span
             class="sm-info"
-            data-tooltip="Estimated tokens currently injected by each Storyhold tier. Updates after each generation. Hover a colour segment for the tier breakdown. Uses ~4 chars/token - accurate enough for tuning budgets, not for exact counts."
+            data-tooltip="Shows an estimate of how much memory Storyhold adds to each reply. It updates after each reply. Hover a coloured bar segment to see each part. The number is an estimate, not an exact count."
             >ⓘ</span
           >
         </p>
@@ -253,51 +255,51 @@
         </div>
         <div id="sm_token_group_rows" class="sm-token-group-rows" style="display: none"></div>
         <button id="sm_reset_budgets" class="menu_button" style="width: 100%; margin-top: 6px">
-          Reset budgets to defaults
+          Reset Memory Limits to Defaults
         </button>
       </div>
 
       <!-- Hidden backing store for the group character selection - driven by clicking the per-chat token rows -->
       <select id="sm_group_char_select" style="display: none"></select>
 
-      <!-- ══ LONG-TERM ══ -->
+      <!-- ══ IMPORTANT FACTS ══ -->
       <details class="sm-section">
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_longterm_enabled" class="sm-section-toggle" />
-          Long-term Chat Memory
+          Important Facts
           <span
             class="sm-info"
-            data-tooltip="Extracts durable facts, relationships, preferences, and significant events from this chat and stores them in this chat's isolated memory namespace. Other chats do not read them."
+            data-tooltip="Saves lasting facts, relationships, preferences, and important events from this chat. The saved memory belongs only to this chat."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
-          <p class="sm-section-title">Memory for Current Chat</p>
+          <p class="sm-section-title">Facts for This Chat</p>
           <div id="sm_memories_list" class="sm_memories_list"></div>
           <div class="sm-block sm-btn-row" style="margin-top: 6px">
             <button id="sm_extract_now" class="menu_button menu_button_icon">
               <i class="fa-solid fa-magnifying-glass"></i>
               <span>
-                Extract Now
+                Scan Recent Messages for This Character
                 <span
                   class="sm-info"
-                  data-tooltip="Extracts long-term memories from the last 20 messages. For the full chat backlog use Catch Up instead."
+                  data-tooltip="Reads the last 20 messages and saves important facts for the selected character in this chat. It does not read the whole chat; use Scan &amp; Memorize This Chat for that."
                   >ⓘ</span
                 >
               </span>
             </button>
             <button id="sm_clear_memories" class="menu_button menu_button_icon">
               <i class="fa-solid fa-trash-can"></i>
-              <span>Clear Memories</span>
+              <span>Delete This Character's Long-term Memory</span>
             </button>
           </div>
 
           <p class="sm-section-title">Extraction</p>
           <div class="sm-block sm-advanced-only">
             <label
-              >Extract after every <b><span id="sm_longterm_extract_every_value"></span></b> AI
-              messages</label
+              >Scan after every <b><span id="sm_longterm_extract_every_value"></span></b> AI
+              replies</label
             >
             <input
               id="sm_longterm_extract_every"
@@ -310,7 +312,7 @@
           </div>
           <div class="sm-block">
             <label
-              >Max stored memories per chat:
+              >Maximum saved facts for this chat:
               <b><span id="sm_longterm_max_memories_value"></span></b
             ></label>
             <input
@@ -404,44 +406,44 @@
         </div>
       </details>
 
-      <!-- ══ SESSION MEMORY ══ -->
+      <!-- ══ RECENT CHAT DETAILS ══ -->
       <details class="sm-section">
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_session_enabled" class="sm-section-toggle" />
-          Session Memory
+          Recent Chat Details
           <span
             class="sm-info"
-            data-tooltip="Captures granular details from the current chat - scene details, revelations, character developments. More specific than long-term memories and doesn't persist between sessions. Helps the AI stay oriented to what has already been established this session."
+            data-tooltip="Saves smaller details from this chat, such as scene events, discoveries, and character changes. These details help the AI follow what is happening now."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
-          <p class="sm-section-title">Memories for Current Session</p>
+          <p class="sm-section-title">Details for This Chat</p>
           <div id="sm_session_list" class="sm_memories_list"></div>
           <div class="sm-block sm-btn-row" style="margin-top: 6px">
             <button id="sm_extract_session_now" class="menu_button menu_button_icon">
               <i class="fa-solid fa-magnifying-glass"></i>
               <span>
-                Extract Now
+                Save Recent Chat Details
                 <span
                   class="sm-info"
-                  data-tooltip="Extracts session details from the last 40 messages. For the full chat backlog use Catch Up instead."
+                  data-tooltip="Reads the last 40 messages and saves useful recent details for this chat. It does not read the whole chat; use Scan &amp; Memorize This Chat for that."
                   >ⓘ</span
                 >
               </span>
             </button>
             <button id="sm_clear_session" class="menu_button menu_button_icon">
               <i class="fa-solid fa-trash-can"></i>
-              <span>Clear Session Memories</span>
+              <span>Delete Recent Details for This Chat</span>
             </button>
           </div>
 
           <p class="sm-section-title">Extraction</p>
           <div class="sm-block sm-advanced-only">
             <label
-              >Extract after every <b><span id="sm_session_extract_every_value"></span></b> AI
-              messages</label
+              >Scan after every <b><span id="sm_session_extract_every_value"></span></b> AI
+              replies</label
             >
             <input
               id="sm_session_extract_every"
@@ -454,7 +456,7 @@
           </div>
           <div class="sm-block">
             <label
-              >Max session memories: <b><span id="sm_session_max_memories_value"></span></b
+              >Maximum recent details: <b><span id="sm_session_max_memories_value"></span></b
             ></label>
             <input
               id="sm_session_max_memories"
@@ -527,15 +529,15 @@
         </div>
       </details>
 
-      <!-- ══ SHORT-TERM ══ -->
+      <!-- ══ CHAT SUMMARY ══ -->
       <details class="sm-section">
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_compaction_enabled" class="sm-section-toggle" />
-          Short-term Memory
+          Chat Summary
           <span
             class="sm-info"
-            data-tooltip="Watches the context usage percentage and generates a rolling summary once it crosses a threshold. Older messages that fall off the context window are still covered by the summary. Uses progressive compaction - subsequent runs extend the existing summary rather than rewriting it from scratch."
+            data-tooltip="Makes a running summary when the chat gets long, so older parts remain available to the AI. New summaries extend the existing one."
             >ⓘ</span
           >
         </summary>
@@ -558,18 +560,18 @@
           <div class="sm-block sm-btn-row">
             <button id="sm_summarize_now" class="menu_button menu_button_icon">
               <i class="fa-solid fa-brain"></i>
-              <span>Summarize Now</span>
+              <span>Update Summary Now</span>
             </button>
           </div>
 
           <p class="sm-section-title sm-advanced-only">Extraction</p>
           <div class="sm-block sm-advanced-only">
             <label>
-              Context threshold:
+              Summarize when the chat is:
               <b><span id="sm_compaction_threshold_value"></span></b>
               <span
                 class="sm-info"
-                data-tooltip="Storyhold waits until context usage crosses this percentage before generating a summary. Lower values produce more frequent summaries; higher values let the context fill up more before compacting."
+                data-tooltip="Sets how full the chat can get before Storyhold makes a summary. Lower values summarize sooner; higher values wait longer."
                 >ⓘ</span
               >
             </label>
@@ -584,7 +586,7 @@
           </div>
           <div class="sm-block sm-advanced-only">
             <label>
-              Response length: <b><span id="sm_compaction_response_length_value"></span></b> tokens
+              Summary length: <b><span id="sm_compaction_response_length_value"></span></b> tokens
             </label>
             <input
               id="sm_compaction_response_length"
@@ -647,20 +649,20 @@
         </div>
       </details>
 
-      <!-- ══ SCENE DETECTION ══ -->
+      <!-- ══ SCENES ══ -->
       <details class="sm-section">
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_scene_enabled" class="sm-section-toggle" />
-          Scene Detection &amp; History
+          Scenes
           <span
             class="sm-info"
-            data-tooltip="Detects when the scene changes - time skips, location shifts, or mood breaks - and generates a short summary of the completed scene. Scene summaries are injected into context so the AI knows where you've been, not just where you are."
+            data-tooltip="Notices when the scene changes and saves a short summary of the scene that just ended. This helps the AI remember where the story has been."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
-          <p class="sm-section-title">Scene History</p>
+          <p class="sm-section-title">Saved Scenes</p>
           <div id="sm_scenes_list" class="sm_scenes_list">
             <div class="sm_no_char">No scenes recorded yet.</div>
           </div>
@@ -668,17 +670,17 @@
             <button id="sm_extract_scenes_now" class="menu_button menu_button_icon">
               <i class="fa-solid fa-magnifying-glass"></i>
               <span>
-                Extract Scene
+                Save Current Scene
                 <span
                   class="sm-info"
-                  data-tooltip="Summarizes the current scene buffer (messages since the last detected scene break) as a scene entry. Falls back to the last 40 messages if no buffer exists. For the full chat backlog use Catch Up instead."
+                  data-tooltip="Saves the current scene as one short summary. If no scene is open, it uses the last 40 messages. It does not scan the whole chat."
                   >ⓘ</span
                 >
               </span>
             </button>
             <button id="sm_clear_scenes" class="menu_button menu_button_icon">
               <i class="fa-solid fa-trash-can"></i>
-              <span>Clear Scene History</span>
+              <span>Delete Scene History</span>
             </button>
           </div>
 
@@ -687,10 +689,10 @@
             <label class="checkbox_label">
               <input id="sm_scene_ai_detect" type="checkbox" />
               <span>
-                Use AI detection
+                Use the memory model to detect scene changes
                 <span
                   class="sm-info"
-                  data-tooltip="Asks the LLM whether a scene break occurred after each message. More accurate than the heuristic pattern matcher but costs an extra model call per message. Off by default due to hardware cost."
+                  data-tooltip="Asks the memory model after each message whether the scene changed. It may be more accurate, but uses extra model calls."
                   >ⓘ</span
                 >
               </span>
@@ -700,7 +702,7 @@
           <p class="sm-section-title">Settings</p>
           <div class="sm-block">
             <label
-              >Keep last <b><span id="sm_scene_max_history_value"></span></b> scenes</label
+              >Keep the last <b><span id="sm_scene_max_history_value"></span></b> scenes</label
             >
             <input
               id="sm_scene_max_history"
@@ -763,10 +765,10 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_arcs_enabled" class="sm-section-toggle" />
-          Story Arcs
+          Open Story Threads
           <span
             class="sm-info"
-            data-tooltip="Tracks unresolved narrative threads - promises made, character goals, mysteries, tensions. Injected into context so the AI stays oriented toward where the story is going and doesn't forget what's been set up."
+            data-tooltip="Tracks unresolved story threads such as promises, goals, mysteries, and tensions, so the AI does not forget what is still open."
             >ⓘ</span
           >
         </summary>
@@ -787,17 +789,17 @@
             <button id="sm_extract_arcs_now" class="menu_button menu_button_icon">
               <i class="fa-solid fa-magnifying-glass"></i>
               <span>
-                Extract Arcs Now
+                Find Open Story Threads
                 <span
                   class="sm-info"
-                  data-tooltip="Extracts story arcs from the last 100 messages. Arcs need a broader window than other tiers to detect resolutions. For the full chat backlog use Catch Up instead."
+                  data-tooltip="Reads the last 100 messages to find open story threads and closed ones. It does not scan the whole chat; use Scan &amp; Memorize This Chat for that."
                   >ⓘ</span
                 >
               </span>
             </button>
             <button id="sm_clear_arcs" class="menu_button menu_button_icon">
               <i class="fa-solid fa-trash-can"></i>
-              <span>Clear Arcs</span>
+              <span>Delete Story Threads</span>
             </button>
           </div>
 
@@ -867,10 +869,10 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_consolidate_enabled" class="sm-section-toggle" />
-          Consolidation
+          Automatic Memory Cleanup
           <span
             class="sm-info"
-            data-tooltip="After each extraction pass, sends accumulated memories to the LLM to merge near-duplicates and redundant entries into richer single items. Runs silently in the background. Recommended - prevents the same information being stored in many slightly different forms."
+            data-tooltip="Quietly merges near-duplicate and overlapping memories into single, clearer entries. This keeps the same information from piling up in many slightly different forms."
             >ⓘ</span
           >
         </summary>
@@ -1012,15 +1014,15 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_canon_enabled" class="sm-section-toggle" />
-          Canon
+          Story History
           <span
             class="sm-info"
-            data-tooltip="A stable prose narrative compiled manually from resolved arc summaries and high-importance memories. Covers who the character is, what has happened, and the key relationships - providing a consistent long-term anchor across sessions. Injected via its own slot so it coexists with the short-term summary."
+            data-tooltip="A written history of the character compiled from finished story threads and important memories. It gives the AI a steady, long-term picture of who the character is and what has happened."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
-          <p class="sm-section-title">Current Canon</p>
+          <p class="sm-section-title">Current Story History</p>
           <div class="sm-block">
             <label>
               Canon
@@ -1039,10 +1041,10 @@
             <button
               id="sm_generate_canon"
               class="menu_button menu_button_icon"
-              title="Generate a stable canon narrative from resolved arc summaries and high-importance memories."
+              title="Write the character's story history from finished story threads and important memories."
             >
               <i class="fa-solid fa-book-open"></i>
-              <span>Generate Canon</span>
+              <span>Create Story History</span>
             </button>
           </div>
           <div id="sm_canon_status" class="sm_canon_status"></div>
@@ -1114,22 +1116,22 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_profiles_enabled" class="sm-section-toggle" />
-          Character &amp; World Profiles
+          Character &amp; World Summary
           <span
             class="sm-info"
-            data-tooltip="Compact state snapshots (current goals, emotional posture, world state, relationships) generated from stored memories and injected every turn as a stable anchor for the AI. Regenerated after each extraction pass, on chat load when stale, and optionally on a separate message-count schedule (Profile B only)."
+            data-tooltip="A short summary of the character's current goals, mood, world state, and relationships, rebuilt from saved memory so the AI stays consistent."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
-          <p class="sm-section-title">Current Profiles</p>
+          <p class="sm-section-title">Current Character &amp; World Summary</p>
           <div id="sm_profiles_display" class="sm_profiles_display">
             <span class="sm-muted">No profiles generated yet.</span>
           </div>
           <div class="sm-block sm-btn-row" style="margin-top: 4px">
             <button id="sm_profiles_regenerate" class="menu_button menu_button_icon">
               <i class="fa-solid fa-rotate"></i>
-              <span>Regenerate Profiles Now</span>
+              <span>Update Character &amp; World Summary</span>
             </button>
           </div>
 
@@ -1220,10 +1222,10 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_relationships_enabled" class="sm-section-toggle" />
-          Relationship History
+          Relationships
           <span
             class="sm-info"
-            data-tooltip="Tracks the emotional state of relationships between characters across sessions - trust, affection, hostility, debts. Updated each extraction pass as deltas. Only relationships relevant to the current chat are injected. Persists across chats like long-term memories."
+            data-tooltip="Tracks how each relationship is going, such as trust, affection, hostility, and debts. Only relationships that matter to this chat are shown to the AI."
             >ⓘ</span
           >
         </summary>
@@ -1233,11 +1235,11 @@
           <div class="sm-block sm-btn-row" style="margin-top: 6px">
             <button id="sm_add_relationship" class="menu_button menu_button_icon">
               <i class="fa-solid fa-plus"></i>
-              <span>Add Pair</span>
+              <span>Add Relationship</span>
             </button>
             <button id="sm_clear_relationships" class="menu_button menu_button_icon">
               <i class="fa-solid fa-trash-can"></i>
-              <span>Clear All</span>
+              <span>Delete All Relationships</span>
             </button>
           </div>
           <div
@@ -1335,10 +1337,10 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_epistemic_enabled" class="sm-section-toggle" />
-          Perspectives &amp; Secrets
+          What Characters Know
           <span
             class="sm-info"
-            data-tooltip="Extracts what each character knows, suspects, believes (falsely), is unaware of, and is actively concealing. Extracted once per scene break. The responding character's knowledge block is injected privately so the AI can maintain perspective-accurate behaviour - knowing what to reveal, what to hide, and what they genuinely do not know."
+            data-tooltip="Tracks what each character knows, suspects, wrongly believes, is unaware of, or is hiding. The AI uses this to decide what each character should reveal and what it should not."
             >ⓘ</span
           >
         </summary>
@@ -1395,11 +1397,11 @@
           <div class="sm-block sm-btn-row" style="margin-top: 6px">
             <button id="sm_epistemic_add" class="menu_button menu_button_icon">
               <i class="fa-solid fa-plus"></i>
-              <span>Add Entry</span>
+              <span>Add Knowledge Entry</span>
             </button>
             <button id="sm_epistemic_clear" class="menu_button menu_button_icon">
               <i class="fa-solid fa-trash-can"></i>
-              <span>Clear All</span>
+              <span>Delete All Knowledge Entries</span>
             </button>
           </div>
 
@@ -1483,18 +1485,18 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_state_ledger_enabled" class="sm-section-toggle" />
-          State Ledger
+          Current Details
           <span
             class="sm-info"
-            data-tooltip="Tracks current observable state for named entities (characters, objects, places, factions). Extracted per-session and injected as a compact snapshot: location, injuries, outfit, mood, condition, occupants, etc. Keeps the AI grounded in what is visible right now rather than relying on scattered memories."
+            data-tooltip="Tracks the current state of characters, objects, and places, such as location, injuries, outfit, and mood, so the AI remembers what is visible right now."
             >ⓘ</span
           >
         </summary>
         <div class="sm-section-content">
           <p class="sm-muted sm-block sm-simple-only">
-            State cards are extracted automatically during roleplay. Enable this tier and use the
-            model test in Configuration to verify your model handles it well. Advanced injection
-            settings are available here in Advanced mode.
+            These details are saved automatically while you chat. Turn this section on, then use the
+            memory model test in Setup to make sure your model handles it well. More options are
+            available in Advanced mode.
           </p>
           <p class="sm-section-title sm-advanced-only">Injection</p>
           <div class="sm-block sm-advanced-only">
@@ -1548,10 +1550,10 @@
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
           <input type="checkbox" id="sm_recap_enabled" class="sm-section-toggle" />
-          Away Recap
+          Catch-up Recap
           <span
             class="sm-info"
-            data-tooltip='When you return to a chat after being away for longer than the threshold, Storyhold generates a short "Previously on..." summary and displays it as a popup so you can catch up before diving back in.'
+            data-tooltip="After you have been away from a chat for a while, Storyhold shows a short recap so you can catch up before continuing."
             >ⓘ</span
           >
         </summary>
@@ -1559,7 +1561,7 @@
           <div class="sm-block sm-btn-row" style="margin-top: 4px">
             <button id="sm_recap_now" class="menu_button menu_button_icon">
               <i class="fa-solid fa-clock-rotate-left"></i>
-              <span>Generate Recap Now</span>
+              <span>Show Chat Recap</span>
             </button>
           </div>
 
@@ -1584,10 +1586,10 @@
       <details class="sm-section">
         <summary class="sm-section-header">
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
-          Entity Registry
+          People, Places &amp; Things
           <span
             class="sm-info"
-            data-tooltip="Characters, places, and other named entities extracted from the story. Each entity links to the memories that reference it. Click an entity to see its memory timeline."
+            data-tooltip="People, places, and other named things from the story, with links to the memories that mention them. Click one to see its memory timeline."
             >ⓘ</span
           >
         </summary>
@@ -1596,9 +1598,9 @@
             <button
               id="sm_open_graph_btn"
               class="menu_button"
-              title="View force-directed memory graph"
+              title="Show the memory map"
             >
-              <i class="fa-solid fa-diagram-project"></i> View Graph
+              <i class="fa-solid fa-diagram-project"></i> Show Memory Map
             </button>
           </div>
           <div id="sm_entity_panel" class="sm_entity_panel">
@@ -1611,10 +1613,10 @@
       <details class="sm-section">
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
-          Continuity Checker
+          Check for Story Mistakes
           <span
             class="sm-info"
-            data-tooltip="Compares the last AI response against established facts in your summary and memories, then lists any contradictions it finds. Manual-only - click after a response that feels off. Also available as the /sm-check slash command."
+            data-tooltip="Compares the last reply against your summary and saved memory, then lists anything that does not match. Click this after a reply that feels off."
             >ⓘ</span
           >
         </summary>
@@ -1622,7 +1624,7 @@
           <div class="sm-block sm-btn-row">
             <button id="sm_check_continuity" class="menu_button menu_button_icon">
               <i class="fa-solid fa-scale-balanced"></i>
-              <span>Check Last Response</span>
+              <span>Check Last Reply for Story Mistakes</span>
             </button>
           </div>
 
@@ -1668,10 +1670,10 @@
       <details class="sm-section">
         <summary>
           <i class="fa-solid fa-chevron-right sm-section-chevron"></i>
-          Configuration
+          Setup
           <span
             class="sm-info"
-            data-tooltip="LLM source, hardware profile, and general settings. Set these once when you first install Storyhold - defaults work well for most setups."
+            data-tooltip="Memory model, hardware profile, and general settings. Set these once when you first install Storyhold; the defaults work well for most setups."
             >ⓘ</span
           >
         </summary>
@@ -1820,7 +1822,7 @@
             <button id="sm_model_test_btn" class="menu_button menu_button_icon">
               <i class="fa-solid fa-flask"></i>
               <span>
-                Test Extraction Model
+                Test Memory Model
                 <span
                   class="sm-info"
                   data-tooltip="Runs a fixed test scenario through all enabled extraction tiers. Use this to check whether your configured model is suitable for Storyhold before committing to a session."
