@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Context-aware memory-size presets.** Simple mode now offers Potato through Absurd presets from 1.5k to 128k total injected memory, with model-context-aware initial selection and linked generation/storage limits.
+
+### Changed
+
+- **Progressive memory controls.** Advanced mode is a full unlock for individual injection, generation, and stored-memory settings; changing those values marks the configuration Custom. A plain-English `?` explains the trade-offs, including why 128k is an opt-in absurdity tier.
+
 ## [1.14.0] - 2026-08-26
 
 ### Added

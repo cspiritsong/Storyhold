@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import {
   applyManualBudget,
   applyManualBudgetReset,
+  applyPresetSideSettings,
   allocateBudgetWithinCap,
+  detectPresetIndex,
+  MEMORY_PRESETS,
+  MAX_TIER_INJECT_BUDGET,
   normalizeTotalInjectBudget,
+  presetIndexForTotal,
+  scaleBudgetFloors,
   sumBudgetFloors,
 } from '../budget-policy.js';
 
@@ -71,7 +77,7 @@ test('current Smart Memory tier floors reserve 3750 tokens when all are enabled'
 test('total cap is normalized upward when it cannot satisfy minimum floors', () => {
   assert.equal(normalizeTotalInjectBudget(800, 3750), 3750);
   assert.equal(normalizeTotalInjectBudget(8000, 3750), 8000);
-  assert.equal(normalizeTotalInjectBudget(99999, 3750), 16000);
+  assert.equal(normalizeTotalInjectBudget(200000, 3750), 128000);
 });
 
 test('allocator preserves floors and spends remaining headroom on demand', () => {
@@ -131,4 +137,78 @@ test('allocator respects an individual tier maximum as well as the total cap', (
   assert.equal(result.unallocated, 700);
 });
 
+test('memory presets move from small local context to 128k absurd mode', () => {
+  assert.deepEqual(
+    MEMORY_PRESETS.map((preset) => preset.total_inject),
+    [1500, 4000, 8000, 16000, 32000, 64000, 128000],
+  );
+  assert.equal(presetIndexForTotal(128000), 6);
+  assert.equal(presetIndexForTotal(12345), -1);
+});
+
+test('the absurd preset can distribute its full 128k cap', () => {
+  const ratios = [0.16, 0.13, 0.1, 0.13, 0.18, 0.13, 0.08, 0.06, 0.06];
+  const result = allocateBudgetWithinCap(
+    ratios.map((ratio, index) => ({
+      key: `tier-${index}`,
+      minimum: 50,
+      maximum: MAX_TIER_INJECT_BUDGET,
+      target: 128000 * ratio,
+    })),
+    128000,
+  );
+
+  assert.equal(result.total, 128000);
+  assert.equal(result.unallocated, 0);
+});
+
+test('automatic preset detection uses explicit context bands and stops at Whale', () => {
+  assert.equal(detectPresetIndex(16384), 0);
+  assert.equal(detectPresetIndex(32768), 1);
+  assert.equal(detectPresetIndex(65536), 1);
+  assert.equal(detectPresetIndex(131072), 2);
+  assert.equal(detectPresetIndex(200000), 3);
+  assert.equal(detectPresetIndex(400000), 4);
+  assert.equal(detectPresetIndex(1000000), 4);
+  assert.equal(detectPresetIndex(0), 2);
+});
+
+test('small-context floors scale down without mutating the input tiers', () => {
+  const tiers = [
+    { key: 'longterm', minimum: 500 },
+    { key: 'session', minimum: 400 },
+    { key: 'scene', minimum: 300 },
+    { key: 'arcs', minimum: 700 },
+    { key: 'canon', minimum: 800 },
+    { key: 'profiles', minimum: 400 },
+    { key: 'relationships', minimum: 250 },
+    { key: 'epistemic', minimum: 200 },
+  ];
+  const floors = scaleBudgetFloors(tiers, 1500);
+
+  assert.deepEqual(floors, {
+    longterm: 200,
+    session: 150,
+    scene: 100,
+    arcs: 250,
+    canon: 300,
+    profiles: 150,
+    relationships: 100,
+    epistemic: 50,
+  });
+  assert.ok(Object.values(floors).reduce((sum, value) => sum + value, 0) <= 1500);
+  assert.deepEqual(tiers[0], { key: 'longterm', minimum: 500 });
+});
+
+test('preset side settings include generation and every stored-memory pool', () => {
+  const original = { generation_budget: 999, longterm_max_memories: 1 };
+  const result = applyPresetSideSettings(original, MEMORY_PRESETS[6]);
+
+  assert.equal(result.generation_budget, 32768);
+  assert.equal(result.longterm_max_memories, 150);
+  assert.equal(result.session_max_memories, 200);
+  assert.equal(result.scene_max_history, 50);
+  assert.equal(result.arcs_max, 50);
+  assert.equal(original.session_max_memories, undefined);
+});
 

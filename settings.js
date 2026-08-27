@@ -147,10 +147,16 @@ import { NAMESPACE_STATUS } from './rename-recovery.js';
 import {
   DEFAULT_TOTAL_INJECT_BUDGET,
   MAX_TOTAL_INJECT_BUDGET,
+  MAX_TIER_INJECT_BUDGET,
+  MEMORY_PRESETS,
   allocateBudgetWithinCap,
   applyManualBudget,
   applyManualBudgetReset,
+  applyPresetSideSettings,
+  detectPresetIndex,
   normalizeTotalInjectBudget,
+  presetIndexForTotal,
+  scaleBudgetFloors,
   sumBudgetFloors,
 } from './budget-policy.js';
 import { buildRescanSummary, normalizeRescanPasses, RESCAN_DEFAULT_PASSES } from './rescan-policy.js';
@@ -189,6 +195,10 @@ import {
 export const defaultSettings = {
   enabled: true,
   settings_mode: 'simple',
+  // 'auto' is resolved to a context-aware preset on first setup; a preset key
+  // means simple mode controls the related budgets/counts; 'custom' means an
+  // advanced user has taken over those values.
+  memory_preset: 'auto',
   // Memory is always isolated per chat. The character card is reference material,
   // not a mutable cross-chat memory store.
   memory_scope: MEMORY_SCOPE_CHAT,
@@ -441,15 +451,27 @@ function currentBudgetSum(s) {
   );
 }
 
+/** Returns the minimum floor entries for the currently enabled tiers. */
+function budgetFloorEntries(s) {
+  const entries = TUNABLE_TIERS.map((tier) => ({
+    key: tier.setting,
+    minimum: tier.defaultBudget,
+    enabled: s[tier.enabledSetting] !== false,
+  }));
+  const preset =
+    s.settings_mode === 'simple'
+      ? MEMORY_PRESETS.find((candidate) => candidate.key === s.memory_preset)
+      : null;
+  if (!preset) return entries;
+  const normalTotal = sumBudgetFloors(entries);
+  if (preset.total_inject >= normalTotal) return entries;
+  const scaled = scaleBudgetFloors(entries, preset.total_inject);
+  return entries.map((entry) => ({ ...entry, minimum: scaled[entry.key] ?? entry.minimum }));
+}
+
 /** Returns the minimum floor total for the currently enabled tiers. */
 function minimumBudgetTotal(s) {
-  return sumBudgetFloors(
-    TUNABLE_TIERS.map((tier) => ({
-      key: tier.setting,
-      minimum: tier.defaultBudget,
-      enabled: s[tier.enabledSetting] !== false,
-    })),
-  );
+  return sumBudgetFloors(budgetFloorEntries(s));
 }
 
 /** Returns the persisted global cap, normalized so every floor can fit. */
@@ -469,10 +491,11 @@ function applyTotalBudget(total, s) {
     0,
   );
   const ratioScale = activeRatioTotal > 0 ? 1 / activeRatioTotal : 1;
+  const floors = Object.fromEntries(budgetFloorEntries(s).map((tier) => [tier.key, tier.minimum]));
   const entries = TUNABLE_TIERS.map((tier) => ({
     key: tier.setting,
-    minimum: tier.defaultBudget,
-    maximum: 4000,
+    minimum: floors[tier.setting] ?? tier.defaultBudget,
+    maximum: MAX_TIER_INJECT_BUDGET,
     target: Number(total) * BUDGET_RATIOS[tier.ratioKey] * ratioScale,
     enabled: s[tier.enabledSetting] !== false,
   }));
@@ -642,10 +665,11 @@ function updateBudgetCapUI(s) {
 
 /** Builds policy entries from the current per-tier settings. */
 function currentBudgetEntries(s, targetFor = (tier) => s[tier.setting]) {
+  const floors = Object.fromEntries(budgetFloorEntries(s).map((tier) => [tier.key, tier.minimum]));
   return TUNABLE_TIERS.map((tier) => ({
     key: tier.setting,
-    minimum: tier.defaultBudget,
-    maximum: 4000,
+    minimum: floors[tier.setting] ?? tier.defaultBudget,
+    maximum: MAX_TIER_INJECT_BUDGET,
     target: targetFor(tier),
     enabled: s[tier.enabledSetting] !== false,
   }));
@@ -752,6 +776,8 @@ export function loadSettings() {
     extension_settings[MODULE_NAME] = {};
   }
   const current = extension_settings[MODULE_NAME];
+  const hadPersistedSettings = Object.keys(current).length > 0;
+  const hadMemoryPreset = Object.prototype.hasOwnProperty.call(current, 'memory_preset');
   const hadTotalInjectBudget = Object.prototype.hasOwnProperty.call(current, 'total_inject_budget');
   const legacyTotalInjectBudget = currentBudgetSum(current);
   for (const [key, value] of Object.entries(defaultSettings)) {
@@ -816,7 +842,29 @@ export function loadSettings() {
   );
   const totalChanged = current.total_inject_budget !== normalizedTotal;
   current.total_inject_budget = normalizedTotal;
-  if (totalChanged || scopeChanged) saveSettingsDebounced();
+
+  // Migration: existing installations keep their current values. New installs
+  // remain on 'auto' until the UI can inspect the active model context.
+  let presetChanged = false;
+  if (!hadMemoryPreset && hadPersistedSettings) {
+    const existingPreset = presetIndexForTotal(normalizedTotal);
+    const preset = existingPreset >= 0 ? MEMORY_PRESETS[existingPreset] : null;
+    const sideSettingsMatch =
+      preset &&
+      current.settings_mode !== 'advanced' &&
+      current.generation_budget === preset.generation &&
+      current.longterm_max_memories === preset.longtermMax &&
+      current.session_max_memories === preset.sessionMax &&
+      current.scene_max_history === preset.sceneMax &&
+      current.arcs_max === preset.arcsMax;
+    current.memory_preset = sideSettingsMatch ? preset.key : 'custom';
+    presetChanged = true;
+  }
+  if (!['auto', 'custom', ...MEMORY_PRESETS.map((preset) => preset.key)].includes(current.memory_preset)) {
+    current.memory_preset = 'custom';
+    presetChanged = true;
+  }
+  if (totalChanged || scopeChanged || presetChanged) saveSettingsDebounced();
 
   // Migration: replace old bracket-wrapped template defaults with plain-text equivalents.
   // Only affects users who never customized these fields (exact match on the old default).
@@ -965,6 +1013,103 @@ export function bindSettingsUI(ctrl) {
     $('#sm_rebuild_branch').toggle(show);
   }
 
+  function activeModelContextSize() {
+    try {
+      const contextSize = Number(getMaxContextSize(0));
+      return Number.isFinite(contextSize) && contextSize > 0 ? contextSize : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function nearestPresetIndex(totalInject) {
+    const total = Number(totalInject);
+    if (!Number.isFinite(total)) return detectPresetIndex(activeModelContextSize());
+    return MEMORY_PRESETS.reduce(
+      (bestIndex, preset, index) =>
+        Math.abs(preset.total_inject - total) <
+        Math.abs(MEMORY_PRESETS[bestIndex].total_inject - total)
+          ? index
+          : bestIndex,
+      0,
+    );
+  }
+
+  function renderMemoryPresetUI(settings) {
+    const storedPreset = settings.memory_preset ?? 'custom';
+    const storedIndex = MEMORY_PRESETS.findIndex((preset) => preset.key === storedPreset);
+    const index = storedIndex >= 0 ? storedIndex : nearestPresetIndex(settings.total_inject_budget);
+    const preset = MEMORY_PRESETS[index] ?? MEMORY_PRESETS[2];
+    const custom = storedPreset === 'custom';
+    $('#sm_memory_preset').val(index);
+    $('#sm_preset_name').text(custom ? 'Custom' : preset.label);
+    $('#sm_preset_custom').toggle(custom);
+    const details =
+      `Memory sent to the AI each reply: ${preset.total_inject.toLocaleString()} tokens. ` +
+      `Background note-writing allowance: ${preset.generation.toLocaleString()} tokens. ` +
+      `Stored pools: ${preset.longtermMax} facts, ${preset.sessionMax} recent details, ` +
+      `${preset.sceneMax} scenes, ${preset.arcsMax} story threads.`;
+    $('#sm_preset_blurb').text(
+      custom
+        ? 'Advanced values are active. Choose a preset or keep tuning individual settings.'
+        : `${preset.blurb} ${details}`,
+    );
+  }
+
+  function syncPresetSideUI(settings) {
+    const generation = Number(settings.generation_budget ?? 8192);
+    const unlimited = generation === -1;
+    $('#sm_generation_budget')
+      .val(unlimited ? 8192 : generation)
+      .prop('disabled', unlimited);
+    $('#sm_generation_budget_unlimited').prop('checked', unlimited);
+    $('#sm_generation_budget_value').text(
+      unlimited ? 'Unlimited' : `${generation.toLocaleString()} tokens`,
+    );
+    $('#sm_longterm_max_memories').val(settings.longterm_max_memories);
+    $('#sm_longterm_max_memories_value').text(settings.longterm_max_memories);
+    $('#sm_session_max_memories').val(settings.session_max_memories);
+    $('#sm_session_max_memories_value').text(settings.session_max_memories);
+    $('#sm_scene_max_history').val(settings.scene_max_history);
+    $('#sm_scene_max_history_value').text(settings.scene_max_history);
+    $('#sm_arcs_max').val(settings.arcs_max);
+    $('#sm_arcs_max_value').text(settings.arcs_max);
+  }
+
+  function markMemoryPresetCustom(settings) {
+    settings.memory_preset = 'custom';
+    renderMemoryPresetUI(settings);
+  }
+
+  function applyMemoryPreset(index, { save = true, reinject = true } = {}) {
+    const settings = extension_settings[MODULE_NAME];
+    const preset = MEMORY_PRESETS[Number(index)];
+    if (!preset) return;
+    settings.memory_preset = preset.key;
+    applyTotalBudget(preset.total_inject, settings);
+    Object.assign(settings, applyPresetSideSettings(settings, preset));
+    // A preset is a deliberate fixed allocation. Advanced auto-tune is not
+    // allowed to silently move its tier values after the user selects it.
+    settings.auto_tune_budgets = false;
+    $('#sm_auto_tune_budgets').prop('checked', false);
+    updateBudgetCapUI(settings);
+    for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
+      $(`#${slider}`).val(settings[setting]);
+      $(`#${display}`).text(fmt(settings[setting]));
+    }
+    syncPresetSideUI(settings);
+    renderMemoryPresetUI(settings);
+    if (save) saveSettingsDebounced();
+    if (reinject) reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
+  }
+
+  function resolveAutomaticPreset() {
+    const settings = extension_settings[MODULE_NAME];
+    if (settings.memory_preset !== 'auto') return false;
+    applyMemoryPreset(detectPresetIndex(activeModelContextSize()), { save: false, reinject: false });
+    return true;
+  }
+
   /**
    * Applies a manual per-tier budget edit. Manual edits are authoritative:
    * auto-tune is disabled so the next extraction pass cannot reallocate the
@@ -974,6 +1119,7 @@ export function bindSettingsUI(ctrl) {
     const settings = extension_settings[MODULE_NAME];
     const updated = applyManualBudget(settings, settingKey, value);
     Object.assign(settings, updated);
+    markMemoryPresetCustom(settings);
     const allocation = fitCurrentBudgetsToCap(settings);
     for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
       $(`#${slider}`).val(settings[setting]);
@@ -1983,6 +2129,12 @@ export function bindSettingsUI(ctrl) {
       }
     });
 
+  // Resolve the automatic preset only for a new install. Existing installs are
+  // migrated to a named preset or Custom without overwriting their values.
+  if (resolveAutomaticPreset()) saveSettingsDebounced();
+  renderMemoryPresetUI(s);
+  syncPresetSideUI(s);
+
   // ---- Settings mode toggle -------------------------------------------
   $('#sm_settings_mode_advanced')
     .prop('checked', s.settings_mode === 'advanced')
@@ -1991,24 +2143,39 @@ export function bindSettingsUI(ctrl) {
       extension_settings[MODULE_NAME].settings_mode = mode;
       saveSettingsDebounced();
       applySettingsMode(mode);
+      renderMemoryPresetUI(extension_settings[MODULE_NAME]);
       applyInjectionOverrideUI();
     });
 
-  // ---- Global total injection budget cap -------------------------------
+  // ---- Simple memory-size preset --------------------------------------
+  $('#sm_memory_preset').on('change', function () {
+    applyMemoryPreset(parseInt($(this).val(), 10));
+  });
+
+  // ---- Global total injection budget cap (advanced mode) --------------
   updateBudgetCapUI(s);
   $('#sm_total_budget').on('input', function () {
     const settings = extension_settings[MODULE_NAME];
     const requested = parseInt($(this).val(), 10);
     const mode = settings.settings_mode ?? 'simple';
     if (mode === 'simple') {
-      applyTotalBudget(requested, settings);
-    } else {
-      settings.total_inject_budget = normalizeTotalInjectBudget(
-        requested,
-        minimumBudgetTotal(settings),
+      const index = MEMORY_PRESETS.reduce(
+        (bestIndex, preset, index) =>
+          Math.abs(preset.total_inject - requested) <
+          Math.abs(MEMORY_PRESETS[bestIndex].total_inject - requested)
+            ? index
+            : bestIndex,
+        0,
       );
-      fitCurrentBudgetsToCap(settings);
+      applyMemoryPreset(index);
+      return;
     }
+    markMemoryPresetCustom(settings);
+    settings.total_inject_budget = normalizeTotalInjectBudget(
+      requested,
+      minimumBudgetTotal(settings),
+    );
+    fitCurrentBudgetsToCap(settings);
     updateBudgetCapUI(settings);
     for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
       $(`#${slider}`).val(settings[setting]);
@@ -2034,6 +2201,10 @@ export function bindSettingsUI(ctrl) {
 
   $('#sm_reset_budgets').on('click', function () {
     const cur = extension_settings[MODULE_NAME];
+    if ((cur.settings_mode ?? 'simple') === 'simple') {
+      applyMemoryPreset(2);
+      return;
+    }
     const budgetKeys = [
       'longterm_inject_budget',
       'session_inject_budget',
@@ -2052,16 +2223,21 @@ export function bindSettingsUI(ctrl) {
       DEFAULT_TOTAL_INJECT_BUDGET,
       minimumBudgetTotal(cur),
     );
+    cur.generation_budget = defaultSettings.generation_budget;
+    cur.longterm_max_memories = defaultSettings.longterm_max_memories;
+    cur.session_max_memories = defaultSettings.session_max_memories;
+    cur.scene_max_history = defaultSettings.scene_max_history;
+    cur.arcs_max = defaultSettings.arcs_max;
+    cur.memory_preset = 'custom';
     $('#sm_auto_tune_budgets').prop('checked', false);
-    // Sync all slider DOM elements to the restored values.
+    // Sync all budget, generation, and stored-memory controls.
     for (const { setting, slider, display, fmt } of TUNABLE_TIERS) {
       $(`#${slider}`).val(cur[setting]);
       $(`#${display}`).text(fmt(cur[setting]));
     }
-    // Sync the simple-mode total slider.
-    const total = totalBudgetFromSettings(cur);
-    $('#sm_total_budget').val(total);
-    $('#sm_total_budget_value').text(total);
+    syncPresetSideUI(cur);
+    renderMemoryPresetUI(cur);
+    updateBudgetCapUI(cur);
     saveSettingsDebounced();
     reinjectAfterBudgetChange(ctrl.getSelectedCharacterName());
   });
@@ -2389,6 +2565,7 @@ export function bindSettingsUI(ctrl) {
       const val = parseInt($(this).val(), 10);
       $('#sm_generation_budget_value').text(val.toLocaleString() + ' tokens');
       extension_settings[MODULE_NAME].generation_budget = val;
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
     });
   $('#sm_generation_budget_unlimited')
@@ -2401,6 +2578,7 @@ export function bindSettingsUI(ctrl) {
         unlimited ? 'Unlimited' : val.toLocaleString() + ' tokens',
       );
       extension_settings[MODULE_NAME].generation_budget = val;
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
     });
   $('#sm_generation_budget_value').text(
@@ -2905,6 +3083,7 @@ export function bindSettingsUI(ctrl) {
       const val = parseInt($(this).val(), 10);
       extension_settings[MODULE_NAME].longterm_max_memories = val;
       $('#sm_longterm_max_memories_value').text(val);
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
     });
   $('#sm_longterm_max_memories_value').text(s.longterm_max_memories);
@@ -3547,6 +3726,7 @@ export function bindSettingsUI(ctrl) {
       const val = parseInt($(this).val(), 10);
       extension_settings[MODULE_NAME].session_max_memories = val;
       $('#sm_session_max_memories_value').text(val);
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
     });
   $('#sm_session_max_memories_value').text(s.session_max_memories);
@@ -3663,6 +3843,7 @@ export function bindSettingsUI(ctrl) {
       const val = parseInt($(this).val(), 10);
       extension_settings[MODULE_NAME].scene_max_history = val;
       $('#sm_scene_max_history_value').text(val);
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
     });
   $('#sm_scene_max_history_value').text(s.scene_max_history);
@@ -3787,6 +3968,7 @@ export function bindSettingsUI(ctrl) {
       const val = parseInt($(this).val(), 10);
       extension_settings[MODULE_NAME].arcs_max = val;
       $('#sm_arcs_max_value').text(val);
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
     });
   $('#sm_arcs_max_value').text(s.arcs_max);
@@ -5464,6 +5646,7 @@ export function bindSettingsUI(ctrl) {
     .prop('checked', s.auto_tune_budgets ?? false)
     .on('change', function () {
       extension_settings[MODULE_NAME].auto_tune_budgets = $(this).prop('checked');
+      markMemoryPresetCustom(extension_settings[MODULE_NAME]);
       saveSettingsDebounced();
       if ($(this).prop('checked')) autoTuneBudgets(ctrl.getSelectedCharacterName());
     });

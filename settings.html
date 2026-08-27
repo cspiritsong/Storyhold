@@ -326,7 +326,7 @@
               value="{{defaultSettings.longterm_extract_every}}"
             />
           </div>
-          <div class="sm-block">
+          <div class="sm-block sm-advanced-only">
             <label
               >Maximum saved facts for this chat:
               <b><span id="sm_longterm_max_memories_value"></span></b
@@ -335,7 +335,7 @@
               id="sm_longterm_max_memories"
               type="range"
               min="5"
-              max="50"
+              max="200"
               step="5"
               value="{{defaultSettings.longterm_max_memories}}"
             />
@@ -350,7 +350,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_longterm_inject_budget" type="range" min="100" max="4000" step="50" />
+            <input id="sm_longterm_inject_budget" type="range" min="100" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>
@@ -470,7 +470,7 @@
               value="{{defaultSettings.session_extract_every}}"
             />
           </div>
-          <div class="sm-block">
+          <div class="sm-block sm-advanced-only">
             <label
               >Maximum recent details: <b><span id="sm_session_max_memories_value"></span></b
             ></label>
@@ -478,7 +478,7 @@
               id="sm_session_max_memories"
               type="range"
               min="5"
-              max="60"
+              max="250"
               step="5"
               value="{{defaultSettings.session_max_memories}}"
             />
@@ -493,7 +493,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_session_inject_budget" type="range" min="100" max="4000" step="50" />
+            <input id="sm_session_inject_budget" type="range" min="100" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>
@@ -716,7 +716,7 @@
           </div>
 
           <p class="sm-section-title">Settings</p>
-          <div class="sm-block">
+          <div class="sm-block sm-advanced-only">
             <label
               >Keep the last <b><span id="sm_scene_max_history_value"></span></b> scenes</label
             >
@@ -724,7 +724,7 @@
               id="sm_scene_max_history"
               type="range"
               min="1"
-              max="15"
+              max="50"
               step="1"
               value="{{defaultSettings.scene_max_history}}"
             />
@@ -740,7 +740,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_scene_inject_budget" type="range" min="100" max="4000" step="50" />
+            <input id="sm_scene_inject_budget" type="range" min="100" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>Injection position</label>
@@ -820,7 +820,7 @@
           </div>
 
           <p class="sm-section-title">Extraction</p>
-          <div class="sm-block">
+          <div class="sm-block sm-advanced-only">
             <label
               >Max tracked arcs: <b><span id="sm_arcs_max_value"></span></b
             ></label>
@@ -828,7 +828,7 @@
               id="sm_arcs_max"
               type="range"
               min="3"
-              max="20"
+              max="50"
               step="1"
               value="{{defaultSettings.arcs_max}}"
             />
@@ -844,7 +844,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_arcs_inject_budget" type="range" min="100" max="4000" step="50" />
+            <input id="sm_arcs_inject_budget" type="range" min="100" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>Injection position</label>
@@ -1075,7 +1075,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_canon_inject_budget" type="range" min="100" max="4000" step="50" />
+            <input id="sm_canon_inject_budget" type="range" min="100" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>
@@ -1197,7 +1197,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_profiles_inject_budget" type="range" min="100" max="4000" step="50" />
+            <input id="sm_profiles_inject_budget" type="range" min="100" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>Injection position</label>
@@ -1312,7 +1312,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_relationships_inject_budget" type="range" min="50" max="4000" step="50" />
+            <input id="sm_relationships_inject_budget" type="range" min="50" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>Injection position</label>
@@ -1460,7 +1460,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_epistemic_inject_budget" type="range" min="50" max="4000" step="50" />
+            <input id="sm_epistemic_inject_budget" type="range" min="50" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>Injection position</label>
@@ -1525,7 +1525,7 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_state_ledger_inject_budget" type="range" min="50" max="4000" step="50" />
+            <input id="sm_state_ledger_inject_budget" type="range" min="50" max="32000" step="50" />
           </div>
           <div class="sm-block sm-advanced-only">
             <label>Injection position</label>
@@ -1858,10 +1858,10 @@
             <label class="checkbox_label">
               <input id="sm_settings_mode_advanced" type="checkbox" />
               <span>
-                Advanced mode
+                Advanced mode (Full unlock)
                 <span
                   class="sm-info"
-                  data-tooltip="Advanced mode shows individual tier allocations while keeping the global maximum total memory budget active. Simple mode uses that maximum to distribute a proportional starting allocation across enabled tiers."
+                  data-tooltip="Simple mode gives you one memory-size slider. Advanced mode is FULL UNLOCK: it shows the individual controls for each memory section, how much the memory model may write, and how many stored notes each section keeps. Changing those controls switches the simple slider to Custom."
                   >ⓘ</span
                 >
               </span>
@@ -1973,8 +1973,27 @@
             />
           </div>
 
-          <!-- Global injection budget cap (available in both modes) -->
-          <div class="sm-block">
+          <!-- Simple mode: preset memory-size slider (drives budget, generation, counts) -->
+          <div class="sm-block sm-simple-only" id="sm_preset_block">
+            <label>
+              Memory size: <b><span id="sm_preset_name"></span></b>
+              <span id="sm_preset_custom" class="sm-muted" style="display: none">(Custom — advanced settings in use)</span>
+              <span
+                id="sm_preset_help"
+                class="sm-info"
+                data-tooltip="Storyhold keeps notes about your story so the AI remembers things. One slider controls all of it.&#10;&#10;LEFT = small memory. For small AI models (16k-64k context). Keeps the AI fast and cheap.&#10;&#10;RIGHT = big memory. For huge models (128k to 1M+ context). The AI remembers much more of your story, but every reply costs more tokens.&#10;&#10;Storyhold picks a sensible starting point from your model. You can move it.&#10;&#10;What it changes, all at once:&#10;• How much memory the AI sees per reply (injection budget)&#10;• How detailed each background memory note can be (generation budget)&#10;• How many memory cards are kept in storage (memory limits)&#10;&#10;Absurd (128k) is the YOLO tier: modern models can find facts in that much text, but expect vaguer replies and a much bigger API bill. The story itself usually deserves this space more.&#10;&#10;Want the individual knobs instead? Tick Advanced mode above — FULL UNLOCK — and this slider shows Custom."
+                >?</span
+              >
+            </label>
+            <input id="sm_memory_preset" type="range" min="0" max="6" step="1" value="2" />
+            <div class="sm-muted" style="display: flex; justify-content: space-between; font-size: 0.85em">
+              <span>Potato</span><span>Balanced</span><span>Absurd</span>
+            </div>
+            <div id="sm_preset_blurb" class="sm-muted"></div>
+          </div>
+
+          <!-- Global injection budget cap (advanced mode; simple mode uses the preset slider) -->
+          <div class="sm-block sm-advanced-only">
             <label>
               Maximum total memory budget: <b><span id="sm_total_budget_value"></span></b> tokens
               <span
@@ -1983,10 +2002,10 @@
                 >ⓘ</span
               >
             </label>
-            <input id="sm_total_budget" type="range" min="800" max="16000" step="50" />
+            <input id="sm_total_budget" type="range" min="800" max="128000" step="50" />
             <div id="sm_budget_floor_hint" class="sm-muted"></div>
           </div>
-          <div class="sm-block">
+          <div class="sm-block sm-advanced-only">
             <label class="checkbox_label">
               <input id="sm_auto_tune_budgets" type="checkbox" />
               <span>
