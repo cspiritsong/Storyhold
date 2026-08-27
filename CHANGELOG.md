@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-08-27
+
 ### Added
 
 - **Context-aware memory-size presets.** Simple mode now offers Potato through Absurd presets from 1.5k to 128k total injected memory, with model-context-aware initial selection and linked generation/storage limits.
