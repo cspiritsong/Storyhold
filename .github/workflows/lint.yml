@@ -21,8 +21,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Check formatting
-        run: npx prettier --check *.js
+      - name: Run repository tests
+        run: npm test
 
       - name: Lint JavaScript
         run: npx eslint *.js
