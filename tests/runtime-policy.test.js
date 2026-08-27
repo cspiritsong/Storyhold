@@ -29,7 +29,7 @@ test('enabled product kinds match the product category toggles', () => {
       epistemic_enabled: true,
       session_enabled: true,
     }),
-    ['fact', 'state', 'epistemic', 'session'],
+    ['fact', 'event', 'state', 'epistemic', 'session'],
   );
 });
 

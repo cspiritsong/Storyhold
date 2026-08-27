@@ -17,9 +17,11 @@ import { hash32 } from './identity.js';
 import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './timeline.js';
 import { buildProductSuppressionKey } from './product-mutations.js';
 import { parseArcOutput, parseExtractionOutput, parseSessionOutput } from './parsers.js';
+import { admitStructuredRecords } from './admission-policy.js';
 
 const EMPTY_RESPONSE = Object.freeze({
   facts: [],
+  events: [],
   relationships: [],
   state: [],
   arcs: [],
@@ -116,6 +118,10 @@ function buildEpistemicContent(item) {
   return [subject, type, target].filter(Boolean).join(' — ');
 }
 
+function buildEventContent(item) {
+  return text(item?.content);
+}
+
 function withMetadata(base, item) {
   const metadata = {};
   for (const key of [
@@ -129,6 +135,10 @@ function withMetadata(base, item) {
     'witnessed_by',
     'type',
     'descriptors',
+    'retention',
+    'novelty',
+    'admission',
+    'decision',
   ]) {
     if (item?.[key] !== undefined) metadata[key] = item[key];
   }
@@ -238,14 +248,19 @@ export function buildStructuredExtractionPrompt({
     }));
   return [
     'Extract only meaningful changes from the current roleplay passage.',
-    'Return JSON only with exactly these optional arrays: facts, relationships, state, arcs, epistemic, session.',
+    'Return JSON only with exactly these optional arrays: facts, events, relationships, state, arcs, epistemic, session.',
+    'These are candidates, not a checklist. Return empty arrays when nothing meaningful changed.',
     'Do not repeat unchanged information. Use null or omit unknown values; never invent dates.',
+    'Each candidate may include retention: searchable, session, or narrative; and novelty: new, changed, repeated, or uncertain.',
+    'Use narrative retention for details useful only to broad scene continuity. Do not emit routine actions, decorative description, or unchanged restatements as searchable candidates.',
     'facts: [{content, confidence, supersedes}]',
+    'events: [{content, story_time, knowledge_time, entities, confidence}]',
     'relationships: [{subject, target, content, descriptors, conflict_key, confidence}]',
     'state: [{entity, entity_type, content, fields, conflict_key, confidence}]',
     'arcs: [{content, status, confidence}]',
     'epistemic: [{subject, target, type, content, witnessed_by, confidence}]',
     'session: [{type, content, confidence}]',
+    'An event records something that happened or changed in the story, separately from a fact that remains true. Do not invent story dates; leave story_time null when the passage does not state one.',
     `Responding character: ${text(respondingCharacter) || '(unknown)'}`,
     ...(Array.isArray(enabledKinds)
       ? [
@@ -275,7 +290,7 @@ export function buildStructuredExtractionPrompt({
 export function normalizeStructuredRecords(
   payload,
   window,
-  { timeline = null, enabledKinds = null } = {},
+  { timeline = null, enabledKinds = null, existingRecords = [] } = {},
 ) {
   if (!window?.window_id || !window?.chat_uid || !window?.source_range) {
     throw new TypeError('a valid ingest window is required');
@@ -302,12 +317,13 @@ export function normalizeStructuredRecords(
   };
 
   append(parsed.facts, PROJECTION_KINDS.FACT, (item) => item?.content);
+  append(parsed.events, PROJECTION_KINDS.EVENT, buildEventContent);
   append(parsed.relationships, PROJECTION_KINDS.RELATIONSHIP, buildRelationshipContent);
   append(parsed.state, PROJECTION_KINDS.STATE, buildStateContent);
   append(parsed.arcs, PROJECTION_KINDS.ARC, (item) => item?.content);
   append(parsed.epistemic, PROJECTION_KINDS.EPISTEMIC, buildEpistemicContent);
   append(parsed.session, PROJECTION_KINDS.SESSION, (item) => item?.content);
-  return records;
+  return admitStructuredRecords(records, { existingRecords }).accepted;
 }
 
 function normalizedContent(record) {

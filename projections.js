@@ -17,6 +17,7 @@ export const PROJECTION_OWNERS = Object.freeze({
 
 export const PROJECTION_KINDS = Object.freeze({
   FACT: 'fact',
+  EVENT: 'event',
   STATE: 'state',
   RELATIONSHIP: 'relationship',
   ARC: 'arc',
@@ -28,6 +29,7 @@ export const PROJECTION_KINDS = Object.freeze({
 const RANGE_KINDS = new Set(['mesId', 'index']);
 const OWNER_BY_KIND = Object.freeze({
   fact: PROJECTION_OWNERS.STRUCTURED,
+  event: PROJECTION_OWNERS.STRUCTURED,
   state: PROJECTION_OWNERS.STRUCTURED,
   relationship: PROJECTION_OWNERS.STRUCTURED,
   arc: PROJECTION_OWNERS.STRUCTURED,

@@ -8,7 +8,7 @@
 import { META_KEY } from './constants.js';
 import { assembleNarrative } from './narrative-chain.js';
 
-const RECORD_KINDS = Object.freeze(['fact', 'relationship', 'session', 'state', 'arc', 'epistemic']);
+const RECORD_KINDS = Object.freeze(['fact', 'event', 'relationship', 'session', 'state', 'arc', 'epistemic']);
 const INACTIVE_STATUSES = new Set(['invalid', 'superseded']);
 const EPISTEMIC_VISIBLE_TYPES = new Set(['knows', 'suspects', 'unaware']);
 

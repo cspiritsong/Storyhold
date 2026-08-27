@@ -38,6 +38,43 @@ test('broker fails closed when a product envelope has no chat identity', () => {
   assert.equal(result.reason, 'missing-chat-identity');
 });
 
+test('broker falls back to eligible current-chat records when query retrieval misses', () => {
+  const result = buildMemoryEnvelopeSync({
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
+    query: 'The knight enters the forest.',
+    records: [record({ id: 'unrelated-to-query', content: 'Mira is allergic to silver.' })],
+    allowLegacy: false,
+    totalBudget: 200,
+  });
+
+  assert.match(result.text, /Mira is allergic to silver/);
+  assert.deepEqual(result.selected_ids, ['unrelated-to-query']);
+  assert.equal(result.trace.retrieval.stage, null);
+  assert.equal(result.trace.retrieval.fallback, 'all-eligible-records');
+});
+
+test('async broker falls back after optional retrieval returns no candidates', async () => {
+  let vectorCalls = 0;
+  const result = await buildMemoryEnvelope({
+    chatUid: 'chat-a',
+    branchUid: 'branch-a',
+    query: 'The knight enters the forest.',
+    records: [record({ id: 'async-fallback', content: 'Mira is allergic to silver.' })],
+    allowLegacy: false,
+    vectorSearch: async () => {
+      vectorCalls++;
+      return [];
+    },
+    totalBudget: 200,
+  });
+
+  assert.equal(vectorCalls, 1);
+  assert.match(result.text, /Mira is allergic to silver/);
+  assert.deepEqual(result.selected_ids, ['async-fallback']);
+  assert.equal(result.trace.retrieval.fallback, 'all-eligible-records');
+});
+
 test('broker collapses equivalent records and excludes superseded records', async () => {
   const result = await buildMemoryEnvelope({
     chatUid: 'chat-a',

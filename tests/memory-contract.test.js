@@ -93,4 +93,6 @@ test('the contract makes raw transcript evidence authoritative', () => {
   assert.match(contract, /Derived[^\n]*never[^\n]*outrank/i);
   assert.match(contract, /story[_ -]time/i);
   assert.match(contract, /knowledge[_ -]time/i);
+  assert.match(contract, /Admission and retention/i);
+  assert.match(contract, /narrative-only/i);
 });

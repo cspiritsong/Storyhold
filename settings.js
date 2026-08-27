@@ -1330,7 +1330,7 @@ export function bindSettingsUI(ctrl) {
     const $form = $('<div class="sm-product-editor-form sm-product-create-form">');
     const $kindLabel = $('<label class="sm-product-editor-field">').text('Memory type');
     const $kind = $('<select class="text_pole" data-editor-field="kind">');
-    for (const value of ['fact', 'relationship', 'session', 'state', 'arc', 'epistemic']) {
+    for (const value of ['fact', 'event', 'relationship', 'session', 'state', 'arc', 'epistemic']) {
       $kind.append($('<option>').val(value).text(value).prop('selected', value === initialKind));
     }
     $kindLabel.append($kind);

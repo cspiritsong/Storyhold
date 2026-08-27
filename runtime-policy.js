@@ -20,6 +20,7 @@ export function shouldRunProductIngest(
 export function enabledProductKinds(settings = {}) {
   return [
     settings.longterm_enabled !== false ? 'fact' : null,
+    'event',
     settings.relationships_enabled !== false ? 'relationship' : null,
     settings.state_ledger_enabled === true ? 'state' : null,
     settings.arcs_enabled !== false ? 'arc' : null,

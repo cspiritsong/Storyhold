@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildProductExplorerModel,
+  buildTimelineSpine,
   filterExplorerRecords,
 } from '../product-explorer.js';
 
@@ -60,6 +61,7 @@ test('Explorer model contains only the current chat and exposes projections', ()
   assert.deepEqual(model.records.map((item) => item.id), ['earlier', 'later']);
   assert.deepEqual(model.counts, {
     fact: 1,
+    event: 0,
     relationship: 0,
     session: 0,
     state: 1,
@@ -90,4 +92,89 @@ test('Explorer record filters support kind, active state, and text search', () =
 
 test('Explorer model rejects missing chat identity rather than creating a universal view', () => {
   assert.throws(() => buildProductExplorerModel({ records: [] }), /chatUid is required/);
+});
+
+test('timeline spine orders events oldest-first with the current node marked', () => {
+  const spine = buildTimelineSpine(
+    {
+      events: [
+        {
+          event_id: 'event-1',
+          conversation_index: 2,
+          story_time: { day: 12 },
+          narrative_role: 'backstory',
+          source_message_range: [2, 2],
+          source_preview: 'Day 12: the old pact was made.',
+        },
+        {
+          event_id: 'event-2',
+          conversation_index: 8,
+          story_time: { day: 16 },
+          narrative_role: 'current',
+          source_message_range: [8, 8],
+          source_preview: 'Day 16: the party arrives.',
+        },
+      ],
+    },
+    [
+      record({ id: 'pact', content: 'The old pact was made.', source_range: { kind: 'index', start: 2, end: 2 } }),
+      record({ id: 'arrival', content: 'The party arrives.', source_range: { kind: 'index', start: 8, end: 8 } }),
+    ],
+    {
+      layers: [
+        [{ id: 'snip-pact', text: 'An old pact is struck.', source_range: { kind: 'index', start: 2, end: 2 } }],
+        [{ id: 'snip-arrival', text: 'The party arrives at the temple.', source_range: { kind: 'index', start: 8, end: 8 } }],
+      ],
+    },
+  );
+
+  assert.equal(spine.totalNodes, 2);
+  assert.deepEqual(spine.nodes.map((node) => node.event_id), ['event-1', 'event-2']);
+  assert.equal(spine.currentIndex, 1);
+  assert.equal(spine.hasUnresolved, false);
+  assert.deepEqual(spine.nodes[0].related.map((item) => item.id), ['pact']);
+  assert.deepEqual(spine.nodes[1].related.map((item) => item.id), ['arrival']);
+  assert.deepEqual(spine.nodes[0].narrative.map((item) => item.id), ['snip-pact']);
+});
+
+test('timeline spine flags records without a matching event as unresolved', () => {
+  const spine = buildTimelineSpine(
+    { events: [] },
+    [record({ id: 'orphan', content: 'An unattached memory.', source_range: { kind: 'index', start: 5, end: 5 } })],
+    { layers: [] },
+  );
+
+  assert.equal(spine.totalNodes, 1);
+  assert.equal(spine.nodes[0].narrative_role, 'unresolved');
+  assert.equal(spine.nodes[0].event_id, null);
+  assert.deepEqual(spine.nodes[0].related.map((item) => item.id), ['orphan']);
+  assert.equal(spine.hasUnresolved, true);
+  assert.equal(spine.currentIndex, 0);
+});
+
+test('Explorer model exposes a chronological spine projection', () => {
+  const model = buildProductExplorerModel({
+    chatUid: 'chat-a',
+    chatId: 'chat-a.jsonl',
+    records: [
+      record({ id: 'later', source_range: { kind: 'index', start: 9, end: 10 } }),
+      record({ id: 'earlier', source_range: { kind: 'index', start: 1, end: 2 }, kind: 'state' }),
+    ],
+    timeline: {
+      events: [
+        { event_id: 'event-2', conversation_index: 8, story_time: { day: 16 }, source_message_range: [8, 8] },
+        { event_id: 'event-1', conversation_index: 2, story_time: { day: 12 }, source_message_range: [2, 2] },
+      ],
+    },
+    narrative: {
+      layers: [[{ id: 'snippet-1', text: 'The party enters the temple.', source_range: { kind: 'index', start: 1, end: 2 } }]],
+    },
+  });
+
+  assert.equal(model.spine.totalNodes, 3);
+  assert.deepEqual(model.spine.nodes.map((node) => node.event_id), ['event-1', 'event-2', null]);
+  assert.equal(model.spine.currentIndex, 1);
+  assert.equal(model.spine.hasUnresolved, true);
+  assert.equal(model.spine.nodes[2].narrative_role, 'unresolved');
+  assert.deepEqual(model.spine.nodes[2].related.map((item) => item.id), ['later']);
 });

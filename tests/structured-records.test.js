@@ -22,6 +22,12 @@ const window = buildIngestWindow({
 
 const payload = {
   facts: [{ content: 'The silver key opens the temple door.', confidence: 0.9 }],
+  events: [{
+    content: 'Mira takes the silver key from the shrine.',
+    story_time: { day: 15 },
+    entities: ['Mira', 'silver key', 'shrine'],
+    confidence: 0.9,
+  }],
   relationships: [{ subject: 'Mira', target: 'Badi', content: 'Mira trusts Badi.' }],
   state: [{
     entity: 'Mira',
@@ -38,8 +44,8 @@ test('structured response parser accepts plain and fenced JSON', () => {
 });
 
 test('structured response parser rejects malformed or non-object output safely', () => {
-  assert.deepEqual(parseStructuredResponse('not json'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
-  assert.deepEqual(parseStructuredResponse('null'), { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
+  assert.deepEqual(parseStructuredResponse('not json'), { facts: [], events: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
+  assert.deepEqual(parseStructuredResponse('null'), { facts: [], events: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] });
   assert.equal(parseStructuredResponseResult('not json').valid, false);
   assert.equal(parseStructuredResponseResult('').valid, false);
 });
@@ -60,13 +66,17 @@ test('one structured payload becomes typed records with shared scope and provena
 
   assert.deepEqual(
     records.map((record) => record.kind).sort(),
-    ['arc', 'epistemic', 'fact', 'relationship', 'state'],
+    ['arc', 'epistemic', 'event', 'fact', 'relationship', 'state'],
   );
   assert.ok(records.every((record) => record.scope.chat_uid === 'chat-uid-a'));
   assert.ok(records.every((record) => record.scope.branch_uid === 'branch-uid-a'));
   assert.ok(records.every((record) => record.source_range.kind === 'mesId'));
   assert.ok(records.every((record) => record.provenance.source_chat_uid === 'chat-uid-a'));
   assert.ok(records.some((record) => record.kind === 'state' && /silver key/i.test(record.content)));
+  const event = records.find((record) => record.kind === 'event');
+  assert.ok(event);
+  assert.deepEqual(event.story_time, { day: 15 });
+  assert.deepEqual(event.entities, ['Mira', 'silver key', 'shrine']);
 });
 
 test('structured extraction prompt defines one combined response and includes current context', () => {
@@ -81,6 +91,10 @@ test('structured extraction prompt defines one combined response and includes cu
   });
 
   assert.match(prompt, /facts/i);
+  assert.match(prompt, /events/i);
+  assert.match(prompt, /candidates, not a checklist/i);
+  assert.match(prompt, /retention: searchable, session, or narrative/i);
+  assert.match(prompt, /routine actions/i);
   assert.match(prompt, /relationships/i);
   assert.match(prompt, /state/i);
   assert.match(prompt, /arcs/i);
@@ -126,6 +140,44 @@ test('combined structured payload can produce session evidence records', () => {
   assert.equal(records[0].kind, 'session');
   assert.equal(records[0].type, 'revelation');
   assert.match(buildStructuredExtractionPrompt({}), /session/i);
+});
+
+test('events are extracted as a first-class kind with story time and entities', () => {
+  const records = normalizeStructuredRecords(
+    {
+      events: [{
+        content: 'The sealed door swings open.',
+        story_time: { day: 16 },
+        knowledge_time: { conversation_index: 4 },
+        entities: ['sealed door', 'Mira'],
+        confidence: 0.85,
+      }],
+    },
+    window,
+  );
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].kind, 'event');
+  assert.equal(records[0].content, 'The sealed door swings open.');
+  assert.deepEqual(records[0].story_time, { day: 16 });
+  assert.deepEqual(records[0].knowledge_time, { conversation_index: 4 });
+  assert.deepEqual(records[0].entities, ['sealed door', 'Mira']);
+});
+
+test('normalization admits only searchable or session candidates and drops repeated events', () => {
+  const records = normalizeStructuredRecords(
+    {
+      events: [
+        { content: 'The candle flickers in the corner.', retention: 'narrative' },
+        { content: 'Mira opens the sealed door.', retention: 'searchable', novelty: 'changed' },
+        { content: 'The sealed door opens.', novelty: 'repeated' },
+      ],
+    },
+    window,
+  );
+
+  assert.deepEqual(records.map((record) => record.content), ['Mira opens the sealed door.']);
+  assert.equal(records[0].retention, 'searchable');
 });
 
 test('merge deduplicates incoming records and retires explicitly superseded state', () => {

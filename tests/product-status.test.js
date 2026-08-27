@@ -33,6 +33,7 @@ test('product status summarizes narrative, typed records, windows, and failures'
   assert.equal(summary.activeRecords, 5);
   assert.deepEqual(summary.recordCounts, {
     fact: 2,
+    event: 0,
     relationship: 0,
     session: 1,
     state: 1,
@@ -41,6 +42,7 @@ test('product status summarizes narrative, typed records, windows, and failures'
   });
   assert.deepEqual(summary.activeRecordCounts, {
     fact: 1,
+    event: 0,
     relationship: 0,
     session: 1,
     state: 1,

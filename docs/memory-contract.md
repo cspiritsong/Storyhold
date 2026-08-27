@@ -68,8 +68,8 @@ as a structured boundary signal; it must not create a second narrative injection
 Every new derived record must include:
 
 - `id`: stable record identifier;
-- `kind`: typed projection such as `fact`, `session`, `state`, `relationship`, `arc`, `epistemic`,
-  or `narrative_delta`;
+- `kind`: typed projection such as `fact`, `event`, `session`, `state`, `relationship`, `arc`,
+  `epistemic`, or `narrative_delta`;
 - `scope.chat_uid`: stable chat identity;
 - `scope.branch_uid`: branch/lineage identity when available;
 - `source_range`: canonical source message range, preferring `mesId` and retaining an
@@ -83,6 +83,25 @@ Every new derived record must include:
 
 Do not invent an exact story date when the transcript does not provide one. Keep story
 time, knowledge time, and conversation position separate.
+
+## Admission and retention
+
+The narrative projection is allowed to preserve broad scene flow; the searchable structured
+store must remain selective. Model output is treated as a set of candidates, not a checklist.
+Candidates may declare:
+
+- `retention`: `searchable`, `session`, or `narrative`;
+- `novelty`: `new`, `changed`, `repeated`, or `uncertain`.
+
+The pure admission policy rejects narrative-only, repeated/unchanged, explicitly skipped,
+empty, duplicate, and over-cap candidates before they enter the Product store. It applies a
+small per-window and per-kind cap so a verbose model response cannot flood retrieval. Fields
+omitted by legacy model output use a compatibility default; the prompt still instructs new
+output to be selective. Narrative-only material remains covered by the single narrative chain
+without becoming another searchable record.
+
+Admission is not a truth oracle: confidence remains a signal, while source provenance,
+scope, validity, supersession, and later review remain authoritative safeguards.
 
 ## Ingest contract
 

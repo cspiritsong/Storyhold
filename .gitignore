@@ -16,3 +16,6 @@ package-lock.json
 # OS artifacts
 .DS_Store
 Thumbs.db
+
+# Build output (npm run package:extension)
+dist/

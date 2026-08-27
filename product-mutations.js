@@ -172,7 +172,7 @@ export function createProductRecord({
 } = {}) {
   const expectedChatUid = requiredIdentity(chatUid, 'chatUid');
   const recordKind = requiredIdentity(kind, 'kind');
-  if (!['fact', 'relationship', 'session', 'state', 'arc', 'epistemic'].includes(recordKind)) {
+  if (!['fact', 'event', 'relationship', 'session', 'state', 'arc', 'epistemic'].includes(recordKind)) {
     throw new Error(`Product record kind is not supported: ${recordKind}`);
   }
   const normalizedPatch = normalizeRecordPatch({ ...patch, content: patch.content ?? content });

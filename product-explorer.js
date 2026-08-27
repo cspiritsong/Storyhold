@@ -10,6 +10,7 @@ import { applyTimelineOverrides } from './product-mutations.js';
 
 const PRODUCT_KINDS = Object.freeze([
   'fact',
+  'event',
   'relationship',
   'session',
   'state',
@@ -190,6 +191,112 @@ function buildNarrative(narrative) {
   };
 }
 
+function eventRange(event) {
+  const range = normalizedRange(event?.source_message_range ?? event?.source_range);
+  if (range) return range;
+  const index = Number(event?.conversation_index);
+  return Number.isInteger(index) ? { kind: 'index', start: index, end: index } : null;
+}
+
+function recordRange(record) {
+  const range = normalizedRange(record?.source_range ?? record?.sourceRange);
+  if (range) return range;
+  const messages = record?.provenance?.source_messages;
+  if (Array.isArray(messages) && messages.length > 0 && messages.every((value) => Number.isInteger(value))) {
+    return { kind: 'mesId', start: Math.min(...messages), end: Math.max(...messages) };
+  }
+  return null;
+}
+
+function snippetRange(snippet) {
+  if (Array.isArray(snippet?.source_ranges) && snippet.source_ranges.length > 0) {
+    return normalizedRange(snippet.source_ranges[0]);
+  }
+  return normalizedRange(snippet?.source_range ?? snippet?.sourceRange);
+}
+
+function overlaps(left, right) {
+  if (!left || !right) return false;
+  const kindsMatch = left.kind === right.kind;
+  if (kindsMatch) return left.start <= right.end && right.start <= left.end;
+  // A timeline event also carries a conversation index, so an index range can
+  // still overlap a mesId range; no story ordering is invented here.
+  return false;
+}
+
+/**
+ * Builds a domain-neutral chronological spine over the current chat.
+ *
+ * This is a read model only: it projects timeline events, structured records,
+ * and narrative snippets into a stable top-to-bottom order without changing
+ * any stored data. The latest event sits at the bottom; the current story
+ * clock (when known) is marked explicitly.
+ */
+export function buildTimelineSpine(timelineModel, records, narrativeModel) {
+  const events = list(timelineModel?.events).map(clone);
+  const recordList = list(records).map(clone);
+  const layers = list(narrativeModel?.layers).map((layer) => list(layer).map(clone));
+
+  const assignedRecordIds = new Set();
+  const assignedSnippetIds = new Set();
+  const nodes = [];
+
+  for (const event of events) {
+    const range = eventRange(event);
+    const related = recordList.filter((record) => {
+      if (assignedRecordIds.has(String(record.id))) return false;
+      if (!overlaps(range, recordRange(record))) return false;
+      assignedRecordIds.add(String(record.id));
+      return true;
+    });
+    const narrative = layers.flat().filter((snippet) => {
+      if (assignedSnippetIds.has(String(snippet.id))) return false;
+      if (!overlaps(range, snippetRange(snippet))) return false;
+      assignedSnippetIds.add(String(snippet.id));
+      return true;
+    });
+    nodes.push({
+      event_id: event.event_id,
+      story_time: event.story_time ?? null,
+      knowledge_time: event.knowledge_time ?? null,
+      narrative_role: event.narrative_role ?? 'current',
+      conversation_index: Number.isInteger(event.conversation_index) ? event.conversation_index : null,
+      source_range: range,
+      source_preview: event.source_preview ?? '',
+      conflicts: event.contradicts?.length > 0 || event.temporal_relations?.length > 0,
+      related,
+      narrative,
+    });
+  }
+
+  // Records and snippets without a matching timeline event still belong to the
+  // spine; they are grouped by their own source position as unattached nodes.
+  const unattachedRecords = recordList.filter((record) => !assignedRecordIds.has(String(record.id)));
+  const unattachedNarrative = layers.flat().filter((snippet) => !assignedSnippetIds.has(String(snippet.id)));
+  if (unattachedRecords.length > 0 || unattachedNarrative.length > 0) {
+    nodes.push({
+      event_id: null,
+      story_time: null,
+      knowledge_time: null,
+      narrative_role: 'unresolved',
+      conversation_index: null,
+      source_range: null,
+      source_preview: '',
+      conflicts: false,
+      related: unattachedRecords,
+      narrative: unattachedNarrative,
+    });
+  }
+
+  const lastCurrent = nodes.findLastIndex((node) => node.narrative_role === 'current');
+  return {
+    nodes,
+    totalNodes: nodes.length,
+    currentIndex: lastCurrent >= 0 ? lastCurrent : 0,
+    hasUnresolved: unattachedRecords.length > 0 || unattachedNarrative.length > 0,
+  };
+}
+
 /** Builds the complete current-chat Explorer view model. */
 export function buildProductExplorerModel({
   chatUid,
@@ -216,6 +323,7 @@ export function buildProductExplorerModel({
     activeRecords: currentRecords.filter(isActive),
     counts: buildCounts(currentRecords),
     timeline: timelineModel,
+    spine: buildTimelineSpine(timelineModel, currentRecords, narrativeModel),
     narrative: {
       ...narrativeModel,
       stale: Boolean(narrativeStale),
@@ -412,55 +520,109 @@ export function renderProductExplorer(container, model, {
     refreshButton.textContent = 'Refresh timeline';
     summary.append(' ', refreshButton);
     root.append(summary);
-    const listElement = document.createElement('div');
-    listElement.className = 'sm-product-explorer-timeline';
-    if (model.timeline.events.length === 0) {
+    const spineElement = document.createElement('div');
+    spineElement.className = 'sm-product-explorer-spine';
+    const spine = model.spine ?? { nodes: [], currentIndex: 0, hasUnresolved: false };
+    if (spine.nodes.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'sm-product-empty';
       empty.textContent = 'No timeline events have been derived from this chat yet.';
-      listElement.append(empty);
+      spineElement.append(empty);
     }
-    for (const event of model.timeline.events) {
-      const row = document.createElement('div');
-      row.className = 'sm-product-explorer-event';
-      row.dataset.eventId = event.event_id;
+    spine.nodes.forEach((node, index) => {
+      const marker = document.createElement('div');
+      marker.className = 'sm-product-spine-node';
+      marker.dataset.spineRole = node.narrative_role ?? 'current';
+      if (index === spine.currentIndex) marker.dataset.spineNow = 'true';
+
+      const stem = document.createElement('div');
+      stem.className = 'sm-product-spine-stem';
+      const dot = document.createElement('span');
+      dot.className = 'sm-product-spine-dot';
+      stem.append(dot);
+      marker.append(stem);
+
+      const card = document.createElement('div');
+      card.className = 'sm-product-spine-card';
+
+      const head = document.createElement('div');
+      head.className = 'sm-product-spine-head';
       const when = document.createElement('span');
-      when.className = 'sm-product-explorer-event-when';
-      when.textContent = formatStoryTime(event.story_time);
+      when.className = 'sm-product-spine-when';
+      when.textContent = node.narrative_role === 'unresolved' ? 'Unresolved chronology' : formatStoryTime(node.story_time);
       const role = document.createElement('span');
       role.className = 'sm-memory-status';
-      role.textContent = event.narrative_role ?? 'current';
-      const text = document.createElement('span');
-      text.className = 'sm-product-explorer-event-text';
-      const eventRange = normalizedRange(event.source_message_range ?? event.source_range);
-      text.textContent = `message ${event.conversation_index ?? 'unknown'} · ${formatSourceRange(eventRange)}`;
-      const sourcePreviewElement = document.createElement('div');
-      sourcePreviewElement.className = 'sm-product-explorer-event-preview';
-      sourcePreviewElement.textContent = event.source_preview ?? 'source preview unavailable';
+      role.textContent = node.narrative_role ?? 'current';
+      const badges = document.createElement('span');
+      badges.className = 'sm-product-spine-badges';
+      if (index === spine.currentIndex) {
+        const now = document.createElement('span');
+        now.className = 'sm-product-spine-now';
+        now.textContent = 'NOW';
+        badges.append(now);
+      }
+      if (node.conflicts) {
+        const conflict = document.createElement('span');
+        conflict.className = 'sm-product-spine-conflict';
+        conflict.textContent = 'uncertain';
+        badges.append(conflict);
+      }
+      head.append(when, role, badges);
+      card.append(head);
+
+      if (node.source_preview) {
+        const preview = document.createElement('div');
+        preview.className = 'sm-product-spine-preview';
+        preview.textContent = node.source_preview;
+        card.append(preview);
+      }
+
+      const links = [...(node.related ?? []), ...(node.narrative ?? [])];
+      if (links.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'sm-product-spine-links';
+        const toggle = document.createElement('summary');
+        toggle.textContent = `${links.length} linked ${links.length === 1 ? 'detail' : 'details'}`;
+        details.append(toggle);
+        for (const link of links) {
+          const item = document.createElement('div');
+          item.className = 'sm-product-spine-link';
+          item.dataset.linkKind = link.kind ?? 'narrative';
+          item.textContent = String(link.content ?? link.text ?? '').replace(/\s+/g, ' ').trim();
+          details.append(item);
+        }
+        card.append(details);
+      }
+
       const actions = document.createElement('div');
       actions.className = 'sm-product-explorer-record-actions';
-      if (eventRange && Number.isInteger(eventRange.start) && Number.isInteger(eventRange.end)) {
+      const range = node.source_range;
+      if (range && Number.isInteger(range.start) && Number.isInteger(range.end)) {
         const sourceButton = document.createElement('button');
         sourceButton.type = 'button';
         sourceButton.className = 'menu_button';
         sourceButton.dataset.explorerAction = 'jump-source';
-        sourceButton.dataset.sourceStart = String(eventRange.start);
-        sourceButton.dataset.sourceEnd = String(eventRange.end);
-        sourceButton.dataset.sourceKind = eventRange.kind ?? 'index';
+        sourceButton.dataset.sourceStart = String(range.start);
+        sourceButton.dataset.sourceEnd = String(range.end);
+        sourceButton.dataset.sourceKind = range.kind ?? 'index';
         sourceButton.textContent = 'Source';
         actions.append(sourceButton);
       }
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.className = 'menu_button';
-      edit.dataset.explorerAction = 'edit-timeline';
-      edit.dataset.eventId = event.event_id;
-      edit.textContent = event.manual_override ? 'Edit override' : 'Set interpretation';
-      actions.append(edit);
-      row.append(when, role, text, sourcePreviewElement, actions);
-      listElement.append(row);
-    }
-    root.append(listElement);
+      if (node.event_id) {
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'menu_button';
+        edit.dataset.explorerAction = 'edit-timeline';
+        edit.dataset.eventId = node.event_id;
+        edit.textContent = 'Set interpretation';
+        actions.append(edit);
+      }
+      if (actions.childElementCount > 0) card.append(actions);
+
+      marker.append(card);
+      spineElement.append(marker);
+    });
+    root.append(spineElement);
   } else {
     const summary = document.createElement('div');
     summary.className = 'sm-muted sm-product-explorer-summary';

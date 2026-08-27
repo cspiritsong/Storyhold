@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Context-aware memory-size presets.** Simple mode now offers Potato through Absurd presets from 1.5k to 128k total injected memory, with model-context-aware initial selection and linked generation/storage limits.
+- **Conservative Product admission.** Structured extraction now treats model output as candidates, keeps broad scene flow in the narrative chain, rejects explicit narrative-only/repeated/duplicate candidates, and caps each noisy window before records enter retrieval.
 - **Catch-up progress shows the destination.** Memorize Chat now announces `window x of y (messages a–b of N)` while it works, matching the classic Smart-Memory x/total style instead of a bare window counter.
 
 ### Changed

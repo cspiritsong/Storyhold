@@ -503,9 +503,24 @@ export function buildMemoryEnvelopeSync({
       lineage,
       allowLegacy,
     });
-    trace.retrieval = retrieval;
-    for (const record of retrieval.candidates) {
-      baseItems.push({ record: { ...record, section: record.section ?? 'evidence' }, source: 'retrieval' });
+    const candidates = retrieval.candidates.length > 0
+      ? retrieval.candidates
+      : filterRetrievalRecords(records, {
+          chatUid,
+          branchUid,
+          respondingCharacter,
+          povMode,
+          lineage,
+          allowLegacy,
+        });
+    trace.retrieval = retrieval.candidates.length > 0
+      ? retrieval
+      : { ...retrieval, fallback: 'all-eligible-records' };
+    for (const record of candidates) {
+      baseItems.push({
+        record: { ...record, section: record.section ?? 'evidence' },
+        source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
+      });
     }
   } else {
     const eligible = filterRetrievalRecords(records, {
@@ -570,9 +585,24 @@ export async function buildMemoryEnvelope({
         allowAgentic,
         allowLegacy,
       });
-      trace.retrieval = retrieval;
-      for (const record of retrieval.candidates) {
-        baseItems.push({ record: { ...record, section: record.section ?? 'evidence' }, source: 'retrieval' });
+      const candidates = retrieval.candidates.length > 0
+        ? retrieval.candidates
+        : filterRetrievalRecords(records, {
+            chatUid,
+            branchUid,
+            respondingCharacter,
+            povMode,
+            lineage,
+            allowLegacy,
+          });
+      trace.retrieval = retrieval.candidates.length > 0
+        ? retrieval
+        : { ...retrieval, fallback: 'all-eligible-records' };
+      for (const record of candidates) {
+        baseItems.push({
+          record: { ...record, section: record.section ?? 'evidence' },
+          source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
+        });
       }
     } else {
       const eligible = filterRetrievalRecords(records, {

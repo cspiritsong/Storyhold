@@ -24,6 +24,7 @@ import { fingerprintMessages } from './projections.js';
 import { sourceRangeMatchesLiveChat } from './branch-detection.js';
 import { filterNarrativeStateForIdentity } from './narrative-chain.js';
 import { filterRetrievalRecords } from './retrieval.js';
+import { admitStructuredRecords } from './admission-policy.js';
 
 function assertMetadata(metadata) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
@@ -200,22 +201,30 @@ export function buildProductWindow({
   });
 }
 
-function recordsFromExtraction(extracted, window, timeline = null, enabledKinds = null) {
+function recordsFromExtraction(
+  extracted,
+  window,
+  timeline = null,
+  enabledKinds = null,
+  existingRecords = [],
+) {
   const temporalFilter = (records) => {
-    return records.filter((record) => {
+    const temporallyEligible = records.filter((record) => {
       if (enabledKinds && !enabledKinds.includes(record?.kind)) return false;
       if (!timeline || record?.kind !== 'state') return true;
       return isProjectionTemporallyCompatible(record.content, timeline);
     });
+    return admitStructuredRecords(temporallyEligible, { existingRecords }).accepted;
   };
   if (Array.isArray(extracted)) {
     const canonical = extracted.every(
       (record) => record?.scope?.chat_uid && record?.source_range && record?.provenance,
     );
     if (canonical) return temporalFilter(extracted);
-    const payload = { facts: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] };
+    const payload = { facts: [], events: [], relationships: [], state: [], arcs: [], epistemic: [], session: [] };
     const keyByKind = {
       fact: 'facts',
+      event: 'events',
       relationship: 'relationships',
       state: 'state',
       arc: 'arcs',
@@ -226,18 +235,20 @@ function recordsFromExtraction(extracted, window, timeline = null, enabledKinds 
       const key = keyByKind[record?.kind];
       if (key) payload[key].push(record);
     }
-    return normalizeStructuredRecords(payload, window, { timeline, enabledKinds });
+    return normalizeStructuredRecords(payload, window, { timeline, enabledKinds, existingRecords });
   }
   if (typeof extracted === 'string') {
     const parsed = parseStructuredResponseResult(extracted);
     if (!parsed.valid) {
       throw new Error('structured extraction returned no parseable JSON or tagged records');
     }
-    return normalizeStructuredRecords(parsed.payload, window, { timeline, enabledKinds });
+    return normalizeStructuredRecords(parsed.payload, window, { timeline, enabledKinds, existingRecords });
   }
   if (extracted && typeof extracted === 'object') {
-    if (Array.isArray(extracted.records)) return recordsFromExtraction(extracted.records, window, timeline, enabledKinds);
-    return normalizeStructuredRecords(extracted, window, { timeline, enabledKinds });
+    if (Array.isArray(extracted.records)) {
+      return recordsFromExtraction(extracted.records, window, timeline, enabledKinds, existingRecords);
+    }
+    return normalizeStructuredRecords(extracted, window, { timeline, enabledKinds, existingRecords });
   }
   return [];
 }
@@ -358,16 +369,18 @@ export function createProductPipeline({
         window,
         settings.timeline ?? null,
         settings.enabledKinds ?? null,
+        priorRecords,
       );
     },
     applyStructured: async (extracted, { window }) => {
+      const existing = (await structuredStore.load()) ?? [];
       const incoming = recordsFromExtraction(
         extracted,
         window,
         settings.timeline ?? null,
         settings.enabledKinds ?? null,
+        existing,
       );
-      const existing = (await structuredStore.load()) ?? [];
       const suppressions = Array.isArray(metadata[metaKey]?.product_suppressions)
         ? metadata[metaKey].product_suppressions.map((item) => item?.key).filter(Boolean)
         : [];
