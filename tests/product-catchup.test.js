@@ -124,6 +124,41 @@ test('product catch-up reports window and projection progress', async () => {
   assert.equal(events[3].recordCount, 1);
 });
 
+test('product catch-up annotates events with the provided totals', async () => {
+  const events = [];
+  await runProductCatchUp({
+    ingestOne: async ({ onProgress }) => {
+      onProgress?.({ phase: 'projection_start', projection: 'narrative', sourceRange: { start: 0, end: 39 } });
+      return { status: 'completed', window_id: 'one' };
+    },
+    totalWindows: 8,
+    totalMessages: 300,
+    onProgress: (event) => events.push(event),
+  });
+
+  assert.ok(events.length > 0);
+  for (const event of events) {
+    assert.equal(event.totalWindows, 8);
+    assert.equal(event.totalMessages, 300);
+  }
+});
+
+test('product catch-up omits totals when they are not provided or invalid', async () => {
+  const events = [];
+  await runProductCatchUp({
+    ingestOne: async () => null,
+    totalWindows: 0,
+    totalMessages: -4,
+    onProgress: (event) => events.push(event),
+  });
+
+  assert.ok(events.length > 0);
+  for (const event of events) {
+    assert.equal(event.totalWindows, undefined);
+    assert.equal(event.totalMessages, undefined);
+  }
+});
+
 test('async progress callback failures are contained', async () => {
   let unhandled = null;
   const onUnhandled = (reason) => {

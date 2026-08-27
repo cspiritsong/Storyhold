@@ -10,15 +10,21 @@ export async function runProductCatchUp({
   shouldAbort = () => false,
   maxWindows = 1000,
   rescan = false,
+  totalWindows = null,
+  totalMessages = null,
   onProgress = null,
 } = {}) {
   if (typeof ingestOne !== 'function') throw new TypeError('ingestOne must be a function');
   if (!Number.isInteger(maxWindows) || maxWindows < 1) throw new RangeError('maxWindows must be positive');
+  const totals =
+    Number.isInteger(totalWindows) && totalWindows > 0
+      ? { totalWindows, totalMessages: Number.isInteger(totalMessages) ? totalMessages : null }
+      : {};
 
   const report = (event) => {
     if (typeof onProgress !== 'function') return;
     try {
-      const result = onProgress(event);
+      const result = onProgress({ ...totals, ...event });
       if (result && typeof result.then === 'function') {
         result.catch((error) => {
           console.warn('[Storyhold] Product progress callback failed:', error);

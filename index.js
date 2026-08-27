@@ -497,7 +497,18 @@ function buildProductNarrativePrompt(storyText, contextText) {
 }
 
 function productProgressMessage(event = {}) {
-  const windowLabel = event.windowNumber ? `window ${event.windowNumber}` : 'product pipeline';
+  const windowBase = event.windowNumber ? `window ${event.windowNumber}` : 'product pipeline';
+  const windowLabel =
+    event.windowNumber && Number.isInteger(event.totalWindows)
+      ? `window ${event.windowNumber} of ${event.totalWindows}`
+      : windowBase;
+  const rangeText = (() => {
+    if (!Number.isInteger(event.totalMessages)) return '';
+    const start = Number(event?.sourceRange?.start);
+    const end = Number(event?.sourceRange?.end);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end < start || start < 0) return '';
+    return ` (messages ${start + 1}-${end + 1} of ${event.totalMessages})`;
+  })();
   const projectionLabel = {
     narrative: 'narrative continuity',
     structured: 'structured memory',
@@ -506,19 +517,19 @@ function productProgressMessage(event = {}) {
     case 'started':
       return 'Memorize Chat: preparing the product memory pipeline...';
     case 'window_start':
-      return `Memorize Chat: reading ${windowLabel}...`;
+      return `Memorize Chat: reading ${windowLabel}${rangeText}...`;
     case 'window_ready':
-      return `Memorize Chat: ${windowLabel} — processing ${event.messageCount ?? 0} message${event.messageCount === 1 ? '' : 's'}...`;
+      return `Memorize Chat: ${windowLabel} — processing ${event.messageCount ?? 0} message${event.messageCount === 1 ? '' : 's'}${rangeText}...`;
     case 'projection_start':
-      return `Memorize Chat: ${windowLabel} — writing ${projectionLabel}...`;
+      return `Memorize Chat: ${windowLabel}${rangeText} — writing ${projectionLabel}...`;
     case 'projection_complete':
-      return `Memorize Chat: ${windowLabel} — ${projectionLabel} written (${event.recordCount ?? 0} record${event.recordCount === 1 ? '' : 's'}).`;
+      return `Memorize Chat: ${windowLabel}${rangeText} — ${projectionLabel} written (${event.recordCount ?? 0} record${event.recordCount === 1 ? '' : 's'}).`;
     case 'projection_failed':
-      return `Memorize Chat: ${windowLabel} — ${projectionLabel} failed. Retry is available.`;
+      return `Memorize Chat: ${windowLabel}${rangeText} — ${projectionLabel} failed. Retry is available.`;
     case 'cursor_advanced':
       return `Memorize Chat: ${windowLabel} saved.`;
     case 'window_complete':
-      return `Memorize Chat: ${event.windows ?? 0} window${event.windows === 1 ? '' : 's'} complete (${event.recordCount ?? 0} record${event.recordCount === 1 ? '' : 's'}).`;
+      return `Memorize Chat: ${event.windows ?? 0}${Number.isInteger(event.totalWindows) ? ` of ${event.totalWindows}` : ''} window${event.windows === 1 ? '' : 's'} complete (${event.recordCount ?? 0} record${event.recordCount === 1 ? '' : 's'}).`;
     case 'finished':
       return `Memorize Chat: finished — ${event.windows ?? 0} window${event.windows === 1 ? '' : 's'} processed.`;
     case 'cancelled':
@@ -1011,6 +1022,36 @@ async function runSingleExtensionCatchUpUnlocked({
     if (productChatInvalidated() || catchUpCancelled) return;
     reportProductProgress(event, onProgress, productResponder);
   };
+  // Estimate the total window/message counts once, up front, so progress can
+  // read "window x of y (messages a-b of N)" like the classic catch-up did.
+  // The estimate may drift slightly if the chat grows mid-run; that is fine.
+  let progressTotals = {};
+  try {
+    const windowSize = maxMessages ?? settings.product_window_size ?? 40;
+    const chatLength = Array.isArray(context.chat) ? context.chat.length : 0;
+    const endExclusive =
+      chatLength > 0 && !context.chat[chatLength - 1]?.is_user && !context.chat[chatLength - 1]?.is_system
+        ? chatLength - 1
+        : chatLength;
+    let startIndex = 0;
+    if (!recentOnly) {
+      const cursor = loadProductCursor(context.chatMetadata);
+      if (Number.isInteger(cursor?.last_index)) startIndex = cursor.last_index + 1;
+      else if (Number.isInteger(cursor?.end_index)) startIndex = cursor.end_index;
+      startIndex = Math.max(0, Math.min(startIndex, endExclusive));
+    } else {
+      startIndex = Math.max(0, endExclusive - windowSize);
+    }
+    const remaining = Math.max(0, endExclusive - startIndex);
+    if (remaining > 0) {
+      progressTotals = {
+        totalMessages: endExclusive,
+        totalWindows: Math.ceil(remaining / windowSize),
+      };
+    }
+  } catch (error) {
+    console.warn('[Storyhold] Product progress total estimate failed:', error);
+  }
   try {
     const result = await runProductCatchUp({
       ingestOne: async ({ onProgress: windowProgress }) =>
@@ -1031,6 +1072,7 @@ async function runSingleExtensionCatchUpUnlocked({
       shouldAbort: () => productChatInvalidated() || catchUpCancelled,
       maxWindows: maxWindows ?? settings.product_catchup_max_windows ?? 1000,
       rescan,
+      ...progressTotals,
       onProgress: report,
     });
     if (!productChatInvalidated()) {
