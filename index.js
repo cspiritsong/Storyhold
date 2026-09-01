@@ -528,8 +528,12 @@ function productProgressMessage(event = {}) {
       return `Memorize Chat: ${windowLabel}${rangeText} — ${projectionLabel} failed. Retry is available.`;
     case 'cursor_advanced':
       return `Memorize Chat: ${windowLabel} saved.`;
-    case 'window_complete':
-      return `Memorize Chat: ${event.windows ?? 0}${Number.isInteger(event.totalWindows) ? ` of ${event.totalWindows}` : ''} window${event.windows === 1 ? '' : 's'} complete (${event.recordCount ?? 0} record${event.recordCount === 1 ? '' : 's'}).`;
+    case 'window_complete': {
+      const uncovered = Number.isInteger(event.uncoveredCount) && event.uncoveredCount > 0
+        ? `; ${event.uncoveredCount} message${event.uncoveredCount === 1 ? '' : 's'} not yet covered`
+        : '';
+      return `Memorize Chat: ${event.windows ?? 0}${Number.isInteger(event.totalWindows) ? ` of ${event.totalWindows}` : ''} window${event.windows === 1 ? '' : 's'} complete (${event.recordCount ?? 0} record${event.recordCount === 1 ? '' : 's'}${uncovered}).`;
+    }
     case 'finished':
       return `Memorize Chat: finished — ${event.windows ?? 0} window${event.windows === 1 ? '' : 's'} processed.`;
     case 'cancelled':
@@ -849,6 +853,9 @@ async function runSingleExtensionIngest(
   if (productAborted()) return result;
   const recordCount = result.records?.length ?? result.record_ids?.length ?? 0;
   const completed = result.status === 'completed';
+  const uncoveredCount = Number.isInteger(result.coverage?.uncovered_count)
+    ? result.coverage.uncovered_count
+    : undefined;
   const status = {
     phase: completed ? 'window_complete' : 'projection_failed',
     window_id: window.window_id,
@@ -856,9 +863,10 @@ async function runSingleExtensionIngest(
     branch_uid: branchUid,
     status: result.status,
     recordCount,
+    ...(uncoveredCount === undefined ? {} : { uncoveredCount }),
     failures: result.failures ?? [],
     message: completed
-      ? productProgressMessage({ phase: 'window_complete', windows: 1, recordCount })
+      ? productProgressMessage({ phase: 'window_complete', windows: 1, recordCount, uncoveredCount })
       : 'Product window incomplete. Retry is available.',
   };
   if (!completed) {

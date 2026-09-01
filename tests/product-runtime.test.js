@@ -647,7 +647,7 @@ test('array-form structured extraction preserves session evidence records', asyn
     metadata,
     summarizeNarrative: async () => 'The scene continues.',
     extractStructured: async () => [
-      { id: 'session-a', kind: 'session', type: 'revelation', content: 'Mira reveals the hidden door.' },
+      { id: 'session-a', kind: 'session', type: 'revelation', content: 'The silver key is warm.' },
     ],
   });
   const window = buildIngestWindow({
@@ -661,6 +661,29 @@ test('array-form structured extraction preserves session evidence records', asyn
 
   assert.equal(result.status, 'completed');
   assert.deepEqual(metadata.smartMemory.structured_records.map((record) => record.kind), ['session']);
+});
+
+test('array-form extraction drops candidates with no lexical grounding in the window', async () => {
+  const metadata = {};
+  const pipeline = createProductPipeline({
+    metadata,
+    summarizeNarrative: async () => 'The scene continues.',
+    extractStructured: async () => [
+      { id: 'session-a', kind: 'session', content: 'Mira reveals the hidden door of the Forge beneath Miraven.' },
+      { id: 'fact-a', kind: 'fact', content: 'The silver key grows warm near the temple.' },
+    ],
+  });
+  const window = buildIngestWindow({
+    chatUid: 'chat-uid-a',
+    branchUid: 'branch-uid-a',
+    messages: chat.slice(0, 2),
+    sourceRange: { kind: 'mesId', start: 10, end: 11 },
+  });
+
+  const result = await pipeline.ingest(window);
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(metadata.smartMemory.structured_records.map((record) => record.id), ['fact-a']);
 });
 
 test('product status is persisted in the canonical chat metadata', async () => {

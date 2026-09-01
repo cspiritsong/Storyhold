@@ -94,11 +94,21 @@ Candidates may declare:
 - `novelty`: `new`, `changed`, `repeated`, or `uncertain`.
 
 The pure admission policy rejects narrative-only, repeated/unchanged, explicitly skipped,
-empty, duplicate, and over-cap candidates before they enter the Product store. It applies a
-small per-window and per-kind cap so a verbose model response cannot flood retrieval. Fields
+empty, duplicate, and over-cap candidates before they enter the Product store. When the
+source window supplies evidence text, it also rejects candidates with no lexical grounding
+in that window (`ungrounded`) and candidates whose model-claimed message citations fall
+wholly outside the window without matching an existing record's provenance
+(`ungrounded-citation`); partially outside citations are kept but stamped
+`provenance.citation_unverified`. Short acknowledgements and index-scale records are never
+judged by these tripwires. It applies a
+small per-window and per-kind cap so a noisy model response cannot flood retrieval. Fields
 omitted by legacy model output use a compatibility default; the prompt still instructs new
 output to be selective. Narrative-only material remains covered by the single narrative chain
 without becoming another searchable record.
+
+Every completed or partial ingest window persists a deterministic `coverage` report: which
+window messages the derived records never mentioned. It costs no API call and gives catch-up
+status an honest incompleteness signal.
 
 Admission is not a truth oracle: confidence remains a signal, while source provenance,
 scope, validity, supersession, and later review remain authoritative safeguards.

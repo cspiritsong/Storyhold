@@ -6,6 +6,8 @@
  * domain-neutral, and deliberately does not make another model call.
  */
 
+import { isUngroundedText } from './grounding.js';
+
 export const RETENTION_CLASSES = Object.freeze({
   SEARCHABLE: 'searchable',
   SESSION: 'session',
@@ -16,6 +18,54 @@ const ALLOWED_RETENTION = new Set(Object.values(RETENTION_CLASSES));
 const REPEATED_NOVELTY = new Set(['repeat', 'repeated', 'duplicate', 'unchanged']);
 const DEFAULT_MAX_TOTAL = 12;
 const DEFAULT_MAX_PER_KIND = 4;
+
+function citationValues(record) {
+  const raw = record?.provenance?.source_messages;
+  if (!Array.isArray(raw)) return [];
+  const values = [];
+  for (const entry of raw) {
+    if (Number.isInteger(entry)) values.push(entry);
+    else if (Array.isArray(entry)) {
+      for (const side of entry) if (Number.isInteger(side)) values.push(side);
+    }
+  }
+  return values;
+}
+
+function inheritedCitations(existingRecords) {
+  const inherited = new Set();
+  for (const record of existingRecords ?? []) {
+    for (const value of citationValues(record)) inherited.add(value);
+    const start = record?.source_range;
+    if (start?.kind === 'mesId' && Number.isInteger(start?.start)) inherited.add(start.start);
+    if (start?.kind === 'mesId' && Number.isInteger(start?.end)) inherited.add(start.end);
+  }
+  return inherited;
+}
+
+/**
+ * Out-of-window citations are a hallucination tripwire. Index-scale records
+ * are never judged (their provenance may legitimately be mesId-scaled), and
+ * citations inherited from existing shard-like records are kept, flagged for
+ * the Explorer rather than discarded.
+ */
+function inspectCitations(record, { citationRange, inherited }) {
+  if (!citationRange || citationRange.kind !== 'mesId') return { verdict: null, unverified: [] };
+  if (record?.source_range && record.source_range.kind !== 'mesId') return { verdict: null, unverified: [] };
+  const citations = citationValues(record);
+  if (citations.length === 0) return { verdict: null, unverified: [] };
+  const inside = citations.filter(
+    (value) => value >= citationRange.start && value <= citationRange.end,
+  );
+  const inheritedHits = citations.filter((value) => inherited.has(value));
+  const unverified = citations.filter(
+    (value) => !(value >= citationRange.start && value <= citationRange.end),
+  );
+  if (inside.length === 0 && inheritedHits.length === 0) {
+    return { verdict: 'ungrounded-citation', unverified };
+  }
+  return { verdict: null, unverified };
+}
 
 function clone(value) {
   if (value === undefined) return undefined;
@@ -79,12 +129,16 @@ export function admitStructuredRecords(
     existingRecords = [],
     maxTotal = DEFAULT_MAX_TOTAL,
     maxPerKind = DEFAULT_MAX_PER_KIND,
+    sourceText = null,
+    citationRange = null,
   } = {},
 ) {
   const candidates = Array.isArray(records) ? records : [];
   const rejected = [];
   const eligible = [];
   const seen = new Set();
+  const hasEvidence = typeof sourceText === 'string' && sourceText.trim().length > 0;
+  const inherited = inheritedCitations(existingRecords);
   const existing = new Set(
     (Array.isArray(existingRecords) ? existingRecords : [])
       .filter((record) => !record?.superseded_by && !['invalid', 'superseded'].includes(record?.validity?.status))
@@ -114,13 +168,28 @@ export function admitStructuredRecords(
       rejected.push(rejection(record, 'repeated'));
       return;
     }
+    if (hasEvidence && isUngroundedText(record?.content, sourceText)) {
+      rejected.push(rejection(record, 'ungrounded'));
+      return;
+    }
+    const citations = inspectCitations(record, { citationRange, inherited });
+    if (citations.verdict) {
+      rejected.push(rejection(record, citations.verdict));
+      return;
+    }
     const key = contentKey(record);
     if (seen.has(key) || existing.has(key)) {
       rejected.push(rejection(record, 'duplicate'));
       return;
     }
     seen.add(key);
-    eligible.push({ record: { ...clone(record), retention }, index });
+    const stamped = citations.unverified.length > 0
+      ? {
+        ...record,
+        provenance: { ...(record.provenance ?? {}), citation_unverified: citations.unverified },
+      }
+      : record;
+    eligible.push({ record: { ...clone(stamped), retention }, index });
   });
 
   const total = Number.isInteger(maxTotal) && maxTotal > 0 ? maxTotal : DEFAULT_MAX_TOTAL;

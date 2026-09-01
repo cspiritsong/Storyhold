@@ -19,6 +19,7 @@ import {
   parseStructuredResponseResult,
 } from './structured-records.js';
 import { META_KEY } from './constants.js';
+import { cleanMessageText, windowEvidenceText } from './grounding.js';
 import { isProjectionTemporallyCompatible } from './timeline.js';
 import { fingerprintMessages } from './projections.js';
 import { sourceRangeMatchesLiveChat } from './branch-detection.js';
@@ -214,7 +215,11 @@ function recordsFromExtraction(
       if (!timeline || record?.kind !== 'state') return true;
       return isProjectionTemporallyCompatible(record.content, timeline);
     });
-    return admitStructuredRecords(temporallyEligible, { existingRecords }).accepted;
+    return admitStructuredRecords(temporallyEligible, {
+      existingRecords,
+      sourceText: windowEvidenceText(window),
+      citationRange: window.source_range?.kind === 'mesId' ? window.source_range : null,
+    }).accepted;
   };
   if (Array.isArray(extracted)) {
     const canonical = extracted.every(
@@ -356,7 +361,8 @@ export function createProductPipeline({
         prompt: buildStructuredExtractionPrompt({
           chatText: window.messages
             .filter((message) => message?.mes && !message.is_system)
-            .map((message) => `${message.name}: ${message.mes}`)
+            .map((message) => `${message.name}: ${cleanMessageText(message.mes)}`)
+            .filter((line) => !line.endsWith(': '))
             .join('\n\n'),
           existingRecords: priorRecords,
           respondingCharacter: settings.respondingCharacter ?? '',

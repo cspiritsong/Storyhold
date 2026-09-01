@@ -105,6 +105,23 @@ test('structured extraction prompt defines one combined response and includes cu
   assert.match(prompt, /temporal conflict/i);
 });
 
+test('relationship descriptor magnitudes are bounded before they become memory', () => {
+  const records = normalizeStructuredRecords({
+    relationships: [
+      { subject: 'Mira', target: 'Badi', descriptors: [{ word: 'trust', magnitude: 61 }, { word: 'fear', magnitude: 9000 }] },
+      { subject: 'Mira', target: 'Kael', descriptors: [{ word: 'trust', magnitude: 'lots' }, 'warm'] },
+      { subject: 'Mira', target: 'Sena', descriptors: [{ word: 'distrust', magnitude: -5 }] },
+    ],
+  }, window);
+  const byTarget = Object.fromEntries(records.map((record) => [record.content.split(' → ')[1].split(':')[0], record.content]));
+
+  // Out-of-bounds and non-numeric magnitudes are dropped; valid ones survive.
+  assert.equal(byTarget.Badi, 'Mira → Badi: trust(61)');
+  assert.equal(byTarget.Kael, 'Mira → Kael: warm');
+  // A record left with no valid descriptors and no content never enters the store.
+  assert.equal(byTarget.Sena, undefined);
+});
+
 test('stale current-state clock projections are rejected while backstory remains admissible', () => {
   const timeline = {
     current_anchor: { year: 2041, month: 9, day: 15 },

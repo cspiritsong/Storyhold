@@ -18,6 +18,7 @@ import { buildTimelinePromptBlock, isProjectionTemporallyCompatible } from './ti
 import { buildProductSuppressionKey } from './product-mutations.js';
 import { parseArcOutput, parseExtractionOutput, parseSessionOutput } from './parsers.js';
 import { admitStructuredRecords } from './admission-policy.js';
+import { windowEvidenceText } from './grounding.js';
 
 const EMPTY_RESPONSE = Object.freeze({
   facts: [],
@@ -78,7 +79,11 @@ function commonFields(item, kind, index, window) {
     provenance: {
       ...stripIdentityVariants(item?.provenance),
       source_chat_uid: window.chat_uid,
-      source_messages: item?.provenance?.source_messages ?? defaultSourceMessages(window.source_range),
+      source_messages: item?.provenance?.source_messages
+        ?? (Array.isArray(item?.source_messages) && item.source_messages.every((value) => Number.isInteger(value)) && item.source_messages.length > 0
+          ? [...item.source_messages]
+          : undefined)
+        ?? defaultSourceMessages(window.source_range),
       source_kind: 'raw-jsonl',
     },
     supersedes: item?.supersedes ?? null,
@@ -94,6 +99,17 @@ function buildStateContent(item) {
   return name && fields.length > 0 ? `${name}: ${fields.join(' | ')}` : '';
 }
 
+/**
+ * Descriptor magnitudes are model-supplied numbers, not truth. A magnitude
+ * must be a finite number in 0..100 to be kept; anything else is dropped.
+ * The range stays metric-agnostic so the core remains domain-neutral.
+ */
+function boundedMagnitude(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 100) return null;
+  return number;
+}
+
 function buildRelationshipContent(item) {
   if (text(item?.content)) return text(item.content);
   const subject = text(item?.subject);
@@ -101,7 +117,12 @@ function buildRelationshipContent(item) {
   const descriptors = list(item?.descriptors)
     .map((descriptor) => {
       if (typeof descriptor === 'string') return descriptor.trim();
-      return `${text(descriptor?.word)}${descriptor?.magnitude ? `(${descriptor.magnitude})` : ''}`;
+      const word = text(descriptor?.word);
+      if (!word) return '';
+      if (descriptor?.magnitude === undefined || descriptor?.magnitude === null) return word;
+      const magnitude = boundedMagnitude(descriptor.magnitude);
+      // A garbage number makes the whole descriptor suspect: drop the pair.
+      return magnitude === null ? '' : `${word}(${magnitude})`;
     })
     .filter(Boolean)
     .join(', ');
@@ -252,6 +273,7 @@ export function buildStructuredExtractionPrompt({
     'These are candidates, not a checklist. Return empty arrays when nothing meaningful changed.',
     'Do not repeat unchanged information. Use null or omit unknown values; never invent dates.',
     'Each candidate may include retention: searchable, session, or narrative; and novelty: new, changed, repeated, or uncertain.',
+    'Each candidate may include source_messages: an array of supporting message ids. Only cite message ids from the current passage; never invent message ids.',
     'Use narrative retention for details useful only to broad scene continuity. Do not emit routine actions, decorative description, or unchanged restatements as searchable candidates.',
     'facts: [{content, confidence, supersedes}]',
     'events: [{content, story_time, knowledge_time, entities, confidence}]',
@@ -323,7 +345,11 @@ export function normalizeStructuredRecords(
   append(parsed.arcs, PROJECTION_KINDS.ARC, (item) => item?.content);
   append(parsed.epistemic, PROJECTION_KINDS.EPISTEMIC, buildEpistemicContent);
   append(parsed.session, PROJECTION_KINDS.SESSION, (item) => item?.content);
-  return admitStructuredRecords(records, { existingRecords }).accepted;
+  return admitStructuredRecords(records, {
+    existingRecords,
+    sourceText: windowEvidenceText(window),
+    citationRange: window.source_range?.kind === 'mesId' ? window.source_range : null,
+  }).accepted;
 }
 
 function normalizedContent(record) {

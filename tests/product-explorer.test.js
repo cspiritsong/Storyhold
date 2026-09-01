@@ -4,6 +4,7 @@ import {
   buildProductExplorerModel,
   buildTimelineSpine,
   filterExplorerRecords,
+  unverifiedCitationNote,
 } from '../product-explorer.js';
 
 const record = (overrides = {}) => ({
@@ -15,6 +16,26 @@ const record = (overrides = {}) => ({
   provenance: { source_chat_uid: 'chat-a', source_messages: [3, 4], ...(overrides.provenance ?? {}) },
   validity: { status: 'active', ...(overrides.validity ?? {}) },
   ...(overrides.entity ? { entity: overrides.entity } : {}),
+});
+
+test('Explorer surfaces unverified citations from ingest-time checks', () => {
+  const flagged = record({
+    id: 'partial-cite',
+    provenance: { source_chat_uid: 'chat-a', source_messages: [3, 4, 99], citation_unverified: [99] },
+  });
+  const clean = record({ id: 'clean' });
+
+  assert.equal(unverifiedCitationNote(flagged), 'citation outside window: 99');
+  assert.equal(unverifiedCitationNote(clean), null);
+  // A malformed stamp must never throw or invent a count.
+  assert.equal(unverifiedCitationNote(record({ id: 'junk', provenance: { citation_unverified: 'oops' } })), null);
+});
+
+test('Explorer renders the unverified-citation note in record rows', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../product-explorer.js', import.meta.url), 'utf8');
+  assert.match(source, /unverifiedCitationNote\(record\)/);
+  assert.match(source, /citation outside window/);
 });
 
 test('Explorer model contains only the current chat and exposes projections', () => {

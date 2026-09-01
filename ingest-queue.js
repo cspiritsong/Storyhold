@@ -7,6 +7,7 @@
  */
 
 import { normalizeDerivedRecord } from './projections.js';
+import { analyzeMessageCoverage } from './grounding.js';
 
 export const INGEST_STATUS = Object.freeze({
   RUNNING: 'running',
@@ -139,6 +140,9 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
           windowId: window.window_id,
           status: INGEST_STATUS.COMPLETED,
           recordCount: prior.records?.length ?? 0,
+          ...(Number.isInteger(prior.coverage?.uncovered_count)
+            ? { uncoveredCount: prior.coverage.uncovered_count }
+            : {}),
           replayed: true,
         });
         return {
@@ -261,6 +265,10 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
       const failed = names.some((name) => state.projections[name]?.status === 'failed');
       state.status = failed ? INGEST_STATUS.PARTIAL : INGEST_STATUS.COMPLETED;
       state.record_ids = (state.records ?? []).map((record) => record.id);
+      // Honest catch-up signal: which window messages the derived records
+      // failed to mention. Deterministic and free (no API call), so it is
+      // persisted with the window state and reported on completion.
+      state.coverage = analyzeMessageCoverage(window.messages ?? [], state.records ?? []);
       state.updated_at = now();
       assertNotAborted(context);
       await save(window.window_id, state);
@@ -269,6 +277,7 @@ export function createIngestQueue({ load, save, projectors = {}, now = () => Dat
         windowId: window.window_id,
         status: state.status,
         recordCount: state.records?.length ?? 0,
+        uncoveredCount: state.coverage.uncovered_count,
         replayed: false,
       });
       return { ...state, replayed: false };

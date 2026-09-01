@@ -1754,6 +1754,20 @@ test('manual relink and manual legacy additions preserve current branch provenan
   assert.match(settings, /currentLineageRecordStamp\(\)/);
 });
 
+test('adjudicated challenge next-step names the correction surface and stays read-only', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const uiSource = await readFile(resolve(root, 'ui.js'), 'utf8');
+  const outcome = uiSource.slice(
+    uiSource.indexOf('function appendMemoryReviewOutcome'),
+    uiSource.indexOf('/**\n * Displays a read-only memory review panel'),
+  );
+  assert.ok(outcome.length > 0, 'outcome renderer found');
+  // The adjudicated-challenge branch must tell the user where corrections happen.
+  assert.match(outcome, /Next step: review the cited memory and its source range below\. Challenge is read-only; if the memory is wrong, correct it in Inspect or Fix Chat Memory\./);
+  // Read-only contract: the outcome footer has no control beyond Dismiss.
+  assert.equal(/dataset\.explorerAction|button/.test(outcome), false);
+});
+
 test('async legacy clear and arc resolution retain operation identity through awaits', async () => {
   const [settings, arcs, ui] = await Promise.all([
     readFile(resolve(root, 'settings.js'), 'utf8'),

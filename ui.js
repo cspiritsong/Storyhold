@@ -1113,7 +1113,7 @@ function appendMemoryReviewOutcome(card, review) {
     ? `Next step: ${review.blocked.nextStep}`
     : isChallenge
       ? review.adjudication
-        ? 'Next step: review the cited memory and its source range below. Challenge is read-only; no memory was changed.'
+        ? 'Next step: review the cited memory and its source range below. Challenge is read-only; if the memory is wrong, correct it in Inspect or Fix Chat Memory.'
         : count > 0
           ? 'Next step: review the evidence and source range. If the memory is wrong, edit or delete it in the relevant Storyhold list.'
           : 'Next step: this is not proof that the claim is false. Try a more specific claim or lower the match threshold if needed.'

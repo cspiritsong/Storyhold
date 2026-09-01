@@ -208,6 +208,20 @@ function recordRange(record) {
   return null;
 }
 
+/**
+ * Read-only provenance note for citations that ingest-time grounding found
+ * outside their source window. The record stays trusted for its content; the
+ * note simply keeps the Explorer honest about which citations could not be
+ * verified. Returns null when there is nothing to warn about.
+ */
+export function unverifiedCitationNote(record) {
+  const raw = record?.provenance?.citation_unverified;
+  if (!Array.isArray(raw)) return null;
+  const values = raw.filter((value) => Number.isInteger(value));
+  if (values.length === 0) return null;
+  return `citation outside window: ${values.join(', ')}`;
+}
+
 function snippetRange(snippet) {
   if (Array.isArray(snippet?.source_ranges) && snippet.source_ranges.length > 0) {
     return normalizedRange(snippet.source_ranges[0]);
@@ -480,6 +494,13 @@ export function renderProductExplorer(container, model, {
       source.className = 'sm-muted sm-product-explorer-source';
       const range = normalizedRange(record.source_range ?? record.sourceRange);
       source.textContent = formatSourceRange(range);
+      const citationNote = unverifiedCitationNote(record);
+      if (citationNote) {
+        const warning = document.createElement('span');
+        warning.className = 'sm-memory-status sm-memory-status-uncertain';
+        warning.textContent = citationNote;
+        source.append(' ', warning);
+      }
       body.append(meta, content, source);
       const actions = document.createElement('div');
       actions.className = 'sm-product-explorer-record-actions';

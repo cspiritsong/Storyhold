@@ -76,6 +76,9 @@ export async function runProductCatchUp({
         windowId: result.window_id ?? null,
         status: result.status ?? null,
         recordCount: result.records?.length ?? result.record_ids?.length ?? 0,
+        ...(Number.isInteger(result.coverage?.uncovered_count)
+          ? { uncoveredCount: result.coverage.uncovered_count }
+          : {}),
         replayed: result.replayed ?? false,
       });
     }

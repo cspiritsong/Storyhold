@@ -9,11 +9,13 @@
 
 import { createIngestQueue } from './ingest-queue.js';
 import { createNarrativeState, ingestNarrativeBatch } from './narrative-chain.js';
+import { cleanMessageText } from './grounding.js';
 
 function narrativeText(window) {
   return (window.messages ?? [])
     .filter((message) => message?.mes && !message.is_system)
-    .map((message) => `${message.is_user ? 'Player' : 'Assistant'}: ${String(message.mes).trim()}`)
+    .map((message) => `${message.is_user ? 'Player' : 'Assistant'}: ${cleanMessageText(message.mes)}`)
+    .filter((line) => !line.endsWith(': '))
     .join('\n');
 }
 
