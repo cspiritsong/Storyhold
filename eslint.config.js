@@ -54,4 +54,17 @@ export default [
       'no-console': 'off',
     },
   },
+  {
+    // Node.js tooling - runs outside the SillyTavern browser context
+    files: ['tools/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        Buffer: 'readonly',
+      },
+    },
+  },
 ];
