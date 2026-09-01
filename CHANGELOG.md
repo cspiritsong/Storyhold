@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Headless qualification rig** (`npm run qualification`): replays a synthetic roleplay chat through the real product pipeline with a scripted sloppy model, asserting grounding admission, citation containment, hygiene, bounded magnitudes, and coverage — a controlled pre-test that runs on any machine before live qualification.
+
 ## [1.16.0] - 2026-09-01
 
 ### Added

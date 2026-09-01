@@ -6,6 +6,7 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "test": "node test-harness.mjs && node --test tests/*.test.js",
+    "qualification": "node tools/qualification.mjs",
     "package:extension": "node tools/package-extension.mjs",
     "test:live": "node test-harness.mjs --live",
     "test:parsers": "node test-harness.mjs --parsers"
