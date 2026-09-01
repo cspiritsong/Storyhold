@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-09-01
+
+### Added
+
+- **Transcript grounding at admission.** Structured candidates are now checked against the actual ingest-window transcript without any extra API call: text with no lexical evidence in the window is rejected as `ungrounded`, and model-claimed message citations entirely outside the window are rejected as `ungrounded-citation` unless they match an existing record's provenance. Partially outside citations are kept and stamped `citation_unverified` for the Explorer. The extraction prompt now asks for in-window `source_messages` citations.
+- **Message coverage reporting.** Every completed or partial ingest window persists a deterministic report of which window messages the derived records never mentioned. Memorize Chat status now says plainly when a window finished with messages not yet covered, so "complete" never overstates what was remembered.
+- **Model-call text hygiene.** Narrative and extraction prompts now send cleaned transcript text — HTML markup, fenced code blocks, and reasoning artifacts are stripped before the model sees them. The stored raw transcript and window fingerprints are untouched; this is prompt hygiene, not transcript editing.
+
+### Changed
+
+- **Relationship magnitudes are bounded.** A descriptor number outside 0–100, or not a number, drops the descriptor instead of entering canonical memory; word-only descriptors still pass. Domain-neutral: no metric names are hardcoded.
+- **Adjudicated Challenge next step.** After a Supported/Contradicted/Unresolved verdict, the panel now names where to fix a wrong memory (Inspect or Fix Chat Memory) while Challenge itself stays read-only.
+- **Memory Explorer shows unverified citations.** Records whose model-claimed source messages fell partly outside their window now carry a visible "citation outside window" note in the Explorer — a diagnostic, never a mutation.
+
 ## [1.15.0] - 2026-08-27
 
 ### Added
