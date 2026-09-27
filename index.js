@@ -69,6 +69,7 @@ import {
   generateMemoryExtract,
   generateMemorySummarize,
 } from './generate.js';
+import { buildProductNarrativePrompt } from './generation-policy.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import {
@@ -481,21 +482,6 @@ function getSettings() {
   return extension_settings[MODULE_NAME];
 }
 
-function buildProductNarrativePrompt(storyText, contextText) {
-  return [
-    'Role: precise narrative-state tracker.',
-    'Summarize only the new narrative delta needed to continue the prior context.',
-    'Preserve names, relationships, motivations, location, time, important objects, and unresolved tension.',
-    'Do not repeat information already present in the prior context. Return one compact line.',
-    '<prior_context>',
-    contextText || '(none yet)',
-    '</prior_context>',
-    '<new_passage>',
-    storyText || '',
-    '</new_passage>',
-  ].join('\n');
-}
-
 function productProgressMessage(event = {}) {
   const windowBase = event.windowNumber ? `window ${event.windowNumber}` : 'product pipeline';
   const windowLabel =
@@ -791,7 +777,7 @@ async function runSingleExtensionIngest(
         buildProductNarrativePrompt(storyText, contextText),
         {
           responseLength: settings.narrative_response_length ?? 500,
-          chatMessages: [],
+          contextMode: 'self-contained',
         },
       );
       if (productAborted()) throw CHAT_SWITCHED;
@@ -1289,6 +1275,7 @@ async function runProductMutation(mutator) {
       if (result?.contentChanged || result?.timelineChanged || result?.records) {
         root.narrative_stale = {
           reason: result?.contentChanged ? 'record-edited' : result?.timelineChanged ? 'timeline-edited' : 'records-changed',
+          blocks_injection: false,
           updated_at: Date.now(),
         };
       }

@@ -7,9 +7,21 @@
  * fake OpenAI-compatible provider.
  */
 
-import { PNG } from 'pngjs';
+import { createRequire } from 'node:module';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+const require = createRequire(import.meta.url);
+let PNG;
+try {
+  PNG = require('pngjs').PNG;
+} catch {
+  try {
+    PNG = createRequire('/tmp/st-smoke-storyhold/package.json')('pngjs').PNG;
+  } catch {
+    PNG = createRequire('/home/badi/projects/sillybunny-dev/repo/package.json')('pngjs').PNG;
+  }
+}
 
 
 const dataRoot = process.argv[2] ?? '/tmp/st-smoke-storyhold/data/default-user';
@@ -96,10 +108,14 @@ const messages = [
   'Mira trusts Kael again after he shares the map he hidden for years.',
   'The priest confesses the seals on the lower level are weakening daily.',
   'A marble gargoyle winks at nobody in particular.',
+  'At the bridge, Mira refuses Rowan help after he broke his promise.',
+  'Years ago on an unknown date, Rowan abandoned the frontier watch.',
+  'Mira remembers the winter oath before returning her attention to the bridge.',
+  'LIVE_CHAT_ONLY_MARKER: ambient text that must never enter a self-contained request.',
 ].map((mes, i) => ({
   mes,
   name: i % 2 === 0 ? 'Mira' : 'Priest',
-  is_user: i % 2 === 0,
+  is_user: i < 10 ? (i % 2 === 0) : false,
   mesId: 200 + i,
   send_date: new Date().toISOString(),
 }));
@@ -111,18 +127,24 @@ const lines = [JSON.stringify(chatMeta), ...messages.map((m) => JSON.stringify(m
 writeFileSync(join(chatDir, 'smoke-chat.jsonl'), lines.join('\n'));
 console.log('chat jsonl written with', messages.length, 'messages');
 
-// ---- Settings: Storyhold extension block ----
+// ---- Settings: SillyTavern main API + Storyhold Product mode ----
 const settingsPath = join(dataRoot, 'settings.json');
 const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
+settings.firstRun = false;
+settings.main_api = 'openai';
+settings.oai_settings = {
+  chat_completion_source: 'custom',
+  custom_url: 'http://127.0.0.1:8444/v1',
+  custom_model: 'fake-model',
+  stream_openai: false,
+};
 settings.extension_settings = settings.extension_settings ?? {};
 settings.extension_settings.smart_memory = {
   ...(settings.extension_settings.smart_memory ?? {}),
-  source: 'openai_compatible',
-  openai_compat_url: 'http://127.0.0.1:8444',
-  openai_compat_model: 'fake-model',
-  openai_compat_key: '',
-  // Avoid the Ollama probe noise that would trip the console-error check.
+  source: 'main',
+  single_extension_mode: true,
+  state_ledger_enabled: true,
   embedding_enabled: false,
 };
 writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-console.log('settings.json patched');
+console.log('settings.json patched with main/custom and Product mode');

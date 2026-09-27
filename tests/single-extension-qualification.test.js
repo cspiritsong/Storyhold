@@ -20,6 +20,7 @@ import {
 } from '../narrative-chain.js';
 import { rebuildTimeline } from '../timeline.js';
 import { retrieveWithLadder } from '../retrieval.js';
+import { buildProductNarrativePrompt } from '../generation-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
@@ -272,4 +273,76 @@ test('bounded narrative promotion uses a fake summarizer and ordinary retrieval 
   });
   assert.equal(fallback.stage, null);
   assert.equal(vectorCalls, 1);
+});
+
+test('prompt-contract asserts temporal instructions and persists chronological/modal distinctions', async () => {
+  const coreFixture = JSON.parse(
+    readFileSync(resolve(__dirname, 'fixtures/core-continuity.json'), 'utf8'),
+  );
+
+  const prompt = buildProductNarrativePrompt(
+    coreFixture.temporal_passage.map((p) => p.text).join('\n'),
+    'Prior journey',
+  );
+  assert.match(prompt, /causal|cause/i);
+  assert.match(prompt, /emotional|decision|motivation/i);
+  assert.match(prompt, /chronology|order/i);
+  assert.match(prompt, /backstory|flashback/i);
+  assert.match(prompt, /hypothetical|rumor/i);
+  assert.match(prompt, /relative|unknown|exact/i);
+
+  const metadata = {};
+  const pipeline = createProductPipeline({
+    metadata,
+    settings: {
+      single_extension_mode: true,
+      respondingCharacter: 'Mira',
+    },
+    summarizeNarrative: async () => {
+      return coreFixture.temporal_passage.map((p) => p.text).join('\n');
+    },
+    extractStructured: async () => ({
+      facts: [],
+      state: [{ id: 'state-current', content: 'Mira is at the bridge.', validity: { status: 'active' } }],
+    }),
+  });
+
+  const window = {
+    window_id: 'win-temporal-0',
+    chat_uid: coreFixture.chat_uid,
+    branch_uid: coreFixture.branch_uid,
+    messages: [
+      { mesId: 1, name: 'Mira', is_user: false, mes: 'At the bridge.' },
+    ],
+    source_range: { start: 0, end: 1 },
+    fingerprint: 'fp-temporal',
+    story_text: coreFixture.temporal_passage.map((p) => p.text).join('\n'),
+  };
+
+  const ingestResult = await pipeline.ingest(window);
+  assert.equal(ingestResult.status, 'completed');
+
+  const sections = buildSectionsFromTypedState({
+    chatUid: coreFixture.chat_uid,
+    branchUid: coreFixture.branch_uid,
+    narrativeState: metadata.smartMemory.narrative,
+  });
+
+  const envelope = buildMemoryEnvelopeSync({
+    chatUid: coreFixture.chat_uid,
+    branchUid: coreFixture.branch_uid,
+    allocationPolicy: 'product-continuity',
+    sections,
+    totalBudget: 4000,
+  });
+
+  assert.match(envelope.text, /BACKSTORY_UNKNOWN/);
+  assert.match(envelope.text, /FLASHBACK/);
+  assert.match(envelope.text, /HYPOTHETICAL/);
+  assert.match(envelope.text, /RUMOR/);
+  assert.match(envelope.text, /CURRENT_2/);
+  assert.match(envelope.text, /years ago/);
+  assert.match(envelope.text, /unknown date/);
+  assert.doesNotMatch(envelope.text, /202[0-9]-[0-9]{2}-[0-9]{2}/);
+  assert.doesNotMatch(envelope.text, /January|February|March|April|May|June|July|August|September|October|November|December \d+/i);
 });

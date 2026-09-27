@@ -7,8 +7,8 @@
 ## Goal
 
 Keep maximum useful long-form roleplay recall in one installable SillyTavern extension
-while sending one accurate, scoped, non-duplicated, token-bounded memory envelope to the
-roleplay model.
+while sending one accurate, scoped, single-slot, token-bounded memory envelope to the
+roleplay model with no competing Storyhold writers.
 
 The raw chat JSONL is the evidence layer. **Derived records never outrank the raw
 transcript that produced them.** A narrative layer, state card, vector result, or profile
@@ -18,10 +18,11 @@ is a projection and must remain traceable to its source messages.
 
 This redesign is **solely a SillyTavern extension**. Smart-Memory is the only installed
 memory extension and the only product runtime. All ingest, narrative layers, structured
-projections, retrieval, reconciliation, ghosting, and prompt brokering live inside the
+projections, retrieval, reconciliation, and prompt brokering live inside the
 Smart-Memory extension and SillyTavern-supported storage: `chatMetadata`, small
 `extension_settings` configuration, browser storage where appropriate, and optional native
-Vector Storage APIs.
+Vector Storage APIs. Automatic message ghosting or raw-context replacement is deferred as a
+future non-goal for this release; raw evidence remains visible.
 
 There is no sidecar service, separate database process, second required extension, or
 SillyTavern core fork. Auxiliary model calls are initiated, serialized, bounded, and
@@ -172,8 +173,12 @@ The envelope is assembled in this order unless qualification evidence changes it
 6. responding-character epistemic constraints;
 7. one-shot continuity repair, if valid.
 
-The visible chat tail is not duplicated. Individual Smart-Memory slots are cleared before
-or immediately after broker composition. A quarantined lineage yields an empty envelope.
+Non-duplicated means one bounded Storyhold-owned memory envelope in `PROMPT_KEY_UNIFIED`
+with zero competing Storyhold narrative or legacy writers. Bounded semantic overlap
+between this envelope and SillyTavern's independently assembled visible raw tail is
+intentionally accepted because the broker has no authoritative synchronous raw-tail cutoff,
+and automatic ghosting or omission is deferred. Individual Smart-Memory slots are cleared
+before or immediately after broker composition. A quarantined lineage yields an empty envelope.
 
 ## Isolation and lineage
 

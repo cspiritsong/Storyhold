@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runProductCatchUp } from '../product-catchup.js';
+import { buildSectionsFromTypedState, buildMemoryEnvelopeSync } from '../memory-broker.js';
+import { advanceProductCursor } from '../product-runtime.js';
 
 test('product catch-up processes completed windows until exhaustion', async () => {
   const calls = [];
@@ -178,4 +180,106 @@ test('async progress callback failures are contained', async () => {
   } finally {
     globalThis.process.off('unhandledRejection', onUnhandled);
   }
+});
+
+test('product catch-up preserves valid envelope and cursor on repeated-window no-progress', async () => {
+  const initialCursor = Object.freeze({
+    chat_uid: 'chat-np',
+    branch_uid: 'branch-np',
+    last_mes_id: 105,
+    last_index: 4,
+    source_fingerprint: 'fp-105',
+  });
+  const metadata = {
+    smartMemory: {
+      chat_uid: 'chat-np',
+      branch_uid: 'branch-np',
+      product_cursor: { ...initialCursor },
+      narrative: {
+        chat_uid: 'chat-np',
+        branch_uid: 'branch-np',
+        layers: [[{
+          id: 'snip-existing',
+          text: 'Mira discovered the hidden passage under the chapel.',
+          scope: { chat_uid: 'chat-np', branch_uid: 'branch-np' },
+          source_range: { kind: 'mesId', start: 101, end: 105 },
+          narrative_layer: 0,
+          narrative_order: 0,
+        }]],
+      },
+      structured_records: [
+        { id: 'rec-state-np', kind: 'state', content: 'Chapel passage open.', scope: { chat_uid: 'chat-np', branch_uid: 'branch-np' }, validity: { status: 'active' } },
+      ],
+    },
+  };
+
+  // Compute pre-catchup envelope E from real metadata
+  const initialSections = buildSectionsFromTypedState({
+    chatUid: 'chat-np',
+    branchUid: 'branch-np',
+    narrativeState: metadata.smartMemory.narrative,
+  });
+  const initialEnvelope = buildMemoryEnvelopeSync({
+    chatUid: 'chat-np',
+    branchUid: 'branch-np',
+    allocationPolicy: 'product-continuity',
+    sections: initialSections,
+    records: metadata.smartMemory.structured_records,
+    totalBudget: 2000,
+  });
+  assert.ok(initialEnvelope.text.includes('Mira discovered the hidden passage'));
+  assert.ok(initialEnvelope.text.includes('CURRENT STATE:'));
+
+  let modelCalls = 0;
+  const events = [];
+  const result = await runProductCatchUp({
+    ingestOne: async () => {
+      // Production repeated-window scenario: window already ingested / replayed
+      const replayedResult = {
+        status: 'completed',
+        window_id: 'stuck-window-42',
+        replayed: true,
+        records: [],
+      };
+      // In production (index.js:847-855), replayed windows do NOT advance cursor and make no model calls
+      if (!replayedResult.replayed && replayedResult.status === 'completed') {
+        modelCalls++;
+        await advanceProductCursor(metadata, {
+          window_id: 'stuck-window-42',
+          source_range: { kind: 'mesId', start: 106, end: 110 },
+          fingerprint: 'fp-110',
+          chat_uid: 'chat-np',
+          branch_uid: 'branch-np',
+        });
+      }
+      return replayedResult;
+    },
+    onProgress: (event) => events.push(event),
+  });
+
+  assert.equal(result.noProgress, true);
+  assert.equal(result.windows, 1);
+  assert.equal(events.at(-1).phase, 'partial');
+  assert.equal(modelCalls, 0, 'zero model calls during no-progress');
+  assert.equal(metadata.smartMemory.narrative.layers[0].length, 1, 'no new narrative snippet added');
+
+  // Real cursor is unchanged
+  assert.deepEqual(metadata.smartMemory.product_cursor, initialCursor);
+
+  // Production re-injects unified envelope from metadata after catch-up (index.js:1105)
+  const finalSections = buildSectionsFromTypedState({
+    chatUid: 'chat-np',
+    branchUid: 'branch-np',
+    narrativeState: metadata.smartMemory.narrative,
+  });
+  const finalEnvelope = buildMemoryEnvelopeSync({
+    chatUid: 'chat-np',
+    branchUid: 'branch-np',
+    allocationPolicy: 'product-continuity',
+    sections: finalSections,
+    records: metadata.smartMemory.structured_records,
+    totalBudget: 2000,
+  });
+
+  assert.strictEqual(finalEnvelope.text, initialEnvelope.text, 'envelope E must be preserved and reproduced identically');
 });

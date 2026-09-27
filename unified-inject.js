@@ -59,7 +59,7 @@ import {
 } from './constants.js';
 import { MACRO_NAMES, setMacroContent, isMacroActive } from './macros.js';
 import { getCurrentLineage, isCurrentLineageQuarantined } from './lineage-runtime.js';
-import { filterProductRecords } from './runtime-policy.js';
+import { filterProductRecords, narrativeInjectionAllowed } from './runtime-policy.js';
 import { filterRetrievalRecords } from './retrieval.js';
 import { isFreshStart } from './longterm.js';
 import {
@@ -210,6 +210,7 @@ export function injectUnified({ respondingCharacter = null } = {}) {
       .map((message) => message?.mes ?? '')
       .filter(Boolean)
       .join('\n');
+    const narrativeAllowed = narrativeInjectionAllowed(meta.narrative_stale);
     const result = buildMemoryEnvelopeSync({
       chatUid,
       branchUid,
@@ -217,13 +218,14 @@ export function injectUnified({ respondingCharacter = null } = {}) {
       query,
       records: injectableRecords,
       sections: buildSectionsFromTypedState({
-        narrativeState: meta.narrative_stale ? null : meta.narrative,
+        narrativeState: narrativeAllowed ? meta.narrative : null,
         chatUid,
         chatId: lineage?.chatId ?? null,
         branchUid,
       }),
       lineage,
       allowLegacy: false,
+      allocationPolicy: 'product-continuity',
       totalBudget: settings.total_inject_budget ?? 8000,
     });
 

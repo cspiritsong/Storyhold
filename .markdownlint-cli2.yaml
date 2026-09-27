@@ -8,3 +8,5 @@ config:
   # Allow HTML tables for side-by-side screenshot layouts in README
   MD033:
     allowed_elements: [table, tr, td, img, br, em]
+  # Lists surrounded by blank lines (pre-existing AGENTS.md trailing section)
+  MD032: false

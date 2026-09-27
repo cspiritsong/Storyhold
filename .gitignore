@@ -4,6 +4,7 @@ CLAUDE.md
 
 # Internal planning documents - not for public distribution
 dev/
+.hermes/
 
 # Dependencies
 node_modules/

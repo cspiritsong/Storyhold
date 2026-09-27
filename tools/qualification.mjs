@@ -9,10 +9,12 @@
  * Usage: node tools/qualification.mjs   (exit 0 = all assertions green)
  */
 
-/* global process */
-
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildWindowFromChat } from '../runtime-ingest.js';
 import { createProductPipeline } from '../product-runtime.js';
+import { buildSectionsFromTypedState, buildMemoryEnvelopeSync } from '../memory-broker.js';
 
 const results = [];
 function check(name, condition, detail = '') {
@@ -148,6 +150,100 @@ check('unmentioned gargoyle message is uncovered',
 check('prompt hygiene: no raw HTML reached the model', !capturedPrompt.includes('<div>'));
 check('prompt hygiene: visible text preserved', capturedPrompt.includes('Mira takes the silver key from the shrine altar.'));
 check('window fingerprint preserved raw (recovery anchor)', typeof built.fingerprint === 'string' && built.fingerprint.length > 0);
+
+// ---- Core continuity qualification pass ----
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const coreFixture = JSON.parse(
+  readFileSync(resolve(__dirname, '../tests/fixtures/core-continuity.json'), 'utf8'),
+);
+
+const continuityMetadata = {};
+const continuityPipeline = createProductPipeline({
+  metadata: continuityMetadata,
+  settings: {
+    single_extension_mode: true,
+    state_ledger_enabled: true,
+    chatUid: coreFixture.chat_uid,
+    branchUid: coreFixture.branch_uid,
+    respondingCharacter: 'Mira',
+  },
+  summarizeNarrative: async () => {
+    return coreFixture.narrative_snippets.map((s) => s.text).join('\n');
+  },
+  extractStructured: async () => ({
+    facts: [
+      { id: 'fact-bridge', content: 'Rowan made a promise to protect Kael at the bridge.', confidence: 0.95 },
+    ],
+    state: [
+      { id: 'state-mira', content: 'Mira stands at the ruined bridge with Rowan three paces behind.', confidence: 0.95 },
+    ],
+    arcs: [
+      { id: 'arc-rescue', content: 'Rescue Kael from the lower vaults before dusk at the bridge.', confidence: 0.9 },
+    ],
+    epistemic: [
+      { id: 'ep-secret', subject: 'Mira', type: 'knows', content: 'Mira knows Rowan broke his oath at the bridge.', confidence: 0.9 },
+    ],
+  }),
+});
+
+const continuityWindow = {
+  window_id: 'win-continuity-qual',
+  chat_uid: coreFixture.chat_uid,
+  branch_uid: coreFixture.branch_uid,
+  messages: [
+    { mesId: 1, name: 'Badi', is_user: true, mes: 'Mira refuses Rowan help at the bridge.' },
+    { mesId: 2, name: 'Mira', is_user: false, mes: 'Rowan broke his promise to protect Kael.' },
+  ],
+  source_range: { start: 0, end: 1 },
+  fingerprint: 'fp-continuity-qual',
+  story_text: 'Mira refuses Rowan help at the bridge. Rowan broke his promise.',
+};
+
+const continuityResult = await continuityPipeline.ingest(continuityWindow);
+check('continuity pipeline reaches completed status', continuityResult.status === 'completed');
+
+const restartedMetadata = JSON.parse(JSON.stringify(continuityMetadata));
+const restartedSections = buildSectionsFromTypedState({
+  chatUid: coreFixture.chat_uid,
+  branchUid: coreFixture.branch_uid,
+  narrativeState: restartedMetadata.smartMemory?.narrative,
+});
+
+const continuityEnvelope = buildMemoryEnvelopeSync({
+  chatUid: coreFixture.chat_uid,
+  branchUid: coreFixture.branch_uid,
+  respondingCharacter: 'Mira',
+  query: 'bridge',
+  allocationPolicy: 'product-continuity',
+  sections: restartedSections,
+  records: restartedMetadata.smartMemory?.structured_records ?? [],
+  totalBudget: 4000,
+});
+
+check('continuity envelope respects budget cap', continuityEnvelope.tokens <= 4000);
+check('continuity envelope contains causal and emotional markers',
+  continuityEnvelope.text.includes('FOUNDATION:') &&
+  continuityEnvelope.text.includes('CAUSE:') &&
+  continuityEnvelope.text.includes('EMOTIONAL_CONSEQUENCE:') &&
+  continuityEnvelope.text.includes('UNRESOLVED_TENSION:'));
+
+const cIdxF = continuityEnvelope.text.indexOf('FOUNDATION:');
+const cIdxC = continuityEnvelope.text.indexOf('CAUSE:');
+const cIdxE = continuityEnvelope.text.indexOf('EMOTIONAL_CONSEQUENCE:');
+const cIdxU = continuityEnvelope.text.indexOf('UNRESOLVED_TENSION:');
+check('continuity markers follow causal chronological order',
+  cIdxF < cIdxC && cIdxC < cIdxE && cIdxE < cIdxU);
+
+check('continuity envelope normalizes Product headings',
+  continuityEnvelope.text.includes('NARRATIVE:') &&
+  continuityEnvelope.text.includes('CURRENT STATE:') &&
+  continuityEnvelope.text.includes('ACTIVE THREADS:') &&
+  continuityEnvelope.text.includes('KNOWLEDGE / POV:') &&
+  continuityEnvelope.text.includes('FACTS:'));
+
+check('continuity trace records product-continuity policy and full status',
+  continuityEnvelope.trace?.budget?.allocation_policy === 'product-continuity' &&
+  continuityEnvelope.trace?.budget?.continuity_status === 'full');
 
 // ---- Report ----
 

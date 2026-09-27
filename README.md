@@ -2,9 +2,15 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/cspiritsong/Storyhold/blob/main/LICENSE)
 [![Maintainer: cspiritsong](https://img.shields.io/badge/Maintainer-cspiritsong-gold.svg)](https://github.com/cspiritsong)
-[![Based on: Smart Memory](https://img.shields.io/badge/Based%20on-Smart%20Memory-blue.svg)](https://github.com/senjinthedragon/Smart-Memory)
+[![Based on: Smart Memory & Summaryception](https://img.shields.io/badge/Based%20on-Smart%20Memory%20%26%20Summaryception-blue.svg)](https://github.com/senjinthedragon/Smart-Memory)
 
 Give your AI a memory that lasts. Storyhold is a SillyTavern extension that quietly works in the background, keeping your AI oriented in long stories, aware of what happened this session, and grounded in facts it has learned within each chat.
+
+## Credits & Attribution
+
+Storyhold is an independent derivative based on and inspired by:
+- **[Smart Memory](https://github.com/senjinthedragon/Smart-Memory)** by **[Senjin the Dragon](https://github.com/senjinthedragon)** — base architecture, multi-tier memory vocabulary, entity tracking, and extraction models.
+- **[Summaryception](https://github.com/Lodactio/Extension-Summaryception)** by **[Lodactio](https://github.com/Lodactio)** — recursive narrative layer chaining and summarization algorithms.
 
 It runs automatically. You don't have to do anything special. Just chat, and it takes care of the rest.
 

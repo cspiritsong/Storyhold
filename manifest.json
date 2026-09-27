@@ -5,8 +5,8 @@
   "optional": [],
   "js": "index.js",
   "css": "style.css",
-  "author": "cspiritsong <cspiritsong@users.noreply.github.com> (independent derivative of Smart Memory by Senjin the Dragon)",
+  "author": "cspiritsong <cspiritsong@users.noreply.github.com> (independent derivative of Smart Memory by Senjin the Dragon and Summaryception by Lodactio)",
   "homepage": "https://github.com/cspiritsong/Storyhold",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "homePage": "https://github.com/cspiritsong/Storyhold"
 }

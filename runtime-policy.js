@@ -59,3 +59,31 @@ export function filterProductRecords(records = [], settings = {}, respondingChar
     return Boolean(responder && subject && subject === responder);
   });
 }
+
+const KNOWN_ADVISORY_REASONS = new Set([
+  'record-edited',
+  'records-changed',
+  'timeline-edited',
+]);
+
+/**
+ * Returns whether prompt injection may include the narrative state given a narrative_stale marker.
+ *
+ * Absent markers allow injection. Explicit blocks_injection booleans take precedence.
+ * Known legacy advisory reasons allow injection when blocks_injection is omitted.
+ * Unknown reasons and malformed markers fail closed (block injection).
+ */
+export function narrativeInjectionAllowed(marker) {
+  if (marker === null || marker === undefined) return true;
+  if (typeof marker !== 'object' || Array.isArray(marker)) return false;
+  const keys = Object.keys(marker);
+  if (keys.length === 0) return false;
+
+  if ('blocks_injection' in marker) {
+    if (typeof marker.blocks_injection !== 'boolean') return false;
+    return !marker.blocks_injection;
+  }
+
+  if (typeof marker.reason !== 'string' || !marker.reason.trim()) return false;
+  return KNOWN_ADVISORY_REASONS.has(marker.reason.trim());
+}

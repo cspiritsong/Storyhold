@@ -6,6 +6,7 @@ import {
   shouldRunProductIngest,
   enabledProductKinds,
   filterProductRecords,
+  narrativeInjectionAllowed,
 } from '../runtime-policy.js';
 
 test('product mode is enabled only by the explicit product setting', () => {
@@ -85,4 +86,38 @@ test('product ingest is suppressed for fresh-start and quarantined chats', () =>
   assert.equal(shouldRunProductIngest({ single_extension_mode: false }, {}), false);
   assert.equal(shouldRunProductIngest({ single_extension_mode: true, enabled: false }, {}), false);
   assert.equal(shouldRunProductIngest({ single_extension_mode: true }, { controlBusy: true }), false);
+});
+
+test('narrative injection allowed enforces complete advisory vs blocking marker matrix', () => {
+  // absent marker allows
+  assert.equal(narrativeInjectionAllowed(null), true);
+  assert.equal(narrativeInjectionAllowed(undefined), true);
+  assert.equal(narrativeInjectionAllowed(), true);
+
+  // explicit blocks_injection boolean takes precedence over reason
+  assert.equal(narrativeInjectionAllowed({ blocks_injection: false }), true);
+  assert.equal(narrativeInjectionAllowed({ blocks_injection: true }), false);
+  assert.equal(narrativeInjectionAllowed({ blocks_injection: false, reason: 'unverifiable-source' }), true);
+  assert.equal(narrativeInjectionAllowed({ blocks_injection: true, reason: 'record-edited' }), false);
+
+  // legacy markers with known advisory reasons when blocks_injection is absent
+  assert.equal(narrativeInjectionAllowed({ reason: 'record-edited' }), true);
+  assert.equal(narrativeInjectionAllowed({ reason: 'records-changed' }), true);
+  assert.equal(narrativeInjectionAllowed({ reason: 'timeline-edited' }), true);
+
+  // unknown reason without explicit boolean blocks
+  assert.equal(narrativeInjectionAllowed({ reason: 'unverifiable-source' }), false);
+  assert.equal(narrativeInjectionAllowed({ reason: 'unknown-reason' }), false);
+
+  // malformed markers fail closed (block)
+  assert.equal(narrativeInjectionAllowed('stale'), false);
+  assert.equal(narrativeInjectionAllowed(123), false);
+  assert.equal(narrativeInjectionAllowed(true), false);
+  assert.equal(narrativeInjectionAllowed(false), false);
+  assert.equal(narrativeInjectionAllowed([]), false);
+  assert.equal(narrativeInjectionAllowed({}), false);
+  assert.equal(narrativeInjectionAllowed({ reason: '' }), false);
+  assert.equal(narrativeInjectionAllowed({ reason: 123 }), false);
+  assert.equal(narrativeInjectionAllowed({ blocks_injection: 'false' }), false);
+  assert.equal(narrativeInjectionAllowed({ blocks_injection: 0 }), false);
 });

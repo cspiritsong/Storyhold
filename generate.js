@@ -49,7 +49,10 @@ import {
   generateWebLlmChatPrompt,
   ConnectionManagerRequestService,
 } from '../../shared.js';
-import { effectiveMemoryResponseLength } from './generation-policy.js';
+import {
+  effectiveMemoryResponseLength,
+  runSelfContainedMemorySummarizeTransport,
+} from './generation-policy.js';
 
 /**
  * Returns the configured generation budget from settings, falling back to
@@ -487,9 +490,47 @@ function trimToBudget(messages, budget) {
  */
 export async function generateMemorySummarize(
   quietPrompt,
-  { responseLength = 1500, skipWIAN = true, includeLastMessage = false, chatMessages = null } = {},
+  {
+    responseLength = 1500,
+    skipWIAN = true,
+    includeLastMessage = false,
+    chatMessages = null,
+    contextMode = 'chat',
+  } = {},
 ) {
   const source = getSource();
+
+  if (contextMode === 'self-contained') {
+    const effectiveMainResponseLength = getMainMemoryResponseLength(responseLength);
+    const deps = {
+      generateRaw,
+      isWebLlmSupported,
+      generateWebLlmChatPrompt,
+      generateOllamaChat: (prompt, _opts) => generateOllama(prompt, []),
+      generateOpenAiCompatibleChat: (prompt, _opts) => generateOpenAICompat(prompt, []),
+      generateConnectionProfileChat: (prompt, opts) =>
+        generateWithConnectionProfile(prompt, [], opts?.responseLength ?? responseLength),
+    };
+    const rawResult = await runSelfContainedMemorySummarizeTransport(
+      { source, quietPrompt, responseLength, effectiveMainResponseLength },
+      deps,
+    );
+    if (
+      source === memory_sources.ollama ||
+      source === memory_sources.openai_compatible ||
+      source === memory_sources.connection_profile
+    ) {
+      const strippedDirect = stripThinkingBlocks(rawResult ?? '');
+      const charLimitDirect =
+        responseLength > 0 && getGenerationBudget() !== -1
+          ? Math.max(responseLength, getGenerationBudget()) * 4
+          : Infinity;
+      return strippedDirect.length > charLimitDirect
+        ? strippedDirect.slice(0, charLimitDirect)
+        : strippedDirect;
+    }
+    return rawResult ?? '';
+  }
 
   // For direct API sources (Ollama, OpenAI-compat, connection profile), build the chat
   // context ourselves and append the quiet prompt as the final user message.

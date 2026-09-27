@@ -18,8 +18,11 @@ external network. Verified 2026-09-01 against SillyTavern release `8172dcd`
 ```bash
 # 1. Throwaway SillyTavern (never the real install)
 rm -rf /tmp/st-smoke-storyhold
-git clone --depth 1 --branch release https://github.com/SillyTavern/SillyTavern.git /tmp/st-smoke-storyhold
-cd /tmp/st-smoke-storyhold && npm install --no-audit --no-fund
+git clone https://github.com/SillyTavern/SillyTavern.git /tmp/st-smoke-storyhold
+cd /tmp/st-smoke-storyhold
+git checkout 8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8
+git rev-parse HEAD  # must verify 8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8
+npm install --no-audit --no-fund
 
 # 2. Copy the built extension payload
 mkdir -p public/scripts/extensions/third-party/Storyhold
@@ -44,18 +47,45 @@ WS=$(curl -s -X PUT 'http://127.0.0.1:9222/json/new?http://127.0.0.1:8123/' \
 node cdp-smoke.mjs "$WS" /tmp/st-smoke-storyhold/data/default-user
 ```
 
-## What it proves (the 15 checks)
+## What it proves (the 39 checks)
 
 - extension registers inside real ST; first-run onboarding dismissed
 - fixture character + chat selectable by UI click
+- ST context reflects `main_api: openai`, `chat_completion_source: custom`, Storyhold `source: main`
+- chat file exists on disk before scan
 - Memorize Chat runs to a terminal status
 - structured records persist into the chat JSONL line-1 `chat_metadata`
 - grounded fact survives; fabricated fact rejected (`ungrounded`)
 - ghost-citation event rejected (`ungrounded-citation`)
-- mixed citation survives with `provenance.citation_unverified` stamp
 - magnitude `9000` dropped while `trust(61)` survives
+- mixed citation survives with `provenance.citation_unverified` stamp
 - coverage report persisted; unmentioned message reported uncovered
+- narrative source ranges recorded in metadata
 - zero console errors from the extension
+- fake provider captures exactly one narrative request with one `{ role: 'user' }` message
+- narrative request contains self-contained prompt and no `LIVE_CHAT_ONLY_MARKER`
+- `smart_memory_unified` prompt slot populated with narrative continuity
+- individual Storyhold slots (`smart_memory_canon`, `smart_memory_short`, etc.) remain empty
+- exactly one Storyhold slot active
+- normal reply request captured after reset
+- reply request contains unified envelope
+- advisory stale marker preserves narrative in prompt slot
+- blocking stale marker withholds narrative from prompt slot
+- `smart_memory_unified` persists across chat reload
+- raw fixture message count preserved across scan and reload
+- raw fixture message checksum preserved across scan and reload
+
+## Evidence-level and hook-isolation limitations
+
+- **Storyhold-owned boundary:** The fake-provider capture proves that Storyhold contributes
+  no live chat context and sets `instructOverride: true` through `generateRaw`.
+- **Third-party hook limitation:** Pinned SillyTavern still fires `CHAT_COMPLETION_PROMPT_READY`
+  for chat arrays, so another installed extension could mutate requests before transmission.
+  This smoke proves Storyhold's contribution, not isolation from hostile foreign extensions.
+- **Plumbing vs Quality:** The fake provider verifies pipeline plumbing, persistence,
+  and prompt injection. It does not measure model quality; real model testing requires
+  the separate opt-in quality lane.
+- **Local vs Live:** Local smoke pass is pipeline verification, not live Mac qualification.
 
 ## Gotchas learned (do not re-solve)
 

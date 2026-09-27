@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-/* global process */
-
 import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

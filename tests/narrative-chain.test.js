@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   assembleNarrative,
   assembleNarrativeScoped,
+  listNarrativeSnippetsScoped,
   createNarrativeState,
   inheritNarrativePrefix,
   narrativeIdentityMatches,
@@ -579,4 +580,76 @@ test('narrative prefix inheritance excludes foreign snippet provenance', () => {
   assert.equal(child.layers[0][0].provenance.source_chat_uid, 'child-chat');
   assert.equal(child.layers[0][0].branch_uid, 'child-branch');
   assert.equal(child.layers[0][0].provenance.branch_uid, 'child-branch');
+});
+
+test('scoped snippet listing rejects foreign/mixed chat/branch provenance and preserves oldest-to-recent order', () => {
+  const state = {
+    chat_uid: 'chat-target',
+    branch_uid: 'branch-target',
+    layers: [
+      [
+        {
+          id: 'snip-layer0-0',
+          text: 'Recent delta 1',
+          scope: { chat_uid: 'chat-target', branch_uid: 'branch-target' },
+          source_range: { start: 20, end: 30 },
+        },
+        {
+          text: 'Recent delta 2 without explicit id',
+          scope: { chat_uid: 'chat-target', branch_uid: 'branch-target' },
+        },
+      ],
+      [
+        {
+          id: 'snip-layer1-0',
+          text: 'Deeper foundation layer 1',
+          scope: { chat_uid: 'chat-target', branch_uid: 'branch-target' },
+          source_ranges: [{ start: 0, end: 19 }],
+        },
+      ],
+    ],
+  };
+
+  const snippets = listNarrativeSnippetsScoped(state, {
+    chatUid: 'chat-target',
+    branchUid: 'branch-target',
+  });
+
+  assert.equal(snippets.length, 3);
+  assert.equal(snippets[0].id, 'snip-layer1-0');
+  assert.equal(snippets[0].narrative_layer, 1);
+  assert.equal(snippets[0].narrative_order, 0);
+  assert.equal(snippets[0].kind, 'narrative_delta');
+  assert.equal(snippets[0].content, 'Deeper foundation layer 1');
+  assert.deepEqual(snippets[0].scope, { chat_uid: 'chat-target', branch_uid: 'branch-target' });
+
+  assert.equal(snippets[1].id, 'snip-layer0-0');
+  assert.equal(snippets[1].narrative_layer, 0);
+  assert.equal(snippets[1].narrative_order, 1);
+
+  assert.equal(snippets[2].id, 'narrative-layer-0-1');
+  assert.equal(snippets[2].narrative_layer, 0);
+  assert.equal(snippets[2].narrative_order, 2);
+
+  const assembled = assembleNarrativeScoped(state, {
+    chatUid: 'chat-target',
+    branchUid: 'branch-target',
+  });
+  assert.equal(assembled, snippets.map((s) => s.content).join(' '));
+
+  assert.deepEqual(
+    listNarrativeSnippetsScoped(state, { chatUid: 'chat-foreign', branchUid: 'branch-target' }),
+    [],
+  );
+  assert.deepEqual(
+    listNarrativeSnippetsScoped(state, { chatUid: 'chat-target', branchUid: 'branch-foreign' }),
+    [],
+  );
+  assert.deepEqual(
+    listNarrativeSnippetsScoped(
+      { ...state, branch_uid: null },
+      { chatUid: 'chat-target', branchUid: null, requireBranch: true },
+    ),
+    [],
+  );
 });

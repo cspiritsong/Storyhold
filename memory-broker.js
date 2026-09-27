@@ -23,7 +23,7 @@ import {
   PROMPT_KEY_TRIGGERED,
   PROMPT_KEY_UNIFIED,
 } from './constants.js';
-import { assembleNarrativeScoped } from './narrative-chain.js';
+import { listNarrativeSnippetsScoped } from './narrative-chain.js';
 import { filterRetrievalRecords, retrieveDeterministic, retrieveWithLadder } from './retrieval.js';
 
 export const BROKER_SLOT_SECTIONS = Object.freeze([
@@ -79,22 +79,15 @@ export function buildSectionsFromTypedState({
   const resolvedChatUid = chatUid ?? narrativeChatUid;
   if (resolvedChatUid == null || String(resolvedChatUid).trim() === '') return sections;
   const resolvedBranchUid = branchUid === undefined ? narrativeBranchUid : branchUid;
-  const narrative = assembleNarrativeScoped(narrativeState, {
+  const snippets = listNarrativeSnippetsScoped(narrativeState, {
     chatUid: resolvedChatUid,
     chatId,
     branchUid: resolvedBranchUid,
     requireChat: true,
     requireBranch: true,
   });
-  if (narrative) {
-    const scope = { chat_uid: resolvedChatUid };
-    if (resolvedBranchUid != null) scope.branch_uid = resolvedBranchUid;
-    sections.narrative.push({
-      id: 'smart_memory_narrative_chain',
-      kind: 'narrative_delta',
-      content: narrative,
-      scope,
-    });
+  for (const snippet of snippets) {
+    sections.narrative.push(snippet);
   }
   return sections;
 }
@@ -146,7 +139,32 @@ function normalizedContent(record) {
     .trim();
 }
 
-function inferredSection(record) {
+function normalizeAllocationPolicy(policy) {
+  if (policy === undefined || policy === null) return 'priority';
+  if (policy === 'priority' || policy === 'product-continuity') return policy;
+  throw new TypeError(`Invalid allocationPolicy: expected 'priority' or 'product-continuity', got ${policy}`);
+}
+
+function inferredSection(record, allocationPolicy = 'priority') {
+  if (allocationPolicy === 'product-continuity') {
+    switch (record?.kind) {
+      case 'narrative_delta':
+        return 'narrative';
+      case 'state':
+        return 'state';
+      case 'arc':
+        return 'arcs';
+      case 'epistemic':
+        return 'epistemic';
+      case 'session':
+        return 'evidence';
+      case 'fact':
+      case 'event':
+      case 'relationship':
+      default:
+        return 'facts';
+    }
+  }
   if (BROKER_SECTION_ORDER.includes(record?.section)) return record.section;
   switch (record?.kind) {
     case 'narrative_delta':
@@ -270,17 +288,18 @@ function formatRecord(record) {
   return `- ${uncertainty}${pov}${content}`;
 }
 
-function buildSections(items) {
+function buildSections(items, allocationPolicy = 'priority') {
   const sections = Object.fromEntries(BROKER_SECTION_ORDER.map((name) => [name, []]));
   for (const item of items) {
-    const section = inferredSection(item.record);
-    sections[section].push(item);
+    const section = inferredSection(item.record, allocationPolicy);
+    const updated = item.section === section ? item : { ...item, section };
+    sections[section].push(updated);
   }
   return sections;
 }
 
-function renderItems(items) {
-  const sections = buildSections(items);
+function renderItems(items, allocationPolicy = 'priority') {
+  const sections = buildSections(items, allocationPolicy);
   const blocks = [];
   for (const section of BROKER_SECTION_ORDER) {
     const sectionItems = sections[section];
@@ -342,7 +361,350 @@ function fitSelectionToBudget(selected, totalBudget, trace) {
   return fitted;
 }
 
-function selectWithinBudget(sections, totalBudget, trace) {
+function sortItemsForCanonicalRender(items, allocationPolicy = 'priority') {
+  return [...items].sort((a, b) => {
+    const secNameA = inferredSection(a.record, allocationPolicy);
+    const secNameB = inferredSection(b.record, allocationPolicy);
+    const secA = BROKER_SECTION_ORDER.indexOf(secNameA);
+    const secB = BROKER_SECTION_ORDER.indexOf(secNameB);
+    if (secA !== secB) return secA - secB;
+    if (secNameA === 'narrative') {
+      return Number(a.record?.narrative_order ?? 0) - Number(b.record?.narrative_order ?? 0);
+    }
+    return (
+      Number(b.priority ?? 0) - Number(a.priority ?? 0) ||
+      Number(b.record?.confidence ?? 0) - Number(a.record?.confidence ?? 0)
+    );
+  });
+}
+
+function tokenCost(items, allocationPolicy = 'product-continuity') {
+  return estimateTokens(renderItems(sortItemsForCanonicalRender(items, allocationPolicy), allocationPolicy).text);
+}
+
+function getSuffix(original, start) {
+  let s = start;
+  if (s <= 0) return original;
+  if (s >= original.length) return '';
+  const code = original.charCodeAt(s);
+  if (code >= 0xdc00 && code <= 0xdfff) {
+    s = Math.max(0, s - 1);
+  }
+  if (s > 0 && original[s - 1] !== ' ' && original[s] !== ' ') {
+    const nextSpace = original.indexOf(' ', s);
+    if (nextSpace !== -1 && nextSpace - s <= 8 && nextSpace < original.length - 1) {
+      const candidateSuffix = original.slice(nextSpace + 1);
+      if (estimateTokens(escapeUntrustedText(candidateSuffix)) >= 16) {
+        s = nextSpace + 1;
+      }
+    }
+  }
+  return original.slice(s);
+}
+
+function makeFragment(item, suffix) {
+  const text = `... ${suffix.trimStart()}`;
+  return {
+    ...item,
+    section: 'narrative',
+    record: {
+      ...item.record,
+      content: text,
+      text,
+      _is_fragment: true,
+    },
+  };
+}
+
+function findLatestSuffixFragment(item, budget, currentS = []) {
+  const original = String(item.record?.content ?? item.record?.text ?? item.record?.summary ?? '');
+  if (!original) return null;
+
+  let best = null;
+  let low = 0;
+  let high = original.length;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const suffix = getSuffix(original, mid);
+    const escaped = escapeUntrustedText(suffix);
+    if (estimateTokens(escaped) < 16) {
+      high = mid - 1;
+      continue;
+    }
+
+    const candidate = makeFragment(item, suffix);
+    const cost = tokenCost([candidate, ...currentS]);
+    if (cost <= budget) {
+      best = candidate;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  return best;
+}
+
+function findSmallestValidSuffixFragment(item, budget, currentS = []) {
+  const original = String(item.record?.content ?? item.record?.text ?? item.record?.summary ?? '');
+  if (!original) return null;
+
+  let smallestSuffix = null;
+  for (let s = original.length; s >= 0; s--) {
+    const suffix = getSuffix(original, s);
+    const escaped = escapeUntrustedText(suffix);
+    if (estimateTokens(escaped) >= 16) {
+      smallestSuffix = suffix;
+      break;
+    }
+  }
+
+  if (!smallestSuffix) return null;
+  const candidate = makeFragment(item, smallestSuffix);
+  const cost = tokenCost([candidate, ...currentS]);
+  if (cost <= budget) return candidate;
+  return null;
+}
+
+function continuityImpossible(B, T, R, immediateCandidates, supportCandidates, narrative, trace) {
+  trace.budget = {
+    allocation_policy: 'product-continuity',
+    total: B,
+    used: 0,
+    unused: B,
+    continuity_status: 'impossible',
+    newest_narrative_delivery: 'unavailable',
+    narrative_target: T,
+    immediate_reserve: R,
+    immediate_marginal_used: 0,
+    immediate_candidate_ids: immediateCandidates.map((i) => recordSourceId(i.record)).filter(Boolean),
+    support_candidate_ids: supportCandidates.map((s) => recordSourceId(s.record)).filter(Boolean),
+    selected_narrative_ids: [],
+    omitted_narrative_ids: narrative.map((n) => recordSourceId(n.record)).filter(Boolean),
+    truncated_ids: [],
+  };
+  return {
+    isImpossible: true,
+    reason: 'budget-too-small-for-continuity',
+    selectedSections: Object.fromEntries(BROKER_SECTION_ORDER.map((name) => [name, []])),
+    selected: [],
+    contentTokens: 0,
+  };
+}
+
+function selectWithinBudgetProductContinuity(sections, totalBudget, trace) {
+  const B = Math.max(1, Math.floor(Number(totalBudget) || 1));
+  const R = Math.floor(B * 0.25);
+  const T = B - R;
+
+  const narrative = [...(sections.narrative ?? [])].sort(
+    (a, b) => Number(a.record?.narrative_order ?? 0) - Number(b.record?.narrative_order ?? 0),
+  );
+
+  const immediate = [];
+  for (const sec of ['state', 'arcs', 'epistemic']) {
+    for (const item of sections[sec] ?? []) {
+      immediate.push({
+        ...item,
+        section: sec,
+        priority: SECTION_PRIORITY[sec],
+      });
+    }
+  }
+  immediate.sort(
+    (a, b) =>
+      b.priority - a.priority ||
+      Number(b.record?.confidence ?? 0) - Number(a.record?.confidence ?? 0),
+  );
+
+  const support = [];
+  for (const sec of ['facts', 'evidence']) {
+    for (const item of sections[sec] ?? []) {
+      support.push({
+        ...item,
+        section: sec,
+        priority: SECTION_PRIORITY[sec],
+      });
+    }
+  }
+  support.sort(
+    (a, b) =>
+      b.priority - a.priority ||
+      Number(b.record?.confidence ?? 0) - Number(a.record?.confidence ?? 0),
+  );
+
+  const immediateCandidates = [...immediate];
+  const supportCandidates = [...support];
+
+  if (narrative.length === 0) {
+    const res = selectWithinBudgetPriority(sections, B, trace);
+    trace.budget = {
+      allocation_policy: 'product-continuity',
+      total: B,
+      used: res.contentTokens,
+      unused: Math.max(0, B - res.contentTokens),
+      continuity_status: 'absent',
+      newest_narrative_delivery: 'absent',
+      narrative_target: T,
+      immediate_reserve: R,
+      immediate_marginal_used: 0,
+      immediate_candidate_ids: immediateCandidates.map((i) => recordSourceId(i.record)).filter(Boolean),
+      support_candidate_ids: supportCandidates.map((s) => recordSourceId(s.record)).filter(Boolean),
+      selected_narrative_ids: [],
+      omitted_narrative_ids: [],
+      truncated_ids: [],
+    };
+    return res;
+  }
+
+  const wholeNewest = narrative[narrative.length - 1];
+  const wholeNewestContent = String(
+    wholeNewest.record?.content ?? wholeNewest.record?.text ?? wholeNewest.record?.summary ?? '',
+  );
+  const wholeNewestEscapedContent = escapeUntrustedText(wholeNewestContent);
+  const wholeNewestContentTokens = estimateTokens(wholeNewestEscapedContent);
+
+  let seed = null;
+  let seedDelivery = 'complete';
+
+  if (tokenCost([wholeNewest]) <= T) {
+    seed = wholeNewest;
+    seedDelivery = 'complete';
+  } else if (wholeNewestContentTokens < 16) {
+    if (tokenCost([wholeNewest]) <= B) {
+      seed = wholeNewest;
+      seedDelivery = 'complete';
+    } else {
+      return continuityImpossible(B, T, R, immediateCandidates, supportCandidates, narrative, trace);
+    }
+  } else {
+    const largestFittingT = findLatestSuffixFragment(wholeNewest, T, []);
+    if (largestFittingT) {
+      seed = largestFittingT;
+      seedDelivery = 'truncated';
+    } else {
+      const smallestValid = findSmallestValidSuffixFragment(wholeNewest, B, []);
+      if (smallestValid) {
+        seed = smallestValid;
+        seedDelivery = 'truncated';
+      } else {
+        return continuityImpossible(B, T, R, immediateCandidates, supportCandidates, narrative, trace);
+      }
+    }
+  }
+
+  let S = [seed];
+  let firstSelectedIndex = narrative.length - 1;
+
+  if (seedDelivery === 'complete') {
+    for (let idx = firstSelectedIndex - 1; idx >= 0; idx--) {
+      const olderItem = narrative[idx];
+      const trial = [olderItem, ...S];
+      if (tokenCost(trial) <= T) {
+        S = trial;
+        firstSelectedIndex = idx;
+      } else {
+        const frag = findLatestSuffixFragment(olderItem, T, S);
+        if (frag) {
+          S = [frag, ...S];
+          firstSelectedIndex = idx;
+        }
+        break;
+      }
+    }
+  }
+
+  let immediateUsed = 0;
+  for (const item of immediate) {
+    const costBefore = tokenCost(S);
+    const costAfter = tokenCost([...S, item]);
+    const delta = costAfter - costBefore;
+    if (delta <= (R - immediateUsed) && costAfter <= B) {
+      S.push(item);
+      immediateUsed += delta;
+    } else if (recordSourceId(item.record)) {
+      trace.dropped_ids.push(recordSourceId(item.record));
+    }
+  }
+
+  let backfillIdx = firstSelectedIndex - 1;
+  while (backfillIdx >= 0) {
+    const olderItem = narrative[backfillIdx];
+    const trial = [olderItem, ...S];
+    if (tokenCost(trial) <= B) {
+      S = trial;
+      firstSelectedIndex = backfillIdx;
+      backfillIdx--;
+      continue;
+    }
+    const frag = findLatestSuffixFragment(olderItem, B, S);
+    if (frag) {
+      S = [frag, ...S];
+      firstSelectedIndex = backfillIdx;
+    }
+    break;
+  }
+
+  for (const item of support) {
+    const trial = [...S, item];
+    if (tokenCost(trial) <= B) {
+      S.push(item);
+    } else if (recordSourceId(item.record)) {
+      trace.dropped_ids.push(recordSourceId(item.record));
+    }
+  }
+
+  const finalItems = sortItemsForCanonicalRender(S, 'product-continuity');
+  const rendered = renderItems(finalItems, 'product-continuity');
+  const finalTokens = estimateTokens(rendered.text);
+
+  const truncatedIds = finalItems
+    .filter((i) => i.record?._is_fragment)
+    .map((i) => recordSourceId(i.record))
+    .filter(Boolean);
+
+  const selectedNarrativeIds = finalItems
+    .filter((i) => i.section === 'narrative' || i.record?.kind === 'narrative_delta')
+    .map((i) => recordSourceId(i.record))
+    .filter(Boolean);
+
+  const omittedNarrativeIds = narrative
+    .map((n) => recordSourceId(n.record))
+    .filter((id) => Boolean(id) && !selectedNarrativeIds.includes(id));
+
+  for (const omittedId of omittedNarrativeIds) {
+    trace.dropped_ids.push(omittedId);
+  }
+
+  const isFullContinuity =
+    omittedNarrativeIds.length === 0 && truncatedIds.length === 0;
+
+  trace.budget = {
+    allocation_policy: 'product-continuity',
+    total: B,
+    used: finalTokens,
+    unused: Math.max(0, B - finalTokens),
+    continuity_status: isFullContinuity ? 'full' : 'degraded',
+    newest_narrative_delivery: seedDelivery,
+    narrative_target: T,
+    immediate_reserve: R,
+    immediate_marginal_used: immediateUsed,
+    immediate_candidate_ids: immediateCandidates.map((i) => recordSourceId(i.record)).filter(Boolean),
+    support_candidate_ids: supportCandidates.map((s) => recordSourceId(s.record)).filter(Boolean),
+    selected_narrative_ids: selectedNarrativeIds,
+    omitted_narrative_ids: omittedNarrativeIds,
+    truncated_ids: truncatedIds,
+  };
+
+  return {
+    selectedSections: rendered.sections,
+    selected: finalItems,
+    contentTokens: finalTokens,
+  };
+}
+
+function selectWithinBudgetPriority(sections, totalBudget, trace) {
   const all = [];
   for (const section of BROKER_SECTION_ORDER) {
     for (const item of sections[section]) {
@@ -354,9 +716,6 @@ function selectWithinBudget(sections, totalBudget, trace) {
     }
   }
 
-  // Prefer current state and active threads, but restore the canonical section
-  // order when rendering below. This prevents a large fact pool from starving
-  // the information most likely to matter for the next response.
   all.sort(
     (a, b) =>
       b.priority - a.priority ||
@@ -375,15 +734,29 @@ function selectWithinBudget(sections, totalBudget, trace) {
 
   const fitted = fitSelectionToBudget(selected, totalBudget, trace);
   const rendered = renderItems(fitted);
+  const contentTokens = estimateTokens(rendered.text);
+
+  if (!trace.budget) {
+    const B = Math.max(1, Math.floor(Number(totalBudget) || 1));
+    trace.budget = {
+      allocation_policy: 'priority',
+      total: B,
+      used: contentTokens,
+      unused: Math.max(0, B - contentTokens),
+      continuity_status: 'absent',
+      newest_narrative_delivery: 'absent',
+    };
+  }
+
   return {
     selectedSections: rendered.sections,
     selected: fitted,
-    contentTokens: estimateTokens(rendered.text),
+    contentTokens,
   };
 }
 
-function renderEnvelope(_selectedSections, selected, trace) {
-  const rendered = renderItems(selected);
+function renderEnvelope(_selectedSections, selected, trace, allocationPolicy = 'priority') {
+  const rendered = renderItems(sortItemsForCanonicalRender(selected), allocationPolicy);
   trace.selected_ids = rendered.ids;
   return rendered.text;
 }
@@ -406,17 +779,47 @@ function emptyResult(reason = 'no-candidates') {
  * Finalizes already-collected records synchronously. Used by the existing
  * unified-inject path so prompt-slot updates cannot race a generation.
  */
-function finalizeEnvelope({ baseItems, totalBudget, trace }) {
+function finalizeEnvelope({ baseItems, totalBudget, trace, allocationPolicy = 'priority' }) {
   if (baseItems.length === 0) return { ...emptyResult('no-candidates'), trace };
   const deduplicated = deduplicateRecords(baseItems, trace);
   const resolved = resolveConflicts(deduplicated, trace);
-  const grouped = buildSections(resolved);
-  const { selectedSections, selected, contentTokens } = selectWithinBudget(
-    grouped,
-    Math.max(1, Number(totalBudget) || 1),
-    trace,
-  );
-  const text = renderEnvelope(selectedSections, selected, trace);
+  const grouped = buildSections(resolved, allocationPolicy);
+
+  let selectedSections;
+  let selected;
+  let contentTokens;
+
+  if (allocationPolicy === 'product-continuity') {
+    const sel = selectWithinBudgetProductContinuity(grouped, totalBudget, trace);
+    if (sel.isImpossible) {
+      const allCandidateIds = baseItems.map(({ record }) => recordSourceId(record)).filter(Boolean);
+      return {
+        text: '',
+        tokens: 0,
+        selected_ids: [],
+        dropped_ids: [...new Set(allCandidateIds)],
+        injected_slots: [],
+        injectable_slots: [],
+        suppressed_slots: [...ALL_INDIVIDUAL_SLOTS],
+        reason: sel.reason,
+        trace,
+      };
+    }
+    selectedSections = sel.selectedSections;
+    selected = sel.selected;
+    contentTokens = sel.contentTokens;
+  } else {
+    const sel = selectWithinBudgetPriority(
+      grouped,
+      Math.max(1, Number(totalBudget) || 1),
+      trace,
+    );
+    selectedSections = sel.selectedSections;
+    selected = sel.selected;
+    contentTokens = sel.contentTokens;
+  }
+
+  const text = renderEnvelope(selectedSections, selected, trace, allocationPolicy);
   if (!text) return { ...emptyResult('budget-empty'), trace };
 
   return {
@@ -441,6 +844,7 @@ function sectionItems(
     povMode = 'allow-secondhand',
     lineage = null,
     allowLegacy = true,
+    allocationPolicy = 'priority',
   } = {},
 ) {
   const items = [];
@@ -458,7 +862,15 @@ function sectionItems(
           allowLegacy: false,
         }).length === 0
       ) continue;
-      items.push({ record: { ...record, section }, source: 'section' });
+      if (allocationPolicy === 'product-continuity') {
+        if (section !== 'narrative' && record?.kind === 'narrative_delta') continue;
+        const normalizedSec = section === 'narrative' && record.kind === 'narrative_delta'
+          ? 'narrative'
+          : inferredSection(record, allocationPolicy);
+        items.push({ record: { ...record, section: normalizedSec }, section: normalizedSec, source: 'section' });
+      } else {
+        items.push({ record: { ...record, section }, source: 'section' });
+      }
     }
   }
   return items;
@@ -479,7 +891,9 @@ export function buildMemoryEnvelopeSync({
   sections = {},
   totalBudget = 1200,
   allowLegacy = true,
+  allocationPolicy = null,
 } = {}) {
+  const policy = normalizeAllocationPolicy(allocationPolicy);
   if (chatUid == null || String(chatUid).trim() === '') return emptyResult('missing-chat-identity');
   if (lineage?.quarantined) return emptyResult('lineage-quarantined');
   const trace = { conflicts: [], retrieval: null, selected_ids: [], dropped_ids: [] };
@@ -490,6 +904,7 @@ export function buildMemoryEnvelopeSync({
     povMode,
     lineage,
     allowLegacy,
+    allocationPolicy: policy,
   });
   const hasQuery = (typeof query === 'string' ? query : query?.text ?? '').trim().length > 0;
   if (hasQuery) {
@@ -517,10 +932,20 @@ export function buildMemoryEnvelopeSync({
       ? retrieval
       : { ...retrieval, fallback: 'all-eligible-records' };
     for (const record of candidates) {
-      baseItems.push({
-        record: { ...record, section: record.section ?? 'evidence' },
-        source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
-      });
+      if (policy === 'product-continuity') {
+        if (record?.kind === 'narrative_delta') continue;
+        const sec = inferredSection(record, policy);
+        baseItems.push({
+          record: { ...record, section: sec },
+          section: sec,
+          source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
+        });
+      } else {
+        baseItems.push({
+          record: { ...record, section: record.section ?? 'evidence' },
+          source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
+        });
+      }
     }
   } else {
     const eligible = filterRetrievalRecords(records, {
@@ -531,9 +956,21 @@ export function buildMemoryEnvelopeSync({
       lineage,
       allowLegacy,
     });
-    for (const record of eligible) baseItems.push({ record, source: 'record' });
+    for (const record of eligible) {
+      if (policy === 'product-continuity') {
+        if (record?.kind === 'narrative_delta') continue;
+        const sec = inferredSection(record, policy);
+        baseItems.push({
+          record: { ...record, section: sec },
+          section: sec,
+          source: 'record',
+        });
+      } else {
+        baseItems.push({ record, source: 'record' });
+      }
+    }
   }
-  return finalizeEnvelope({ baseItems, totalBudget, trace });
+  return finalizeEnvelope({ baseItems, totalBudget, trace, allocationPolicy: policy });
 }
 
 /**
@@ -555,7 +992,9 @@ export async function buildMemoryEnvelope({
   allowVector = true,
   allowAgentic = false,
   allowLegacy = true,
+  allocationPolicy = null,
 } = {}) {
+  const policy = normalizeAllocationPolicy(allocationPolicy);
   if (chatUid == null || String(chatUid).trim() === '') return emptyResult('missing-chat-identity');
   if (lineage?.quarantined) return emptyResult('lineage-quarantined');
 
@@ -567,6 +1006,7 @@ export async function buildMemoryEnvelope({
     povMode,
     lineage,
     allowLegacy,
+    allocationPolicy: policy,
   });
   const hasQuery = (typeof query === 'string' ? query : query?.text ?? '').trim().length > 0;
   if (Array.isArray(records) && records.length > 0) {
@@ -599,10 +1039,20 @@ export async function buildMemoryEnvelope({
         ? retrieval
         : { ...retrieval, fallback: 'all-eligible-records' };
       for (const record of candidates) {
-        baseItems.push({
-          record: { ...record, section: record.section ?? 'evidence' },
-          source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
-        });
+        if (policy === 'product-continuity') {
+          if (record?.kind === 'narrative_delta') continue;
+          const sec = inferredSection(record, policy);
+          baseItems.push({
+            record: { ...record, section: sec },
+            section: sec,
+            source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
+          });
+        } else {
+          baseItems.push({
+            record: { ...record, section: record.section ?? 'evidence' },
+            source: retrieval.candidates.length > 0 ? 'retrieval' : 'record-fallback',
+          });
+        }
       }
     } else {
       const eligible = filterRetrievalRecords(records, {
@@ -613,11 +1063,23 @@ export async function buildMemoryEnvelope({
         lineage,
         allowLegacy,
       });
-      for (const record of eligible) baseItems.push({ record, source: 'record' });
+      for (const record of eligible) {
+        if (policy === 'product-continuity') {
+          if (record?.kind === 'narrative_delta') continue;
+          const sec = inferredSection(record, policy);
+          baseItems.push({
+            record: { ...record, section: sec },
+            section: sec,
+            source: 'record',
+          });
+        } else {
+          baseItems.push({ record, source: 'record' });
+        }
+      }
     }
   }
 
-  return finalizeEnvelope({ baseItems, totalBudget, trace });
+  return finalizeEnvelope({ baseItems, totalBudget, trace, allocationPolicy: policy });
 }
 
 /** Creates a broker with optional vector/agentic callbacks and a small cache. */
@@ -630,12 +1092,14 @@ export function createMemoryBroker({
 } = {}) {
   return {
     async compose(input = {}) {
+      const policy = normalizeAllocationPolicy(input.allocationPolicy);
       const queryText = typeof input.query === 'string' ? input.query : input.query?.text ?? '';
       const tip = input.chatTipFingerprint ?? '';
-      const key = `${input.chatUid ?? ''}|${input.branchUid ?? ''}|${tip}|${queryText}`;
+      const key = `${input.chatUid ?? ''}|${input.branchUid ?? ''}|${tip}|${queryText}|${policy}`;
       if (tip && cache.has(key)) return { ...cache.get(key), trace: { ...cache.get(key).trace, cache_hit: true } };
       const result = await buildMemoryEnvelope({
         ...input,
+        allocationPolicy: policy,
         vectorSearch: input.vectorSearch ?? vectorSearch,
         agenticSearch: input.agenticSearch ?? agenticSearch,
         allowVector: input.allowVector ?? allowVector,

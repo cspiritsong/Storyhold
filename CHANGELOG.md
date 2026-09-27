@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Headless qualification rig** (`npm run qualification`): replays a synthetic roleplay chat through the real product pipeline with a scripted sloppy model, asserting grounding admission, citation containment, hygiene, bounded magnitudes, and coverage — a controlled pre-test that runs on any machine before live qualification.
 
+## [1.17.0] - 2026-09-27
+
+### Added
+
+- **Core narrative continuity preservation.** The broker prompt envelope now prioritizes recent causal and emotional story narrative over static cards during token pressure, ensuring the "story so far" (promises, emotional shifts, recent causes) is not starved or dropped from the roleplay model prompt.
+- **Self-contained narrative extraction.** Extraction prompts send isolated window text without dragging active chat history or live-context prompt markers into auxiliary model calls, keeping background memory calls clean and cost-effective.
+- **Comprehensive continuity qualification suite.** Synthetic qualification and pinned disposable SillyTavern browser smoke tests asserting that recent narrative continuity survives serialization, chat reload, and token budgeting.
+
+### Changed
+
+- **Unified credit and provenance attribution.** Explicit attribution in manifests, `package.json`, and `README.md` for both **Smart Memory** (Senjin the Dragon) and **Summaryception** (Lodactio).
+
 ## [1.16.0] - 2026-09-01
 
 ### Added

@@ -42,3 +42,78 @@ export function effectiveMemoryResponseLength(
   if (generationBudget === -1 || !Number.isFinite(cap) || cap <= 0) return desired;
   return Math.max(requestedTokens, Math.min(desired, Math.floor(cap)));
 }
+
+/**
+ * Builds the compact narrative-state prompt for Product mode.
+ *
+ * Enforces causal order, emotional meaning, distinct story chronology vs transcript order,
+ * preserved relative/unknown time without invented dates, labeled non-fact modalities
+ * (backstory, flashback, hypothetical, rumor), and explicit return to the current scene.
+ */
+export function buildProductNarrativePrompt(storyText, contextText) {
+  return [
+    'Role: precise narrative-state tracker.',
+    'Summarize only the new narrative delta needed to continue the prior context.',
+    'Preserve causal order, decisions, motivations, emotional changes, relationship dynamics, and unresolved tension.',
+    'Keep transcript order distinct from story chronology: label backstory and flashbacks as prior story time, and state any return to the current scene explicitly.',
+    'Preserve unknown or relative timing verbatim without inventing exact dates or calendar timestamps.',
+    'Label hypothetical futures, plans, rumors, suspicions, and unverified claims in prose rather than stating them as fact.',
+    'Do not repeat prior context, invent connective events, or add unsupported drama. Return one compact line.',
+    '<prior_context>',
+    contextText || '(none yet)',
+    '</prior_context>',
+    '<new_passage>',
+    storyText || '',
+    '</new_passage>',
+  ].join('\n');
+}
+
+/**
+ * Production-owned self-contained transport seam for memory summarization.
+ *
+ * Product self-contained mode sends exactly one user message and requires
+ * instructOverride: true on the main generateRaw route, while delegating to
+ * effective main budget policy and leaving direct-source budgets unchanged.
+ */
+export async function runSelfContainedMemorySummarizeTransport(
+  { source, quietPrompt, responseLength, effectiveMainResponseLength },
+  deps = {},
+) {
+  const promptMessage = [{ role: 'user', content: quietPrompt }];
+
+  if (source === 'main') {
+    return await deps.generateRaw({
+      prompt: promptMessage,
+      instructOverride: true,
+      quietToLoud: false,
+      responseLength: effectiveMainResponseLength,
+    });
+  }
+
+  if (source === 'webllm') {
+    if (typeof deps.isWebLlmSupported === 'function' && !deps.isWebLlmSupported()) {
+      return await deps.generateRaw({
+        prompt: promptMessage,
+        instructOverride: true,
+        quietToLoud: false,
+        responseLength: effectiveMainResponseLength,
+      });
+    }
+    return await deps.generateWebLlmChatPrompt(promptMessage, { max_tokens: responseLength });
+  }
+
+  if (typeof deps.executeDirectSource === 'function') {
+    return await deps.executeDirectSource(source, quietPrompt, { responseLength });
+  }
+
+  switch (source) {
+    case 'ollama':
+      return await deps.generateOllamaChat(quietPrompt, { responseLength });
+    case 'openai_compatible':
+      return await deps.generateOpenAiCompatibleChat(quietPrompt, { responseLength });
+    case 'connection_profile':
+      return await deps.generateConnectionProfileChat(quietPrompt, { responseLength });
+    default:
+      throw new Error(`Unsupported memory source: ${source}`);
+  }
+}

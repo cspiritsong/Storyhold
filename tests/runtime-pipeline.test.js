@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildIngestWindow } from '../projections.js';
 import { createRuntimePipeline } from '../runtime-pipeline.js';
+import { advanceProductCursor, createProductPipeline } from '../product-runtime.js';
+import { buildSectionsFromTypedState, buildMemoryEnvelopeSync } from '../memory-broker.js';
 
 function makeWindow(lineage = null) {
   return buildIngestWindow({
@@ -137,4 +139,128 @@ test('abort after narrative state load prevents model work and narrative saves',
   await assert.rejects(pending, /aborted/);
   assert.equal(summarizeCalls, 0);
   assert.equal(narrativeSaves, 0);
+});
+
+test('exact 5-step partial retry reload sequence with unified slot inspection', async () => {
+  const metadata = {};
+  const calls = { summarize: 0, structured: 0 };
+  let structuredShouldFail = true;
+
+  const window = {
+    window_id: 'win-exact-seq',
+    chat_uid: 'chat-exact-seq',
+    branch_uid: 'branch-exact-seq',
+    messages: [
+      { mesId: 101, name: 'Badi', is_user: true, mes: 'Mira reaches the bridge.' },
+      { mesId: 102, name: 'Mira', is_user: false, mes: 'Rowan broke his promise.' },
+    ],
+    source_range: { kind: 'mesId', start: 101, end: 102 },
+    fingerprint: 'fp-exact-seq',
+    story_text: 'Mira reaches the bridge. Rowan broke his promise.',
+  };
+
+  const createTestPipeline = (meta) => createProductPipeline({
+    metadata: meta,
+    settings: {
+      single_extension_mode: true,
+      chatUid: 'chat-exact-seq',
+      branchUid: 'branch-exact-seq',
+    },
+    summarizeNarrative: async () => {
+      calls.summarize++;
+      return 'CAUSE: Rowan broke his promise to protect Kael.';
+    },
+    extractStructured: async () => {
+      calls.structured++;
+      if (structuredShouldFail) {
+        throw new Error('structured extraction failed');
+      }
+      return {
+        facts: [],
+        state: [{ id: 'state-seq', content: 'Mira is at the bridge.', validity: { status: 'active' } }],
+      };
+    },
+  });
+
+  // Step 1: Ingest window W; narrative succeeds once, structured extractor fails
+  const pipeline1 = createTestPipeline(metadata);
+  const res1 = await pipeline1.ingest(window);
+  if (res1.status === 'completed') await advanceProductCursor(metadata, window);
+
+  // Step 2: Result/status is partial; unified slot contains N; no structured record fabricated; cursor held
+  assert.equal(res1.status, 'partial');
+  assert.equal(calls.summarize, 1);
+  assert.equal(calls.structured, 1);
+
+  assert.equal(metadata.smartMemory?.product_cursor ?? null, null);
+
+  const sections1 = buildSectionsFromTypedState({
+    chatUid: 'chat-exact-seq',
+    branchUid: 'branch-exact-seq',
+    narrativeState: metadata.smartMemory.narrative,
+  });
+  const env1 = buildMemoryEnvelopeSync({
+    chatUid: 'chat-exact-seq',
+    branchUid: 'branch-exact-seq',
+    allocationPolicy: 'product-continuity',
+    sections: sections1,
+    records: metadata.smartMemory.structured_records ?? [],
+    totalBudget: 2000,
+  });
+  assert.ok(env1.text.includes('CAUSE: Rowan broke his promise'));
+  assert.equal(env1.text.includes('CURRENT STATE:'), false);
+
+  // Step 3 & 4: Retry the same W; narrative is skipped (not called again), structured succeeds
+  structuredShouldFail = false;
+  const res2 = await pipeline1.ingest(window);
+  if (res2.status === 'completed') await advanceProductCursor(metadata, window);
+  assert.equal(res2.status, 'completed');
+  assert.equal(calls.summarize, 1, 'summarizeNarrative must not be called again on retry');
+  assert.equal(calls.structured, 2, 'extractStructured retried and succeeded');
+
+  assert.ok(metadata.smartMemory?.product_cursor != null);
+  assert.equal(metadata.smartMemory.product_cursor.last_mes_id, 102);
+
+  const sections2 = buildSectionsFromTypedState({
+    chatUid: 'chat-exact-seq',
+    branchUid: 'branch-exact-seq',
+    narrativeState: metadata.smartMemory.narrative,
+  });
+  const env2 = buildMemoryEnvelopeSync({
+    chatUid: 'chat-exact-seq',
+    branchUid: 'branch-exact-seq',
+    allocationPolicy: 'product-continuity',
+    sections: sections2,
+    records: metadata.smartMemory.structured_records ?? [],
+    totalBudget: 2000,
+  });
+  assert.ok(env2.text.includes('CAUSE: Rowan broke his promise'));
+  assert.ok(env2.text.includes('CURRENT STATE:'));
+  assert.ok(env2.text.includes('Mira is at the bridge.'));
+  assert.equal(metadata.smartMemory.narrative.layers[0].length, 1, 'layer 0 has exactly one N');
+
+  // Step 5: Serialize/clone metadata and construct a fresh runtime/injection context
+  const clonedMetadata = JSON.parse(JSON.stringify(metadata));
+  const pipelineFresh = createTestPipeline(clonedMetadata);
+  const resReplay = await pipelineFresh.ingest(window);
+
+  assert.equal(resReplay.replayed, true);
+  assert.equal(calls.summarize, 1, 'no model work on reload/replay');
+  assert.equal(calls.structured, 2, 'no model work on reload/replay');
+
+  const sectionsReplay = buildSectionsFromTypedState({
+    chatUid: 'chat-exact-seq',
+    branchUid: 'branch-exact-seq',
+    narrativeState: clonedMetadata.smartMemory.narrative,
+  });
+  const envReplay = buildMemoryEnvelopeSync({
+    chatUid: 'chat-exact-seq',
+    branchUid: 'branch-exact-seq',
+    allocationPolicy: 'product-continuity',
+    sections: sectionsReplay,
+    records: clonedMetadata.smartMemory.structured_records ?? [],
+    totalBudget: 2000,
+  });
+  assert.ok(envReplay.text.includes('CAUSE: Rowan broke his promise'));
+  assert.equal(clonedMetadata.smartMemory.narrative.layers[0].length, 1, 'persisted narrative layer 0 has exactly one N');
 });

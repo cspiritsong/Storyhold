@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   collectExtensionPayload,
   validateExtensionPayload,
 } from '../tools/package-extension.mjs';
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -996,10 +1001,6 @@ test('Product mode exposes an optional current-chat Memory Explorer entry point'
   assert.match(settings, /#sm_open_product_explorer/);
   assert.match(settings, /renderProductExplorer\(/);
 });
-test('stale Product narrative is withheld from prompt injection until refreshed', async () => {
-  const source = await readFile(resolve(root, 'unified-inject.js'), 'utf8');
-  assert.match(source, /narrativeState: meta\.narrative_stale \? null : meta\.narrative/);
-});
 
 test('Product mode hides compatibility-only action rows instead of exposing dead ends', async () => {
   const [html, settings] = await Promise.all([
@@ -1778,4 +1779,266 @@ test('async legacy clear and arc resolution retain operation identity through aw
   assert.match(settings, /operation\.stillCurrent\(\)[\s\S]*clearSessionMemories/);
   assert.match(arcs, /resolveArcWithSummary[\s\S]*abortCheck/);
   assert.match(ui, /resolveArcWithSummary\([\s\S]*operation/);
+});
+
+test('packaged generate.js behavior: self-contained transport uses chat-style generateRaw, instructOverride, and effective main budget', async () => {
+  const tmpDir = await mkdtemp(resolve(tmpdir(), 'sm-generate-test-'));
+  try {
+    const extDir = resolve(tmpDir, 'scripts', 'extensions', 'third-party', 'Storyhold');
+    await mkdir(extDir, { recursive: true });
+
+    await copyFile(resolve(root, 'generate.js'), resolve(extDir, 'generate.js'));
+    await copyFile(resolve(root, 'constants.js'), resolve(extDir, 'constants.js'));
+    await copyFile(resolve(root, 'generation-policy.js'), resolve(extDir, 'generation-policy.js'));
+
+    const scriptStub = `
+      export const capturedCalls = [];
+      export async function generateRaw(args) {
+        capturedCalls.push({ type: 'generateRaw', args });
+        return 'Mock raw output';
+      }
+      export async function generateQuietPrompt(args) {
+        capturedCalls.push({ type: 'generateQuietPrompt', args });
+        return 'Mock quiet output';
+      }
+      export function getMaxContextSize() { return 8192; }
+      export function getRequestHeaders() { return {}; }
+    `;
+    await writeFile(resolve(tmpDir, 'script.js'), scriptStub);
+
+    const reasoningDir = resolve(tmpDir, 'scripts');
+    await writeFile(resolve(reasoningDir, 'reasoning.js'), `
+      export const reasoning_templates = [];
+      export function parseReasoningFromString(text) { return { text, reasoning: '' }; }
+    `);
+
+    const extensionsStub = `
+      export let extension_settings = {
+        Storyhold: {
+          generation_budget: 8192,
+        },
+      };
+      export let mockContext = {
+        chatCompletionSettings: {},
+        chat: [{ mes: 'LIVE_CHAT_ONLY_MARKER' }],
+      };
+      export function getContext() {
+        return mockContext;
+      }
+    `;
+    await writeFile(resolve(tmpDir, 'scripts', 'extensions.js'), extensionsStub);
+
+    const sharedStub = `
+      export function isWebLlmSupported() { return false; }
+      export async function generateWebLlmChatPrompt() { return ''; }
+      export class ConnectionManagerRequestService {}
+    `;
+    await writeFile(resolve(tmpDir, 'scripts', 'extensions', 'shared.js'), sharedStub);
+
+    const { generateMemorySummarize } = await import(pathToFileURL(resolve(extDir, 'generate.js')).href);
+    const { capturedCalls } = await import(pathToFileURL(resolve(tmpDir, 'script.js')).href);
+    const extModule = await import(pathToFileURL(resolve(tmpDir, 'scripts', 'extensions.js')).href);
+
+    // Case 1: Ordinary main model (500 responseLength)
+    capturedCalls.length = 0;
+    extModule.mockContext.chatCompletionSettings = {
+      chat_completion_source: 'custom',
+      custom_model: 'mock-model',
+    };
+    extModule.extension_settings.Storyhold.source = 'main';
+
+    const res1 = await generateMemorySummarize('Prompt for ordinary', {
+      responseLength: 500,
+      contextMode: 'self-contained',
+    });
+
+    assert.equal(res1, 'Mock raw output');
+    assert.equal(capturedCalls.length, 1);
+    assert.equal(capturedCalls[0].type, 'generateRaw');
+    assert.equal(capturedCalls[0].args.instructOverride, true);
+    assert.equal(capturedCalls[0].args.quietToLoud, false);
+    assert.equal(capturedCalls[0].args.responseLength, 500);
+    assert.deepEqual(capturedCalls[0].args.prompt, [{ role: 'user', content: 'Prompt for ordinary' }]);
+    assert.equal(JSON.stringify(capturedCalls[0].args).includes('LIVE_CHAT_ONLY_MARKER'), false);
+
+    // Case 2: Gemini-thinking Makersuite model with 32768 global budget -> effective responseLength 8192
+    capturedCalls.length = 0;
+    extModule.extension_settings.Storyhold.generation_budget = 32768;
+    extModule.mockContext.chatCompletionSettings = {
+      chat_completion_source: 'makersuite',
+      google_model: 'gemini-3.7-flash',
+    };
+
+    await generateMemorySummarize('Prompt for thinking', {
+      responseLength: 500,
+      contextMode: 'self-contained',
+    });
+
+    assert.equal(capturedCalls.length, 1);
+    assert.equal(capturedCalls[0].type, 'generateRaw');
+    assert.equal(capturedCalls[0].args.instructOverride, true);
+    assert.equal(capturedCalls[0].args.responseLength, 8192);
+
+    // Mutation controls
+    assert.equal(capturedCalls[0].args.instructOverride === true, true);
+    assert.equal(capturedCalls[0].args.prompt.length, 1);
+    assert.equal(capturedCalls[0].args.prompt[0].role, 'user');
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('packaged unified-inject.js behavior: real injection seam handles absent, advisory, blocking, and malformed stale markers', async () => {
+  const tmpDir = await mkdtemp(resolve(tmpdir(), 'sm-inject-seam-test-'));
+  try {
+    const extDir = resolve(tmpDir, 'scripts', 'extensions', 'third-party', 'Storyhold');
+    await mkdir(extDir, { recursive: true });
+
+    const entries = await readdir(root);
+    for (const e of entries) {
+      if (e.endsWith('.js') || e.endsWith('.json') || e.endsWith('.html') || e.endsWith('.css')) {
+        await copyFile(resolve(root, e), resolve(extDir, e));
+      }
+    }
+
+    const scriptStub = `
+      export const extension_prompts = {};
+      export const setPromptCalls = [];
+      export function setExtensionPrompt(key, value, type, depth) {
+        setPromptCalls.push({ key, value, type, depth });
+        extension_prompts[key] = { value };
+      }
+      export const extension_prompt_types = { IN_PROMPT: 1, NONE: 0 };
+      export const extension_prompt_roles = { SYSTEM: 0, USER: 1 };
+      export async function generateRaw() { return ''; }
+      export async function generateQuietPrompt() { return ''; }
+      export function getMaxContextSize() { return 8192; }
+      export function getRequestHeaders() { return {}; }
+      export function getCurrentChatId() { return 'chat-seam-1'; }
+      export function saveSettingsDebounced() {}
+      export function saveMetadataDebounced() {}
+      export let chat_metadata = {};
+    `;
+    await writeFile(resolve(tmpDir, 'script.js'), scriptStub);
+
+    await mkdir(resolve(tmpDir, 'scripts', 'macros'), { recursive: true });
+    await writeFile(resolve(tmpDir, 'scripts', 'macros', 'macro-system.js'), 'export const macros = {};');
+    await writeFile(resolve(tmpDir, 'scripts', 'macros.js'), 'export class MacrosParser {}');
+    await writeFile(resolve(tmpDir, 'scripts', 'power-user.js'), 'export const power_user = {};');
+    await writeFile(resolve(tmpDir, 'scripts', 'reasoning.js'), 'export const reasoning_templates = []; export function parseReasoningFromString(t) { return { text: t, reasoning: "" }; }');
+    await writeFile(resolve(tmpDir, 'scripts', 'secrets.js'), 'export const SECRET_KEYS = {}; export function findSecret() { return ""; } export const secret_state = {}; export function getSecret() { return ""; }');
+    await mkdir(resolve(tmpDir, 'scripts', 'extensions'), { recursive: true });
+    await writeFile(resolve(tmpDir, 'scripts', 'extensions', 'shared.js'), 'export function isWebLlmSupported() { return false; } export async function generateWebLlmChatPrompt() { return ""; } export class ConnectionManagerRequestService {}');
+
+    const extensionsStub = `
+      export let extension_settings = {
+        smart_memory: {
+          enabled: true,
+          single_extension_mode: true,
+          total_inject_budget: 8000,
+          unified_injection: false,
+          unified_position: 1,
+          unified_depth: 0,
+        },
+      };
+      export let mockContext = {
+        name2: 'Mira',
+        chat: [{ mes: 'Previous message' }, { mes: 'Recent bridge question' }],
+        chatMetadata: {
+          smartMemory: {
+            chat_uid: 'chat-seam-1',
+            narrative: {
+              chat_uid: 'chat-seam-1',
+              branch_uid: 'chat-seam-1',
+              layers: [[{
+                id: 'snip-winter-oath',
+                text: 'Mira remembers the winter oath.',
+                scope: { chat_uid: 'chat-seam-1', branch_uid: 'chat-seam-1' },
+                source_range: { kind: 'mesId', start: 1, end: 2 },
+              }]],
+            },
+          },
+        },
+      };
+      export function getContext() {
+        return mockContext;
+      }
+    `;
+    await writeFile(resolve(tmpDir, 'scripts', 'extensions.js'), extensionsStub);
+
+    const { injectUnified } = await import(pathToFileURL(resolve(extDir, 'unified-inject.js')).href);
+    const { setCurrentLineage } = await import(pathToFileURL(resolve(extDir, 'lineage-runtime.js')).href);
+    const { setPromptCalls } = await import(pathToFileURL(resolve(tmpDir, 'script.js')).href);
+    const extMod = await import(pathToFileURL(resolve(tmpDir, 'scripts', 'extensions.js')).href);
+
+    setCurrentLineage({ chatUid: 'chat-seam-1', branchUid: 'chat-seam-1', quarantined: false });
+
+    // 1. Absent (null): narrative included
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = null;
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valAbsent = setPromptCalls.at(-1)?.value ?? '';
+    assert.ok(valAbsent.includes('winter oath'), 'absent marker must include narrative');
+
+    // 2. Absent (undefined): narrative included
+    delete extMod.mockContext.chatMetadata.smartMemory.narrative_stale;
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valUndef = setPromptCalls.at(-1)?.value ?? '';
+    assert.ok(valUndef.includes('winter oath'), 'undefined marker must include narrative');
+
+    // 3. Advisory record-edited: narrative included
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { reason: 'record-edited', blocks_injection: false };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valAdv1 = setPromptCalls.at(-1)?.value ?? '';
+    assert.ok(valAdv1.includes('winter oath'), 'advisory record-edited must include narrative');
+
+    // 4. Advisory records-changed: narrative included
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { reason: 'records-changed' };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valAdv2 = setPromptCalls.at(-1)?.value ?? '';
+    assert.ok(valAdv2.includes('winter oath'), 'advisory records-changed must include narrative');
+
+    // 5. Advisory timeline-edited: narrative included
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { reason: 'timeline-edited' };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valAdv3 = setPromptCalls.at(-1)?.value ?? '';
+    assert.ok(valAdv3.includes('winter oath'), 'advisory timeline-edited must include narrative');
+
+    // 6. Explicit blocking: narrative withheld
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { blocks_injection: true };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valBlock = setPromptCalls.at(-1)?.value ?? '';
+    assert.equal(valBlock.includes('winter oath'), false, 'explicit blocks_injection:true must withhold narrative');
+
+    // 7. Unknown reason: narrative withheld
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { reason: 'unknown-catastrophe' };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valUnknown = setPromptCalls.at(-1)?.value ?? '';
+    assert.equal(valUnknown.includes('winter oath'), false, 'unknown reason must withhold narrative');
+
+    // 8. Malformed marker: narrative withheld
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = 'malformed-string';
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valMalformed = setPromptCalls.at(-1)?.value ?? '';
+    assert.equal(valMalformed.includes('winter oath'), false, 'malformed marker must withhold narrative');
+
+    // 9. Boolean false overrides unknown reason: narrative included
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { blocks_injection: false, reason: 'unknown-reason' };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valBoolFalse = setPromptCalls.at(-1)?.value ?? '';
+    assert.ok(valBoolFalse.includes('winter oath'), 'blocks_injection:false must override unknown reason');
+
+    // 10. Boolean true overrides advisory reason: narrative withheld
+    extMod.mockContext.chatMetadata.smartMemory.narrative_stale = { blocks_injection: true, reason: 'record-edited' };
+    injectUnified({ respondingCharacter: 'Mira' });
+    const valBoolTrue = setPromptCalls.at(-1)?.value ?? '';
+    assert.equal(valBoolTrue.includes('winter oath'), false, 'blocks_injection:true must override advisory reason');
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('npm publication closure excludes .hermes evidence and plans', async () => {
+  const { stdout, stderr } = await execFileAsync('npm', ['pack', '--dry-run'], { cwd: root });
+  const output = `${stdout}\n${stderr}`;
+  assert.equal(output.includes('.hermes'), false, 'npm pack must not include any .hermes files');
 });

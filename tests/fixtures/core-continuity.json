@@ -1,0 +1,152 @@
+{
+  "chat_uid": "fixture-continuity-chat",
+  "branch_uid": "fixture-continuity-branch",
+  "markers": {
+    "foundation": "FOUNDATION: Mira trusted Rowan and accepted his help.",
+    "cause": "CAUSE: Rowan broke his promise to protect Kael.",
+    "emotional_consequence": "EMOTIONAL_CONSEQUENCE: Mira feels betrayed and refuses Rowan's help at the bridge.",
+    "unresolved_tension": "UNRESOLVED_TENSION: Kael is trapped while Rowan asks for one last chance.",
+    "live_chat_only_marker": "LIVE_CHAT_ONLY_MARKER: ambient text that must never enter a self-contained request."
+  },
+  "temporal_passage": [
+    {
+      "id": "current_1",
+      "text": "CURRENT_1: At the bridge, Mira refuses Rowan's help.",
+      "semantic_class": "current"
+    },
+    {
+      "id": "backstory_unknown",
+      "text": "BACKSTORY_UNKNOWN: Rowan recalls that years ago, on an unknown date, he abandoned the watch.",
+      "semantic_class": "backstory; unknown/relative"
+    },
+    {
+      "id": "flashback",
+      "text": "FLASHBACK: Mira remembers the winter oath before returning her attention to the bridge.",
+      "semantic_class": "flashback then return-current"
+    },
+    {
+      "id": "hypothetical",
+      "text": "HYPOTHETICAL: If the seal breaks tomorrow, Kael might be trapped.",
+      "semantic_class": "conditional; not fact"
+    },
+    {
+      "id": "rumor",
+      "text": "RUMOR: A courier claims the queen already fled; Mira cannot verify it.",
+      "semantic_class": "rumor; not fact"
+    },
+    {
+      "id": "current_2",
+      "text": "CURRENT_2: Back at the bridge now, Rowan asks for one last chance.",
+      "semantic_class": "current return"
+    }
+  ],
+  "narrative_snippets": [
+    {
+      "id": "snip-foundation",
+      "layer": 1,
+      "text": "FOUNDATION: Mira trusted Rowan and accepted his help. They travelled together across the northern borders through long winters and quiet journeys.",
+      "source_range": { "start": 0, "end": 20 }
+    },
+    {
+      "id": "snip-cause",
+      "layer": 0,
+      "text": "CAUSE: Rowan broke his promise to protect Kael when the garrison fell to the raiders.",
+      "source_range": { "start": 21, "end": 40 }
+    },
+    {
+      "id": "snip-consequence",
+      "layer": 0,
+      "text": "EMOTIONAL_CONSEQUENCE: Mira feels betrayed and refuses Rowan's help at the bridge, turning her face away.",
+      "source_range": { "start": 41, "end": 60 }
+    },
+    {
+      "id": "snip-tension",
+      "layer": 0,
+      "text": "UNRESOLVED_TENSION: Kael is trapped while Rowan asks for one last chance to redeem his oath.",
+      "source_range": { "start": 61, "end": 80 }
+    }
+  ],
+  "competing_records": [
+    {
+      "id": "state-bridge",
+      "kind": "state",
+      "content": "Mira stands at the ruined bridge holding the iron seal while cold river wind whips across the gorge. Rowan waits three paces behind her with his hand upon the hilt of an uncleaned sword.",
+      "validity": { "status": "active" },
+      "confidence": 0.95
+    },
+    {
+      "id": "state-gate",
+      "kind": "state",
+      "content": "The eastern archway of the citadel is choked with timber and charred stones. Sentry horns echo faintly from the south tower at irregular intervals throughout the afternoon.",
+      "validity": { "status": "active" },
+      "confidence": 0.9
+    },
+    {
+      "id": "arc-kael-rescue",
+      "kind": "arc",
+      "content": "Active rescue thread: Kael remains locked within the lower water vaults while the floodgates steadily groan under seasonal rain.",
+      "validity": { "status": "active" },
+      "confidence": 0.92
+    },
+    {
+      "id": "arc-seal-crossing",
+      "kind": "arc",
+      "content": "Active crossing thread: Reaching the southern citadel requires repairing the winches before dusk or finding an alternate river route.",
+      "validity": { "status": "active" },
+      "confidence": 0.88
+    },
+    {
+      "id": "epistemic-mira-key",
+      "kind": "epistemic",
+      "subject": "Mira",
+      "type": "knows",
+      "content": "Mira knows that Rowan carried a counterfeit royal writ when they departed Oakhaven.",
+      "validity": { "status": "active" },
+      "confidence": 0.9
+    },
+    {
+      "id": "epistemic-rowan-shame",
+      "kind": "epistemic",
+      "subject": "Rowan",
+      "type": "hiding",
+      "content": "Rowan conceals the fact that he was dismissed from the frontier patrol for cowardice.",
+      "validity": { "status": "active" },
+      "confidence": 0.85
+    },
+    {
+      "id": "fact-seal-history",
+      "kind": "fact",
+      "content": "The High Gate of Miraven was consecrated four centuries ago during the reign of Queen Valora.",
+      "validity": { "status": "active" },
+      "confidence": 0.8
+    },
+    {
+      "id": "fact-river-depth",
+      "kind": "fact",
+      "content": "The gorge below the bridge plunges eighty cubits into rocky rapids that make swimming fatal.",
+      "validity": { "status": "active" },
+      "confidence": 0.85
+    },
+    {
+      "id": "fact-courier-report",
+      "kind": "fact",
+      "content": "A courier wagon passed through the outer turnstile two nights ago bearing supplies for the frontier guard.",
+      "validity": { "status": "active" },
+      "confidence": 0.75
+    },
+    {
+      "id": "evidence-lantern",
+      "kind": "session",
+      "content": "Mira adjusted the shuttered lantern twice during the ascent to keep the wind from snuffing the flame.",
+      "validity": { "status": "active" },
+      "confidence": 0.7
+    },
+    {
+      "id": "evidence-footprints",
+      "kind": "session",
+      "content": "Fresh boot prints in the mud indicate three armored riders crossed westward shortly after the rain began.",
+      "validity": { "status": "active" },
+      "confidence": 0.7
+    }
+  ]
+}

@@ -230,11 +230,10 @@ export function narrativeIdentityMatches(
 }
 
 /**
- * Assembles only snippets whose explicit provenance matches the requested
- * chat/branch identity. Snippets without explicit identity remain admissible
- * for compatibility; any explicit foreign or mixed identity is excluded.
+ * Returns an ordered list of individual narrative snippets filtered for identity.
+ * Snippets are ordered from oldest/deepest history to recent layer-0 deltas.
  */
-export function assembleNarrativeScoped(
+export function listNarrativeSnippetsScoped(
   state,
   { chatUid = null, chatId = null, branchUid = undefined, requireChat = false, requireBranch = false } = {},
 ) {
@@ -248,9 +247,48 @@ export function assembleNarrativeScoped(
     requireChat,
     requireBranch,
   });
-  if (!scoped) return '';
-  const parts = layerTexts(scoped, 0);
-  return parts.join(' ');
+  if (!scoped) return [];
+
+  const records = [];
+  let order = 0;
+  for (let layerIndex = scoped.layers.length - 1; layerIndex >= 0; layerIndex--) {
+    const layer = scoped.layers[layerIndex] ?? [];
+    for (let snippetIndex = 0; snippetIndex < layer.length; snippetIndex++) {
+      const snippet = layer[snippetIndex];
+      const text = typeof snippet?.text === 'string' ? snippet.text.trim() : '';
+      if (!text) continue;
+
+      const id = snippet?.id ?? `narrative-layer-${layerIndex}-${snippetIndex}`;
+      const rec = {
+        id,
+        kind: 'narrative_delta',
+        content: text,
+        scope: {
+          chat_uid: chatUid ?? resolved.chat_uid ?? null,
+          branch_uid: branchUid !== undefined ? branchUid : (resolved.branch_uid ?? null),
+        },
+        narrative_layer: layerIndex,
+        narrative_order: order++,
+      };
+      if (snippet?.source_range) rec.source_range = clone(snippet.source_range);
+      if (snippet?.source_ranges) rec.source_ranges = clone(snippet.source_ranges);
+      records.push(rec);
+    }
+  }
+  return records;
+}
+
+/**
+ * Assembles only snippets whose explicit provenance matches the requested
+ * chat/branch identity. Snippets without explicit identity remain admissible
+ * for compatibility; any explicit foreign or mixed identity is excluded.
+ */
+export function assembleNarrativeScoped(
+  state,
+  options = {},
+) {
+  const records = listNarrativeSnippetsScoped(state, options);
+  return records.map((record) => record.content).join(' ');
 }
 
 function normalizeWindow({
