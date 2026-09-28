@@ -37,17 +37,6 @@ _This is an independent extension for SillyTavern and is not affiliated with the
   </tr>
 </table>
 
-## ☕ Support the Developer
-
-I'm a solo developer building tools to make AI roleplay better for everyone. Storyhold is maintained in my free time, and as I'm currently navigating some financial challenges, any support means a lot.
-
-If this extension adds something to your stories, please consider:
-
-- **[Sponsoring me on GitHub](https://github.com/sponsors/senjinthedragon)**
-- **[Buying me a coffee on Ko-fi](https://ko-fi.com/senjinthedragon)**
-- **Bitcoin:** `bc1qjsaqw6rjcmhv6ywv2a97wfd4zxnae3ncrn8mf9`
-- **Starring this repository** to help others find it.
-
 ## Installation
 
 - In SillyTavern, open the **Extensions** menu (the stack of cubes icon)
