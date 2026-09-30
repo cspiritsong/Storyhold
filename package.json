@@ -1,6 +1,6 @@
 {
   "name": "storyhold",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "type": "module",
   "description": "Chat-local narrative memory for SillyTavern. Derivative of Smart-Memory (Senjin) & Summaryception (Lodactio).",
   "license": "AGPL-3.0-or-later",

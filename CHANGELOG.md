@@ -5,11 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.17.1] - 2026-09-30
 
-### Added
+### Fixed
 
-- **Headless qualification rig** (`npm run qualification`): replays a synthetic roleplay chat through the real product pipeline with a scripted sloppy model, asserting grounding admission, citation containment, hygiene, bounded magnitudes, and coverage — a controlled pre-test that runs on any machine before live qualification.
+- **Branch and checkpoint creation warnings removed.** Removed the obsolete April 2026 warning that told users to enable read-only mode when creating a bookmark or branch. With per-chat `chat_uid` tree isolation, new branches and checkpoints no longer share mutable memory with parent chats.
+- **Silent branch chat load reconciliation.** When a newly branched chat file is loaded, prefix alignment now operates silently instead of alarming the player with an in-chat rollback warning.
+- **Human-readable in-chat rollback notices.** Replaced raw internal accounting dumps (array indices and 14 zeroed categories) with a concise, natural notification when mid-session swipes or deletions remove established memories.
 
 ## [1.17.0] - 2026-09-27
 

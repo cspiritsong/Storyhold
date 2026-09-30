@@ -2329,6 +2329,7 @@ async function onChatChangedImpl() {
   // Detect an in-file branch (regenerate/swipe that truncated the timeline)
   // and prune memories sourced from the discarded timeline before any injections
   // or extractions run on the new timeline. Fast no-op when no truncation.
+  // During chat loads (including newly branched chats), pruning is silent so it doesn't alarm the player.
   const branchCharacterNames = getContext().groupId
     ? getCurrentGroupCharacterNames(getContext())
     : [getCurrentCharacterName()].filter(Boolean);
@@ -2341,6 +2342,7 @@ async function onChatChangedImpl() {
     expectedChatId: lineageChatId,
     expectedChatUid: lineageChatUid,
     expectedMetadata: lineageMetadata,
+    silent: true,
   });
   if (transitionStale()) return;
   await refreshCurrentTimeline(transitionStale);
@@ -3976,18 +3978,7 @@ jQuery(async function () {
   eventSource.on(event_types.GROUP_WRAPPER_FINISHED, onGroupWrapperFinished);
   eventSource.on(event_types.GROUP_UPDATED, onGroupUpdated);
 
-  // Warn when the user creates a checkpoint or branch without read-only mode
-  // active. Long-term memories will continue forming in the current chat and
-  // will not roll back if they later switch to the checkpoint/branch.
-  $(document).on('click', '.mes_create_bookmark, .mes_create_branch', () => {
-    if (!isFreshStart()) {
-      toastr.warning(
-        'Storyhold is still active. Enable read-only mode first to keep this session consequence-free.',
-        'Storyhold',
-        { timeOut: 7000, positionClass: 'toast-bottom-right' },
-      );
-    }
-  });
+  // Legacy checkpoint / branch listener removed (Cut 2: branching is fully isolated per-chat).
 
   // Re-inject the legacy compatibility tiers for the current chat after a
   // swipe/delete branch event in compatibility (non-Product) mode. Mirrors the

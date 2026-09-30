@@ -92,6 +92,7 @@ export async function detectAndPruneInFileBranch(
     expectedChatUid = undefined,
     expectedMetadata = undefined,
     allowUnclassifiedPrune = false,
+    silent = false,
   } = {},
 ) {
   const context = getContext();
@@ -474,12 +475,11 @@ export async function detectAndPruneInFileBranch(
   const branchLabel = Number.isInteger(branchPoint)
     ? `message ${branchPoint}`
     : `array index ${branchPointIndex}`;
-  if (typeof toastr !== 'undefined') {
+  if (total > 0 && typeof toastr !== 'undefined' && !silent) {
     toastr.info(
-      `In-chat branch detected - memory rolled back to ${branchLabel} ` +
-      `(${total} items pruned: ${counts.longterm} long-term, ${counts.session} session, ${counts.ledger} state, ${counts.narrative} narrative, ${counts.structured} structured, ${counts.ingest_windows} queue, ${counts.scenes} scenes, ${counts.arcs} arcs, ${counts.arc_summaries} arc summaries, ${counts.summary} summary, ${counts.canon} canon, ${counts.epistemic} epistemic, ${counts.profiles} profiles, ${counts.relationships} relationships).`,
+      `Storyhold updated to match this timeline (${total} ${total === 1 ? 'item' : 'items'} removed).`,
       'Storyhold',
-      { timeOut: 7000, positionClass: 'toast-bottom-right' },
+      { timeOut: 5000, positionClass: 'toast-bottom-right' },
     );
   }
   smLog(
