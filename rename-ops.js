@@ -91,7 +91,22 @@ export async function ensureStableChatIdentity() {
   let targetKey = String(identity.chat_uid);
   const aliases = mergeAliases(meta, legacySeeds);
 
-  if (
+  // If this chat is a newly cloned branch/checkpoint (SillyTavern sets main_chat
+  // in chat_metadata, or chat_id in smartMemory still reflects the parent), mint
+  // a fresh, independent chat_uid so parent and child never collide or share memory.
+  const parentChatId = context.chatMetadata?.main_chat ?? null;
+  const isNewlyClonedChat =
+    (parentChatId && parentChatId !== chatId && meta.chat_id !== chatId) ||
+    (meta.chat_id && meta.chat_id !== chatId && (!meta.chat_aliases || !meta.chat_aliases.includes(meta.chat_id)));
+  if (isNewlyClonedChat) {
+    const parentChatUid = meta.chat_uid;
+    const branchUid = generateMemoryId();
+    identity = { ...identity, chat_uid: branchUid, created: true };
+    targetKey = String(branchUid);
+    meta.previous_chat_uid = parentChatUid;
+    meta.root_chat_uid = parentChatUid ?? branchUid;
+    metadataChanged = true;
+  } else if (
     store?.[targetKey] &&
     !namespaceOwnerMatches(store[targetKey], {
       chatUid: targetKey,
